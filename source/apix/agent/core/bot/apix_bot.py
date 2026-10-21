@@ -6,8 +6,9 @@ from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from typing import Any, Self
 
-from my_llm import MessageStream, ModelProfile, MyLLM, ProviderProfile
+from my_llm import MessageStream
 
+from apix.agent.core.bot.provider import BaseProvider
 from apix.agent.core.tool import Tool, ToolNode
 from apix.agent.core.utils.context import RoleSchema, to_prompt
 from apix.agent.core.utils.message import ApixAiMessage, ApixMessageBase
@@ -21,16 +22,34 @@ class ApixBot:
     """
 
     def __init__(
-        self, *, provider: ProviderProfile, model: ModelProfile,
+        self, *, provider: str, model: str, api_key: str | None = None,
         role_schema: RoleSchema | None = None,
     ) -> None:
-        self.llm = MyLLM(provider=provider, model=model, stdio_protocol="openai_chat")
-        self.provider = self.llm.provider
-        self.model = self.llm.model
+        """Select a registered provider and an exact model ID.
+
+        ``api_key`` overrides profile/environment credentials. Each provider
+        declares its own environment variable; CustomProvider catalogues are
+        registered through BaseProvider before selecting them by name.
+        Unknown providers/models and invalid profiles fail before inference.
+        """
+        self.provider = BaseProvider.get(provider)
+        self.llm = self.provider.create_llm(model, api_key=api_key)
+        self.model = self.llm.model.model
         self.role_schema = None
         self._tool_schemas: list[dict] = []
         if role_schema is not None:
             self.bind_role_schema(role_schema)
+
+    async def __aenter__(self) -> Self:
+        await self.llm.__aenter__()
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        """Close MyLLM's shared SDK clients after all requests have finished."""
+        await self.llm.aclose()
 
     @property
     def name(self) -> str:

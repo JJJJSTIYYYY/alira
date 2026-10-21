@@ -1,6 +1,6 @@
 # 模型调用与消息存储
 
-Apix 使用 `my-llm-py==1.0.1` 的 `MyLLM`、`ProviderProfile` 和 `ModelProfile`。
+Apix 使用 `my-llm-py==1.1.1` 的 `MyLLM`、`ProviderProfile` 和 `ModelProfile`。
 所有上游协议都显式使用 `stdio_protocol="openai_chat"`，消息和工具声明采用
 [OpenAI Chat Completions 格式](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)。
 协议转换、SDK 客户端、流累积和终止校验由 my-llm-py 负责。
@@ -9,7 +9,7 @@ Apix 使用 `my-llm-py==1.0.1` 的 `MyLLM`、`ProviderProfile` 和 `ModelProfile
 
 ```python
 import os
-from apix.agent.core.bot import ApixBot, ModelProfile, ProviderProfile
+from apix.agent.core.bot import ApixBot
 from apix.agent.core.utils.message import ApixAiMessage, ApixUserMessage
 from apix.agent.core.tool import tool
 
@@ -19,12 +19,9 @@ def weather(city: str) -> str:
     return f"sunny in {city}"
 
 bot = ApixBot(
-    provider=ProviderProfile(
-        protocol="openai_chat",  # 也支持 openai_responses / anthropic / gemini / ollama
-        api_key=os.environ["MODEL_API_KEY"],
-        # base_url="https://your-provider.example/v1",
-    ),
-    model=ModelProfile(model="your-model", supports_function_calling=True),
+    provider="deepseek",
+    model="deepseek-flash",
+    api_key=os.environ["DEEPSEEK_API_KEY"],
 ).bind_tools([weather])
 
 async def ask():
@@ -43,12 +40,36 @@ async def ask_stream():
     return ApixAiMessage.from_chat(stream.result)
 ```
 
-连接、重试、模型能力和厂商默认参数通过库的 profiles 配置。
-`invoke` / `stream` 的其他关键字直接传给 `MyLLM.generate`，例如 `reasoning`、
+供应商与模型使用字符串选择预设；列表、逐字段官方依据和自定义注册方式见
+[Provider 预设](provider-presets.md)。连接、重试、模型能力和厂商默认参数通过库的 profiles 配置。
+`invoke` / `stream` 的其他关键字传给 `MyLLM.generate`，例如 `reasoning`、
 `reasoning_effort`、`extra_body`。更换模型或 provider 时创建新 bot。
+Profile 的行为配置使用 `Config(name=..., default_value=...)`；请求参数使用
+`Parameter(name=..., path=..., default_value=..., phase="decode")`。
+DeepSeek 在 ProviderProfile、Kimi K2.x 在 ModelProfile 的 `max_tokens` Parameter
+中指定 `$.max_tokens`，K3 沿用 Chat 默认的 `$.max_completion_tokens`。
+不传 `max_tokens` 时，缺失字段使用 profile 默认预算，手动原生字段优先；
+显式正整数覆盖预算，`None` 传递实际空值，`omit` 删除本次请求的目标字段。
+Profile 字段整体为 None 表示继承，整体为 omit 表示禁用该声明并保留手动原生字段。
+调用方的 effort 按 `low → medium → high → xhigh → max` 从低到高映射，
+未使用的档位只在末尾设为 None，不能中间断档。`none` 表示不注入绑定，独立处理。
+例如 K3 / DeepSeek 的本地 low/medium/high 依次映射为上游 low/high/max，
+本地 xhigh/max 不可用；仅传 `reasoning=True` 时，库默认 medium 映射为上游 high。
+GPT-5.4 Pro 的本地 low/medium/high 依次映射为上游 medium/high/xhigh。
+这些映射由 MyLLM 根据 profile 完成，完整对照表见 Provider 预设文档。
 `tools=None` 使用绑定工具，`tools=[]` 在当前调用禁用工具。
 `stream` 需先 await，再 `async with` 消费；取消或提前退出会由库关闭本次请求。
-bot 本身不持有连接，无需 `aclose()`。
+同一 bot 的请求复用 MyLLM 持有的 SDK 客户端。在所有流消费或关闭后，使用
+`await bot.aclose()` 释放客户端，或用 `async with bot` 管理 bot 的生命周期：
+
+```python
+async def main():
+    async with bot:
+        await ask()
+        await ask_stream()
+```
+
+关闭可以重复调用；关闭后的 bot 不能再次发起请求。
 
 `tool_choice` 等厂商参数使用对应上游协议的 `extra_body` 或 profile 配置。
 工具执行由 Apix 的 `ToolNode` 完成：

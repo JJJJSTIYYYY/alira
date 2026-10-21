@@ -7,3 +7,4 @@ Apix 提供 Agent SDK、工具执行、消息存储和 HTTP 服务。
 
 
 - [模型接入、Chat 消息结构与数据库初始化](my-llm-integration.md)
+- [Provider 与模型预设、官方配置依据](provider-presets.md)

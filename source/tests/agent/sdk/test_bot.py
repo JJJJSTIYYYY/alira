@@ -1,13 +1,20 @@
 """Apix application responsibilities around the library's standard Chat API."""
+
 from copy import deepcopy
+from dataclasses import replace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
-from my_llm import ModelProfile, ProviderProfile
+from my_llm import Config, ModelProfile, Parameter, ProviderProfile
 
-from apix.agent.core.bot import ApixBot
+from apix.agent.core.bot import ApixBot, BaseProvider, CustomProvider
 from apix.agent.core.tool import ToolNode, tool
-from apix.agent.core.utils.message import ApixAiMessage, ApixSystemMessage, ApixUserMessage
+from apix.agent.core.utils.message import (
+    ApixAiMessage,
+    ApixSystemMessage,
+    ApixUserMessage,
+)
 
 
 @tool
@@ -16,16 +23,39 @@ def weather(city: str) -> str:
     return f"sunny in {city}"
 
 
+def make_profile_bot(*, provider, model, **kwargs):
+    name = f"test-{uuid4().hex}"
+    BaseProvider.register(
+        CustomProvider(name=name, profile=replace(provider, models=[model]))
+    )
+    try:
+        return ApixBot(provider=name, model=model.model, **kwargs)
+    finally:
+        BaseProvider.unregister(name)
+
+
 def make_bot(**kwargs):
-    return ApixBot(provider=ProviderProfile(api_key="test"),
-                   model=ModelProfile(model="test", supports_function_calling=True), **kwargs)
+    return make_profile_bot(
+        provider=ProviderProfile(
+            api_key=Parameter(
+                name="api_key", path="$.api_key", default_value="test", phase="decode"
+            )
+        ),
+        model=ModelProfile(
+            model="test",
+            supports_function_calling=Config(
+                name="supports_function_calling", default_value=True
+            ),
+        ),
+        **kwargs,
+    )
 
 
 def test_profiles_are_library_types_and_stdio_is_explicit():
     bot = make_bot()
     assert bot.llm.stdio_protocol == "openai_chat"
-    assert bot.model.model == "test"
-    assert isinstance(bot.provider, ProviderProfile)
+    assert bot.model == "test"
+    assert isinstance(bot.provider, CustomProvider)
 
 
 def test_tool_binding_filters_copies_replaces_and_rejects_duplicate_names():
@@ -44,18 +74,32 @@ def test_tool_binding_filters_copies_replaces_and_rejects_duplicate_names():
 
 
 @pytest.mark.asyncio
-async def test_invoke_orders_context_and_delegates_standard_messages_and_options(monkeypatch):
+async def test_invoke_orders_context_and_delegates_standard_messages_and_options(
+    monkeypatch,
+):
     role = {"name": " Alice ", "definition": "Be concise", "title": None}
     bot = make_bot(role_schema=role).bind_tools([weather])
     role["name"] = "changed"
     assert bot.name == "Alice"
-    call = {"id": "c1", "type": "function", "function": {
-        "name": "weather", "arguments": '{"city":"Tokyo"}'}}
-    response = {"role": "assistant", "content": None, "tool_calls": [call], "reasoning_content": "why"}
+    call = {
+        "id": "c1",
+        "type": "function",
+        "function": {"name": "weather", "arguments": '{"city":"Tokyo"}'},
+    }
+    response = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [call],
+        "reasoning_content": "why",
+    }
     generate = AsyncMock(return_value=deepcopy(response))
     monkeypatch.setattr(bot.llm, "generate", generate)
-    result = await bot.invoke([ApixUserMessage(content="weather", extensions={"active_file": "notes"})],
-                              [ApixSystemMessage(content="global")], reasoning=True, max_tokens=40)
+    result = await bot.invoke(
+        [ApixUserMessage(content="weather", extensions={"active_file": "notes"})],
+        [ApixSystemMessage(content="global")],
+        reasoning=True,
+        max_tokens=40,
+    )
     sent = generate.await_args.kwargs
     assert sent["messages"][0] == {"role": "system", "content": "global"}
     assert "Your name: Alice" in sent["messages"][1]["content"]

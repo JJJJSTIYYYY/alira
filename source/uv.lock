@@ -116,7 +116,7 @@ requires-dist = [
     { name = "fastmcp-slim", extras = ["client"], specifier = "==3.4.7" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1" },
     { name = "inflect", specifier = ">=7.5.0" },
-    { name = "my-llm-py", specifier = "==1.0.1" },
+    { name = "my-llm-py", specifier = "==1.1.1" },
     { name = "pydantic", specifier = ">=2.12" },
     { name = "pysqlite3", specifier = ">=0.6.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
@@ -1045,7 +1045,7 @@ wheels = [
 
 [[package]]
 name = "my-llm-py"
-version = "1.0.1"
+version = "1.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anthropic" },
@@ -1053,9 +1053,9 @@ dependencies = [
     { name = "ollama" },
     { name = "openai" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/69/0e/1bb2643754bc1c7c265c641fdac89e8b5c6a79f8bdaa20c4254fb4ab3e6c/my_llm_py-1.0.1.tar.gz", hash = "sha256:14c7207c8d71db8eb9ea682b4aba2d3ab8c0888fed099c334c01efcb7a21e935", size = 293447, upload-time = "2026-10-17T13:56:04.98Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/65/f8a6b301a71c4cec81313ba2edc6411fc7ff256c91385bc9ebaafbb9f01c/my_llm_py-1.1.1.tar.gz", hash = "sha256:31fa36ac1d54e9ac727470c8591d34116b1ba8e78f284523240adced18e89d07", size = 896794, upload-time = "2026-10-21T11:45:21.185Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c9/73/5c21311170f651b662352c2876597d71a9eb6c39afa4e88dc3a6d6017233/my_llm_py-1.0.1-py3-none-any.whl", hash = "sha256:7d3b731ac97ca01591aebe74eb57fdaf50da3ac142ba579f93537a988c1e77b3", size = 129689, upload-time = "2026-10-17T13:56:03.334Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/4f/9f193674cfd3af71e15c4fbd870f834583aeff3c2562313f868c180800c6/my_llm_py-1.1.1-py3-none-any.whl", hash = "sha256:d679f7558b9eddb59cd3ea7946b3ebdbbcb5d12d02ff0f50c9ec017d57d19c20", size = 109685, upload-time = "2026-10-21T11:45:19.311Z" },
 ]
 
 [[package]]
