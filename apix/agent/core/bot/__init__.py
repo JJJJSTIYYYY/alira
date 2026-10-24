@@ -1,6 +1,13 @@
 """Apix role/tool binding and my-llm-py public configuration."""
 
-from my_llm import Config, MessageStream, ModelProfile, Parameter, ProviderProfile
+from my_llm import (
+    Attribute,
+    Config,
+    MessageStream,
+    ModelProfile,
+    Parameter,
+    ProviderProfile,
+)
 
 from apix.agent.core.bot.apix_bot import ApixBot
 from apix.agent.core.bot.provider import (
@@ -19,6 +26,7 @@ __all__ = [
     "MessageStream",
     "ModelProfile",
     "ProviderProfile",
+    "Attribute",
     "Config",
     "Parameter",
     "BaseProvider",

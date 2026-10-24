@@ -1,6 +1,6 @@
 """User-supplied native profiles, registered and selected through string names."""
 
-from my_llm import ProviderProfile
+from my_llm import Attribute, ProviderProfile
 
 from apix.agent.core.bot.provider.base import BaseProvider
 
@@ -21,6 +21,8 @@ class CustomProvider(BaseProvider):
     ) -> None:
         super().__init__(
             name,
-            profile if profile is not None else ProviderProfile(models=[]),
+            profile
+            if profile is not None
+            else ProviderProfile(models=Attribute(default_value=[])),
             api_key_env=api_key_env,
         )

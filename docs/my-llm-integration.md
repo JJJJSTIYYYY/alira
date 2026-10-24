@@ -1,6 +1,6 @@
 # 模型调用与消息存储
 
-Apix 使用 `my-llm-py==1.1.1` 的 `MyLLM`、`ProviderProfile` 和 `ModelProfile`。
+Apix 使用 `my-llm-py[all]==1.2.0` 的 `MyLLM`、`ProviderProfile` 和 `ModelProfile`。
 所有上游协议都显式使用 `stdio_protocol="openai_chat"`，消息和工具声明采用
 [OpenAI Chat Completions 格式](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)。
 协议转换、SDK 客户端、流累积和终止校验由 my-llm-py 负责。
@@ -44,8 +44,13 @@ async def ask_stream():
 [Provider 预设](provider-presets.md)。连接、重试、模型能力和厂商默认参数通过库的 profiles 配置。
 `invoke` / `stream` 的其他关键字传给 `MyLLM.generate`，例如 `reasoning`、
 `reasoning_effort`、`extra_body`。更换模型或 provider 时创建新 bot。
-Profile 的行为配置使用 `Config(name=..., default_value=...)`；请求参数使用
-`Parameter(name=..., path=..., default_value=..., phase="decode")`。
+Profile 的模型 ID、上下文窗口和模型目录使用 `Attribute(default_value=...)`，
+协议与行为配置使用 `Config(default_value=...)`，请求参数使用
+`Parameter(path=..., default_value=..., supports=True)`。
+`name` / `source` 由 Profile 字段自动绑定，不能作为构造参数传入；
+参数支持状态由 `Parameter.supports` 表达。`Attribute` 的数据通过 `.default_value` 读取，
+`ApixBot(provider=..., model=...)` 仍接受字符串，`bot.model` 仍返回模型 ID。
+依赖启用 `[all]`，为五种上游协议安装官方 SDK。
 DeepSeek 在 ProviderProfile、Kimi K2.x 在 ModelProfile 的 `max_tokens` Parameter
 中指定 `$.max_tokens`，K3 沿用 Chat 默认的 `$.max_completion_tokens`。
 不传 `max_tokens` 时，缺失字段使用 profile 默认预算，手动原生字段优先；

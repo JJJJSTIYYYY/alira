@@ -38,12 +38,28 @@ APIX 是一个可拓展的**全栈的 AI Agent 协作平台**。它是一套完�
 
 ## 后端开发
 
+在仓库根目录执行：
+
 ```bash
-cd source
 uv sync --locked
 uv run pytest
 uv run python -m apix.server
 ```
+
+项目目录：
+
+```text
+APIX_NEXT/
+├── pyproject.toml    # uv 项目与测试配置
+├── uv.lock          # 依赖锁文件
+├── .python-version  # Python 版本
+├── apix/            # 应用代码
+├── tests/           # 测试
+└── docs/            # 文档
+```
+
+本地 `config.yaml` 放在仓库根目录，运行数据默认保存在 `.apix_data/`；
+两者均不纳入版本控制。`uv sync` 在根目录创建 `.venv/`。
 
 事件与图调度通过 PyPI 依赖 `apixis` 提供；Apix 保留 Agent SDK、工具、存储与服务层。
 

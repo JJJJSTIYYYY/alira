@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from my_llm import Config, ModelProfile, Parameter, ProviderProfile
+from my_llm import Attribute, Config, ModelProfile, Parameter, ProviderProfile
 
 from apix.agent.core.bot import ApixBot, BaseProvider, CustomProvider
 from apix.agent.core.tool import ToolNode, tool
@@ -26,10 +26,13 @@ def weather(city: str) -> str:
 def make_profile_bot(*, provider, model, **kwargs):
     name = f"test-{uuid4().hex}"
     BaseProvider.register(
-        CustomProvider(name=name, profile=replace(provider, models=[model]))
+        CustomProvider(
+            name=name,
+            profile=replace(provider, models=Attribute(default_value=[model])),
+        )
     )
     try:
-        return ApixBot(provider=name, model=model.model, **kwargs)
+        return ApixBot(provider=name, model=model.model.default_value, **kwargs)
     finally:
         BaseProvider.unregister(name)
 
@@ -37,15 +40,15 @@ def make_profile_bot(*, provider, model, **kwargs):
 def make_bot(**kwargs):
     return make_profile_bot(
         provider=ProviderProfile(
+            protocol=Config(default_value="openai_chat"),
             api_key=Parameter(
-                name="api_key", path="$.api_key", default_value="test", phase="decode"
-            )
+                path="$.api_key",
+                default_value="test",
+            ),
         ),
         model=ModelProfile(
-            model="test",
-            supports_function_calling=Config(
-                name="supports_function_calling", default_value=True
-            ),
+            model=Attribute(default_value="test"),
+            supports_function_calling=Config(default_value=True),
         ),
         **kwargs,
     )

@@ -3,7 +3,7 @@
 import os
 
 import pytest
-from my_llm import Config, Parameter
+from my_llm import Attribute, Config, Parameter
 
 from apix.agent.core.bot import (
     ApixBot,
@@ -39,21 +39,21 @@ async def test_live_chat(streaming):
             name="live-test",
             api_key_env="APIX_LIVE_API_KEY",
             profile=ProviderProfile(
-                protocol=protocol,
-                base_url=Config(name="base_url", default_value=endpoint)
-                if endpoint
-                else None,
-                models=[
-                    ModelProfile(
-                        model=os.environ["APIX_LIVE_MODEL"],
-                        max_tokens=Parameter(
-                            name="max_tokens",
-                            path=token_paths[protocol],
-                            default_value=100,
-                            phase="decode",
-                        ),
-                    )
-                ],
+                protocol=Config(default_value=protocol),
+                base_url=Config(default_value=endpoint) if endpoint else None,
+                models=Attribute(
+                    default_value=[
+                        ModelProfile(
+                            model=Attribute(
+                                default_value=os.environ["APIX_LIVE_MODEL"]
+                            ),
+                            max_tokens=Parameter(
+                                path=token_paths[protocol],
+                                default_value=100,
+                            ),
+                        )
+                    ]
+                ),
             ),
         ),
         replace_existing=True,

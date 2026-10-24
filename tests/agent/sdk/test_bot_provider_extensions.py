@@ -3,7 +3,7 @@
 from unittest.mock import AsyncMock
 
 import pytest
-from my_llm import Config, ModelProfile, Parameter, ProviderProfile
+from my_llm import Attribute, Config, ModelProfile, Parameter, ProviderProfile
 
 from tests.agent.sdk.test_bot import make_profile_bot
 
@@ -14,25 +14,20 @@ async def test_provider_options_pass_to_library_without_native_request_translati
 ):
     bot = make_profile_bot(
         provider=ProviderProfile(
-            protocol="openai_chat",
+            protocol=Config(default_value="openai_chat"),
             api_key=Parameter(
-                name="api_key", path="$.api_key", default_value="test", phase="decode"
+                path="$.api_key",
+                default_value="test",
             ),
             reasoning_enable=Parameter(
-                name="reasoning_enable",
                 path="$.extra_body.thinking",
                 default_value={"type": "enabled"},
-                phase="decode",
             ),
-            replay_reasoning_content_when_tool_calls=Config(
-                name="replay_reasoning_content_when_tool_calls", default_value=True
-            ),
+            replay_reasoning_content_when_tool_calls=Config(default_value=True),
         ),
         model=ModelProfile(
-            model="test",
-            supports_function_calling=Config(
-                name="supports_function_calling", default_value=True
-            ),
+            model=Attribute(default_value="test"),
+            supports_function_calling=Config(default_value=True),
         ),
     )
     generate = AsyncMock(return_value={"role": "assistant", "content": "answer"})

@@ -34,7 +34,7 @@ class ApixBot:
         """
         self.provider = BaseProvider.get(provider)
         self.llm = self.provider.create_llm(model, api_key=api_key)
-        self.model = self.llm.model.model
+        self.model = self.llm.model.model.default_value
         self.role_schema = None
         self._tool_schemas: list[dict] = []
         if role_schema is not None:

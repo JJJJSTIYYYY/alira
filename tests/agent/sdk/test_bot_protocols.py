@@ -7,6 +7,7 @@ import pytest
 from anthropic import AsyncAnthropic
 from google import genai
 from my_llm import (
+    Attribute,
     Config,
     IncompleteStreamError,
     ModelProfile,
@@ -197,20 +198,16 @@ async def test_sdk_protocols_keep_chat_input_and_output(
     }
     bot = make_profile_bot(
         provider=ProviderProfile(
-            protocol=protocol,
-            base_url=Config(name="base_url", default_value="https://local.test"),
+            protocol=Config(default_value=protocol),
+            base_url=Config(default_value="https://local.test"),
         ),
         model=ModelProfile(
-            model="test",
+            model=Attribute(default_value="test"),
             max_tokens=Parameter(
-                name="max_tokens",
                 path=token_paths[protocol],
                 default_value=100,
-                phase="decode",
             ),
-            supports_function_calling=Config(
-                name="supports_function_calling", default_value=True
-            ),
+            supports_function_calling=Config(default_value=True),
         ),
         api_key="test",
     )
@@ -282,15 +279,15 @@ async def test_sdk_tool_round_trip_is_standard_and_executable(monkeypatch):
     clients = install_sdk(monkeypatch, "openai_chat", handler)
     bot = make_profile_bot(
         provider=ProviderProfile(
+            protocol=Config(default_value="openai_chat"),
             api_key=Parameter(
-                name="api_key", path="$.api_key", default_value="test", phase="decode"
-            )
+                path="$.api_key",
+                default_value="test",
+            ),
         ),
         model=ModelProfile(
-            model="test",
-            supports_function_calling=Config(
-                name="supports_function_calling", default_value=True
-            ),
+            model=Attribute(default_value="test"),
+            supports_function_calling=Config(default_value=True),
         ),
     ).bind_tools([weather])
     prompt = ApixUserMessage(content="weather?")
@@ -319,11 +316,13 @@ async def test_bot_context_closes_shared_clients_on_application_error(monkeypatc
     )
     bot = make_profile_bot(
         provider=ProviderProfile(
+            protocol=Config(default_value="openai_chat"),
             api_key=Parameter(
-                name="api_key", path="$.api_key", default_value="test", phase="decode"
-            )
+                path="$.api_key",
+                default_value="test",
+            ),
         ),
-        model=ModelProfile(model="test"),
+        model=ModelProfile(model=Attribute(default_value="test")),
     )
     with pytest.raises(ValueError, match="application error"):
         async with bot as active:
@@ -367,11 +366,13 @@ async def test_early_exit_and_missing_terminal_close_bodies_and_reuse_client(
     clients = install_sdk(monkeypatch, "openai_chat", handler)
     bot = make_profile_bot(
         provider=ProviderProfile(
+            protocol=Config(default_value="openai_chat"),
             api_key=Parameter(
-                name="api_key", path="$.api_key", default_value="test", phase="decode"
-            )
+                path="$.api_key",
+                default_value="test",
+            ),
         ),
-        model=ModelProfile(model="test"),
+        model=ModelProfile(model=Attribute(default_value="test")),
     )
     stream = await bot.stream([{"role": "user", "content": "hi"}])
     async with stream:
@@ -429,11 +430,13 @@ async def test_cancelling_one_request_closes_its_body_and_preserves_concurrent_s
     clients = install_sdk(monkeypatch, "openai_chat", handler)
     bot = make_profile_bot(
         provider=ProviderProfile(
+            protocol=Config(default_value="openai_chat"),
             api_key=Parameter(
-                name="api_key", path="$.api_key", default_value="test", phase="decode"
-            )
+                path="$.api_key",
+                default_value="test",
+            ),
         ),
-        model=ModelProfile(model="test"),
+        model=ModelProfile(model=Attribute(default_value="test")),
     )
 
     async def consume(label):
@@ -470,12 +473,10 @@ async def test_ollama_schema_constraint_rejection_is_not_silently_weakened():
     from my_llm import UnsupportedCapabilityError
 
     bot = make_profile_bot(
-        provider=ProviderProfile(protocol="ollama"),
+        provider=ProviderProfile(protocol=Config(default_value="ollama")),
         model=ModelProfile(
-            model="test",
-            supports_function_calling=Config(
-                name="supports_function_calling", default_value=True
-            ),
+            model=Attribute(default_value="test"),
+            supports_function_calling=Config(default_value=True),
         ),
     )
     with pytest.raises(UnsupportedCapabilityError, match="schema constraints"):

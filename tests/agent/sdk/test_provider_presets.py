@@ -6,6 +6,7 @@ from dataclasses import replace
 import httpx
 import pytest
 from my_llm import (
+    Attribute,
     Config,
     ConfigurationError,
     ModelProfile,
@@ -20,17 +21,50 @@ from tests.agent.sdk.test_bot import weather
 from tests.agent.sdk.test_bot_protocols import install_sdk, wire
 
 PRESETS = [
-    (name, model.model)
+    (name, model.model.default_value)
     for name in BaseProvider.list_providers()
     if name != "custom"
     for model in BaseProvider.get(name).list_models()
 ]
 
 
+@pytest.mark.parametrize(
+    "provider,model,enabled",
+    [
+        ("deepseek", "deepseek-flash", {"type": "enabled"}),
+        ("moonshot", "kimi-k2.6", {"type": "enabled", "keep": "all"}),
+    ],
+)
+@pytest.mark.parametrize("reasoning", [False, True])
+async def test_generated_thinking_controls_take_precedence_over_native_body(
+    monkeypatch,
+    provider,
+    model,
+    enabled,
+    reasoning,
+):
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200, text=wire("openai_chat"), headers={"content-type": "text/event-stream"}
+        )
+
+    install_sdk(monkeypatch, "openai_chat", handler)
+    native = {"thinking": {"type": "disabled"}}
+    async with ApixBot(provider=provider, model=model, api_key="test") as bot:
+        await bot.invoke(
+            [{"role": "user", "content": "hi"}], reasoning=reasoning, extra_body=native
+        )
+    assert requests[0]["thinking"] == (enabled if reasoning else native["thinking"])
+    assert native == {"thinking": {"type": "disabled"}}
+
+
 @pytest.mark.parametrize("provider,model", PRESETS)
 def test_builtin_effort_mappings_have_an_ordered_contiguous_prefix(provider, model):
     llm = BaseProvider.get(provider).create_llm(model, api_key="test")
-    if not llm.resolved_profile.get("supports_reasoning_effort"):
+    if llm.resolved_profile.parameter("reasoning_effort", source="input") is None:
         return
     levels = ["low", "medium", "high", "xhigh", "max"]
     mapping = llm.resolved_profile.get("reasoning_effort_mapping")
@@ -69,8 +103,13 @@ def test_required_provider_classes_and_exact_string_selection():
     assert bot.provider.name == "openai" and bot.model == "gpt-5.4"
     assert bot.llm.stdio_protocol == "openai_chat"
     for provider, model in (
-        (ProviderProfile(), "gpt-5.4"),
-        ("openai", ModelProfile(model="x")),
+        (
+            ProviderProfile(
+                protocol=Config(default_value="openai_chat"),
+            ),
+            "gpt-5.4",
+        ),
+        ("openai", ModelProfile(model=Attribute(default_value="x"))),
     ):
         with pytest.raises(TypeError):
             ApixBot(provider=provider, model=model, api_key="test")
@@ -104,27 +143,25 @@ async def test_credential_overrides_keep_custom_authentication_path(
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setenv("CUSTOM_AUTH_KEY", "environment-test-key")
     binding = Parameter(
-        name="API key",
         path="$.extra_headers.X-Api-Key",
         default_value=omit if source == "environment" else "profile-test-key",
-        phase="decode",
     )
     provider = CustomProvider(
         api_key_env="CUSTOM_AUTH_KEY",
         profile=ProviderProfile(
-            protocol="anthropic",
+            protocol=Config(default_value="anthropic"),
             api_key=binding,
-            models=[
-                ModelProfile(
-                    model="test",
-                    max_tokens=Parameter(
-                        name="max_tokens",
-                        path="$.max_tokens",
-                        default_value=100,
-                        phase="decode",
-                    ),
-                )
-            ],
+            models=Attribute(
+                default_value=[
+                    ModelProfile(
+                        model=Attribute(default_value="test"),
+                        max_tokens=Parameter(
+                            path="$.max_tokens",
+                            default_value=100,
+                        ),
+                    )
+                ]
+            ),
         ),
     )
     llm = provider.create_llm(
@@ -144,7 +181,8 @@ async def test_credential_overrides_keep_custom_authentication_path(
     assert requests[0].headers["X-Api-Key"] == f"{source}-test-key"
     assert "api_key" not in json.loads(requests[0].content)
     assert llm.provider.api_key.path == binding.path
-    assert provider.get_profile().api_key == binding
+    assert provider.get_profile().api_key.path == binding.path
+    assert provider.get_profile().api_key.default_value == binding.default_value
 
 
 def test_omitted_credentials_skip_environment_and_explicit_key_uses_protocol_path(
@@ -154,7 +192,11 @@ def test_omitted_credentials_skip_environment_and_explicit_key_uses_protocol_pat
     provider = CustomProvider(
         api_key_env="CUSTOM_AUTH_KEY",
         profile=ProviderProfile(
-            protocol="ollama", api_key=omit, models=[ModelProfile(model="test")]
+            protocol=Config(default_value="ollama"),
+            api_key=omit,
+            models=Attribute(
+                default_value=[ModelProfile(model=Attribute(default_value="test"))]
+            ),
         ),
     )
     assert provider.create_llm("test").provider.api_key is omit
@@ -168,10 +210,11 @@ def test_omitted_credentials_skip_environment_and_explicit_key_uses_protocol_pat
 
 def test_registry_and_model_catalogues_use_independent_library_profiles():
     preset = BaseProvider.get("moonshot")
-    preset.profile.add_models(ModelProfile(model="new-model"))
+    preset.profile.add_models(ModelProfile(model=Attribute(default_value="new-model")))
     preset.profile.delete_model(["kimi-k2.6"])
     assert "new-model" not in [
-        model.model for model in BaseProvider.get("moonshot").list_models()
+        model.model.default_value
+        for model in BaseProvider.get("moonshot").list_models()
     ]
     assert BaseProvider.get("moonshot").get_model("kimi-k2.6")
     changed = preset.get_model("kimi-k3")
@@ -183,10 +226,14 @@ def test_registry_and_model_catalogues_use_independent_library_profiles():
     custom = CustomProvider(
         name="isolated-test",
         profile=ProviderProfile(
+            protocol=Config(default_value="openai_chat"),
             api_key=Parameter(
-                name="api_key", path="$.api_key", default_value="test", phase="decode"
+                path="$.api_key",
+                default_value="test",
             ),
-            models=[ModelProfile(model="my-model")],
+            models=Attribute(
+                default_value=[ModelProfile(model=Attribute(default_value="my-model"))]
+            ),
         ),
     )
     BaseProvider.register(custom)
@@ -206,17 +253,16 @@ def test_get_profile_returns_an_isolated_complete_configuration(monkeypatch):
     provider = CustomProvider(
         api_key_env="SNAPSHOT_TEST_API_KEY",
         profile=ProviderProfile(
-            extra_body=Config(
-                name="extra_body", default_value={"thinking": {"type": "enabled"}}
+            protocol=Config(default_value="openai_chat"),
+            extra_body=Config(default_value={"thinking": {"type": "enabled"}}),
+            models=Attribute(
+                default_value=[
+                    ModelProfile(
+                        model=Attribute(default_value="snapshot-model"),
+                        extra_body=Config(default_value={"options": {"seed": 1}}),
+                    )
+                ]
             ),
-            models=[
-                ModelProfile(
-                    model="snapshot-model",
-                    extra_body=Config(
-                        name="extra_body", default_value={"options": {"seed": 1}}
-                    ),
-                )
-            ],
         ),
     )
     profile = provider.get_profile()
@@ -227,10 +273,12 @@ def test_get_profile_returns_an_isolated_complete_configuration(monkeypatch):
     )  # Reading configuration does not resolve environment credentials.
     profile.extra_body.default_value["thinking"]["type"] = "disabled"
     profile.list_models()[0].extra_body.default_value["options"]["seed"] = 2
-    profile.add_models(ModelProfile(model="another-model"))
+    profile.add_models(ModelProfile(model=Attribute(default_value="another-model")))
     original = provider.get_profile()
     assert original.extra_body.default_value == {"thinking": {"type": "enabled"}}
-    assert [model.model for model in original.list_models()] == ["snapshot-model"]
+    assert [model.model.default_value for model in original.list_models()] == [
+        "snapshot-model"
+    ]
     assert original.list_models()[0].extra_body.default_value == {
         "options": {"seed": 1}
     }
@@ -245,7 +293,7 @@ async def test_each_builtin_preset_dispatches_through_official_sdk(
     monkeypatch, provider, model, streaming
 ):
     bot = ApixBot(provider=provider, model=model, api_key="test")
-    protocol = bot.llm.provider.protocol
+    protocol = bot.llm.provider.protocol.default_value
     requests = []
 
     def handler(request):
@@ -328,7 +376,8 @@ async def test_native_token_defaults_overrides_and_omit(
     selected = replace(
         preset.get_model(model),
         max_tokens=Parameter(
-            name="max_tokens", path="$.max_tokens", default_value=2048, phase="decode"
+            path="$.max_tokens",
+            default_value=2048,
         ),
     )
     preset.profile.add_models(selected)
@@ -474,30 +523,29 @@ async def test_custom_provider_uses_native_profile_and_library_lifecycle(
     custom = CustomProvider(
         name="custom-test",
         profile=ProviderProfile(
-            protocol="openai_chat",
+            protocol=Config(default_value="openai_chat"),
             api_key=Parameter(
-                name="api_key", path="$.api_key", default_value="test", phase="decode"
+                path="$.api_key",
+                default_value="test",
             ),
-            base_url=Config(name="base_url", default_value="https://custom.test/v1"),
+            base_url=Config(default_value="https://custom.test/v1"),
             max_tokens=Parameter(
-                name="max_tokens",
                 path="$.extra_body.max_tokens",
                 default_value=2000,
-                phase="decode",
             ),
-            models=[
-                ModelProfile(
-                    model="custom-model",
-                    max_tokens=None
-                    if model_path is None
-                    else Parameter(
-                        name="max_tokens",
-                        path=model_path,
-                        default_value=2000,
-                        phase="decode",
-                    ),
-                )
-            ],
+            models=Attribute(
+                default_value=[
+                    ModelProfile(
+                        model=Attribute(default_value="custom-model"),
+                        max_tokens=None
+                        if model_path is None
+                        else Parameter(
+                            path=model_path,
+                            default_value=2000,
+                        ),
+                    )
+                ]
+            ),
         ),
     )
     BaseProvider.register(custom)

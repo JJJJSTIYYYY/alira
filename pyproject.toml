@@ -16,7 +16,7 @@ dependencies = [
     "fastmcp-slim[client]==3.4.7",
     "apixis>=1.0.0",
     "pydantic>=2.12",
-    "my-llm-py==1.1.1",
+    "my-llm-py[all]==1.2.0",
 ]
 
 [tool.pytest.ini_options]

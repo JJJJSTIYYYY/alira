@@ -54,7 +54,6 @@ pnpm-debug.log*
 .apix
 .apix_data
 .ruff_cache
-source/config.yaml
 config.yaml
 
 # logs

@@ -90,9 +90,11 @@ class BaseProvider:
         if not isinstance(model, str):
             raise TypeError("model must be a string")
         for preset in self.profile.list_models():
-            if preset.model == model:
+            if preset.model.default_value == model:
                 return deepcopy(preset)
-        available = [preset.model for preset in self.profile.list_models()]
+        available = [
+            preset.model.default_value for preset in self.profile.list_models()
+        ]
         raise ValueError(
             f"unknown model {model!r} for {self.name!r}; choose from {available}"
         )
@@ -105,7 +107,7 @@ class BaseProvider:
             raise ValueError("api_key must be a non-empty string or None")
         profile = self.get_profile()
         binding = resolve_profiles(profile, selected).parameter(
-            "api_key", phase="decode"
+            "api_key", source="input"
         )
         credential = binding.default_value if binding is not None else omit
         if api_key is not None:
@@ -114,7 +116,7 @@ class BaseProvider:
                 binding = resolve_profiles(
                     ProviderProfile(protocol=profile.protocol),
                     selected,
-                ).parameter("api_key", phase="decode")
+                ).parameter("api_key", source="input")
         elif binding is not None and credential in (None, omit) and self.api_key_env:
             credential = os.environ.get(self.api_key_env)
             if not credential:
