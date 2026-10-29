@@ -1,5 +1,7 @@
 from langchain_core.tools.base import BaseTool
 
+from apix.common.type import ApixIdentity
+
 from apix_agent.apix_agent_core.tools import *
 
 
@@ -8,7 +10,7 @@ async def get_available_tools(
         agent_role: str = "", 
         filter_by_name: list[str] = [], 
         workspace_configured: bool = False, 
-        user_uid: str = ""
+        identity: ApixIdentity | None = None
     ) -> list[BaseTool]:
     """
     Return a list of LangChain Tool objects.
@@ -80,8 +82,8 @@ async def get_available_tools(
     for m in modes:
         tools.extend(tool_registry.get(m, []))
 
-    if user_uid:
-        mcp_tools = await mcp_mgr.load_all_mcp_tools(user_uid)
+    if identity is not None:
+        mcp_tools = await mcp_mgr.load_all_mcp_tools(identity)
         tools.extend(mcp_tools)
 
     # Deduplicate tools by tool.name

@@ -15,7 +15,6 @@ def cache_store_handler(handler: CacheHandler) -> CacheHandler:
 
     @wraps(handler)
     async def wrapper(*args, **kwargs) -> dict:
-        logger.trace()
         try:
             return await handler(*args, **kwargs)
         except Exception as exc:

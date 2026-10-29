@@ -130,10 +130,8 @@ async def test_data_base_generates_string_id_and_default_optional_methods(monkey
 
 
 @pytest.mark.asyncio
-async def test_data_store_handler_traces_and_normalizes_failures(monkeypatch):
-    trace = Mock()
+async def test_data_store_handler_logs_and_normalizes_failures(monkeypatch):
     exception = Mock()
-    monkeypatch.setattr(data_utils.logger, "trace", trace)
     monkeypatch.setattr(data_utils.logger, "exception", exception)
 
     @data_store_handler
@@ -166,15 +164,12 @@ async def test_data_store_handler_traces_and_normalizes_failures(monkeypatch):
         "success": False,
         "messages": {"error": "KeyError"},
     }
-    assert trace.call_count == 3
     assert exception.call_count == 2
 
 
 @pytest.mark.asyncio
-async def test_cache_store_handler_traces_and_normalizes_failures(monkeypatch):
-    trace = Mock()
+async def test_cache_store_handler_logs_and_normalizes_failures(monkeypatch):
     exception = Mock()
-    monkeypatch.setattr(cache_utils.logger, "trace", trace)
     monkeypatch.setattr(cache_utils.logger, "exception", exception)
 
     @cache_store_handler
@@ -194,5 +189,4 @@ async def test_cache_store_handler_traces_and_normalizes_failures(monkeypatch):
         "success": False,
         "messages": "fail: cache unavailable",
     }
-    assert trace.call_count == 2
     exception.assert_called_once()

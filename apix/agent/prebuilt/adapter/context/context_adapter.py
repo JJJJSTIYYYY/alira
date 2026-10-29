@@ -233,7 +233,6 @@ class AIContextAdapter:
                 - The first element is a list of :class:`ApixMessageBase` objects.
                 - The second element is a list of the latest :class:`Todo` items.
         """
-        logger.trace()
         logger.info(f"Get dict messages: {len(dict_messages)}.")
 
         messages = []
@@ -329,7 +328,6 @@ class AIContextAdapter:
             When ``filter=True``, the returned dict contains Chat protocol
             fields and optional business ``extensions``.
         """
-        logger.trace()
 
         if not isinstance(message, (ApixAiMessage, ApixToolMessage)):
             raise TypeError(
@@ -458,7 +456,6 @@ class AIContextAdapter:
         !!! This method does not ensure that the number of tool calls in an ApixAiMessage 
         equals the number of following ApixToolMessages.
         """
-        logger.trace()
 
         if not input_messages:
             return [], []
@@ -540,7 +537,6 @@ class AIContextAdapter:
             list[AnyMessage]: AI and user messages after filtered.
             str: message's id
         """
-        logger.trace()
         logger.info(f"Client messages count: {len(input_messages)}")
 
         messages = []

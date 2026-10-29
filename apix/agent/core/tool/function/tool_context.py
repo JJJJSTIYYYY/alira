@@ -14,8 +14,6 @@ class AutoInjection:
     the :class:`Tool` class when parsing the tool function signature.
     """
 
-    pass
-
 
 @dataclass(slots=True)
 class ToolInjectionContext:

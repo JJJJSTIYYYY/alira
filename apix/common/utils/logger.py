@@ -1,11 +1,5 @@
 """Application logging backed by the shared Apixis logger."""
 
-from apixis.core.utils.logger import (
-    Logger,
-    register_log_level,
-    unregister_log_level,
-)
+from apixis.core.utils import logger
 
-logger = Logger("Apix")
-
-__all__ = ["Logger", "logger", "register_log_level", "unregister_log_level"]
+__all__ = ["logger"]

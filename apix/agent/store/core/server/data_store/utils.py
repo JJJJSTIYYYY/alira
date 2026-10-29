@@ -21,7 +21,6 @@ def data_store_handler(
     def decorator(handler: TaskHandler) -> TaskHandler:
         @wraps(handler)
         async def wrapper(*args, **kwargs) -> dict:
-            logger.trace()
             try:
                 return await handler(*args, **kwargs)
             except Exception as exc:

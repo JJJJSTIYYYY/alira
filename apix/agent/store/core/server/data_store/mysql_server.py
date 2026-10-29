@@ -127,7 +127,6 @@ class MysqlService(DataServerBase):
         Always return the last result set (may be empty).
         All result sets are fully consumed to keep connection clean.
         """
-        logger.trace()
         if not self._pool:
             raise RuntimeError("MySQL connection pool is not initialized, call start() first")
         async with self._pool.acquire() as conn:

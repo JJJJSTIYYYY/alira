@@ -153,7 +153,6 @@ class StreamEventHandler(EventHandler):
         '''
         Invoke agent.
         '''
-        logger.trace()
 
         await asyncio.sleep(5)
 
@@ -329,7 +328,6 @@ class StreamEventHandler(EventHandler):
         '''
         Resolve a block in an agent loop.
         '''
-        logger.trace()
 
         data = payload.get('data')
         block_id = data.get('block_id')
@@ -349,7 +347,6 @@ class StreamEventHandler(EventHandler):
         '''
         Interrupt a running generation immediately and clear its block.
         '''
-        logger.trace()
 
         data = payload.get("data") or {}
         user_uid = data.get("user_uid")
@@ -372,7 +369,6 @@ class StreamEventHandler(EventHandler):
         ``aborted``. If no matching running generation exists, it returns
         immediately.
         '''
-        logger.trace()
 
         data = payload.get("data") or {}
         user_uid = data.get("user_uid")

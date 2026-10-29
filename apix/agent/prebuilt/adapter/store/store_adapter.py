@@ -55,7 +55,6 @@ class AIStoreAdapter:
 
         parent_id only be used to call :meth:`AIStoreAdapter.convert_to_dict_message` for ApixMessageBase.
         """
-        logger.trace()
 
         if not message: return
         user_uid, _, conversation_uid, _ = check_identity(identity)
@@ -103,7 +102,6 @@ class AIStoreAdapter:
         Returns:
             None
         """
-        logger.trace()
         message = {
             "message_uid": uuid4().hex,
             "generation_id": generation_id,
@@ -135,7 +133,6 @@ class AIStoreAdapter:
         Returns:
             None
         """
-        logger.trace()
         content = content.strip()
         if not content: 
             logger.error("Can not append an empty memory to database.")
@@ -168,7 +165,6 @@ class AIStoreAdapter:
         Returns:
             list[dict]: Message dict list returned by memory service.
         """
-        logger.trace()
 
         user_uid, _, conversation_uid, _ = check_identity(identity)
         payload = {
@@ -201,7 +197,6 @@ class AIStoreAdapter:
         Returns:
             list[ShorttermMemory]: :class:`ShorttermMemory` dict list.
         """
-        logger.trace()
 
         user_uid, _, conversation_uid, _ = check_identity(identity)
         try:
@@ -229,7 +224,6 @@ class AIStoreAdapter:
         Returns: 
             list[LongtermMemory]: :class:`LongtermMemory` dict list.
         """
-        logger.trace()
 
         user_uid, _, conversation_uid, _ = check_identity(identity)
         try:

@@ -116,7 +116,6 @@ class DataServerManager:
         Returns:
             query_id (uuid string)
         """
-        logger.trace()
         await self.start()
         query_id = str(uuid4())
         loop = asyncio.get_running_loop()
@@ -130,7 +129,6 @@ class DataServerManager:
         """
         Wait for task result.
         """
-        logger.trace()
         future = self._results.get(query_id)
         if future is None:
             raise KeyError(f"Unknown query_id: {query_id}")

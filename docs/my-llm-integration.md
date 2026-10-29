@@ -77,17 +77,19 @@ async def main():
 关闭可以重复调用；关闭后的 bot 不能再次发起请求。
 
 `tool_choice` 等厂商参数使用对应上游协议的 `extra_body` 或 profile 配置。
-工具执行由 Apix 的 `ToolNode` 完成：
+工具调用由 Apix 的 `ToolNode` 发布事件并收集结果，常驻管理器负责实际执行（见[工具管理器](tool-managers.md)）：
 
 ```python
 from apix.agent.core.tool import ToolNode
+
+tool_node = ToolNode(weather)
 
 async def tool_round():
     history = [ApixUserMessage(content="查询上海天气")]
     answer = await bot.invoke(history)
     history.append(answer)
     if answer.tool_calls:
-        command = await ToolNode(weather).execute({"messages": history})
+        command = await tool_node.execute({"messages": history})
         history.extend(command.update["messages"])
         answer = await bot.invoke(history)
     return answer

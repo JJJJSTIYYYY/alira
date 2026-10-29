@@ -33,7 +33,6 @@ def data_task_handler(name: str) -> Callable[[TaskHandler], TaskHandler]:
     def decorator(func: TaskHandler) -> TaskHandler:
         @wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> dict:
-            logger.trace()
             try:
                 return await func(*args, **kwargs)
             except Exception as exc:
@@ -459,7 +458,7 @@ class DataExecutors:
             if len(node_id_chain) == 0 or node_id_chain[-1] != msg.get("node_id"):
                 node_id_chain.append(msg.get("node_id"))
 
-        logger.info("Current node_id_chain: ", node_id_chain)
+        logger.info("Current node_id_chain: %s", node_id_chain)
         # build branches info
         branches = {}
 

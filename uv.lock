@@ -111,7 +111,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiomysql", specifier = ">=0.3.2" },
-    { name = "apixis", specifier = ">=1.0.0" },
+    { name = "apixis", specifier = "==1.1.5" },
     { name = "fastapi", specifier = ">=0.139.2" },
     { name = "fastmcp-slim", extras = ["client"], specifier = "==3.4.7" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1" },
@@ -133,14 +133,14 @@ dev = [
 
 [[package]]
 name = "apixis"
-version = "1.1.0"
+version = "1.1.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/02/10/5fced18044bc527288b9b29b8e04a10ed3787a37f59ba81278900d3e7a96/apixis-1.1.0.tar.gz", hash = "sha256:cb119cb644b54279d47ef6371faaa9093fad4784fab84d07bdbfd89211ecdcce", size = 206693, upload-time = "2026-10-06T20:42:23.515Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/37/38/668f93abbe78b67c609c39de8ceacc1719279adf30efb24894e70ab143a6/apixis-1.1.5.tar.gz", hash = "sha256:197ee548bc9d8033e6441b363d2208753336baaa33e60344edb475d0d70743ae", size = 242061, upload-time = "2026-10-27T00:03:14.425Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/72/8a/969636bfec98b445a3188d4b7d51fd52bb006453e775f8e21030a5f58024/apixis-1.1.0-py3-none-any.whl", hash = "sha256:481b9918c501d0373596905cbc29b7611b19c99ce73d77d349cd374b6aed6f1f", size = 69743, upload-time = "2026-10-06T20:42:21.734Z" },
+    { url = "https://files.pythonhosted.org/packages/17/bd/5adb791a36b8ab86e5366d5fbdc37125f7f8f2291d0562d5b795261584a6/apixis-1.1.5-py3-none-any.whl", hash = "sha256:f98cc493b228ea7e25cfe25c2a3bea613c43e781e0628190df0e554c3769c2c9", size = 68343, upload-time = "2026-10-27T00:03:12.554Z" },
 ]
 
 [[package]]

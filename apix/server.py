@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 import apix.router as routers_pkg
 from apix.common.lifespan.auto_init import auto_init
-from apix.common.utils.logger import Logger, logger
+from apix.common.utils.logger import logger
 from apix.common.utils.version import print_logo
 from apix.config.base_config import BASE_URL
 
@@ -34,7 +34,6 @@ def auto_load_router(app: FastAPI):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     event_pipe = event_loop = None
-    await Logger.start()
     try:
         auto_load_router(app)
 
@@ -45,19 +44,17 @@ async def lifespan(app: FastAPI):
 
         yield
     finally:
-        # Stop event publication before application services and the dispatcher.
+        # Runtime shutdown exchanges lifecycle and result events. Keep the core
+        # available until every application-owned service has finished cleanup.
         try:
-            if event_pipe is not None:
-                await event_pipe.stop()
+            await auto_init.stop()
         finally:
             try:
-                await auto_init.stop()
+                if event_pipe is not None:
+                    await event_pipe.stop()
             finally:
-                try:
-                    if event_loop is not None:
-                        await event_loop.stop()
-                finally:
-                    await Logger.stop()
+                if event_loop is not None:
+                    await event_loop.stop()
 
 
 def create_app() -> FastAPI:

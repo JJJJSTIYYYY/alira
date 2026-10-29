@@ -42,7 +42,6 @@ class FileService:
                 ],
             }
         """
-        logger.trace()
 
         try:
             source_paths: list[str] = payload["file_path"]
@@ -133,7 +132,6 @@ class FileService:
                 ]
             }
         """
-        logger.trace()
 
         user_uid = payload["user_uid"]
 

@@ -4,13 +4,12 @@ import os
 from typing import Literal
 
 from apixis.core.config.base import _get_config
-from apixis.core.config.core_config import BASE_DIR
 
 VERSION = "3.0.0"
 
 
 # Server
-APIX_BASE_DIR = BASE_DIR
+APIX_BASE_DIR = _get_config("SERVER.base_dir", "./.apix/")
 BASE_URL = _get_config("SERVER.base_url", "http://localhost:2712")
 WORKER_COUNT = _get_config("SERVER.worker_count", 4)
 

@@ -1,5 +1,4 @@
 """Application contracts at the Apixis runtime boundary."""
-import json
 
 import asyncio
 from contextlib import aclosing
@@ -17,7 +16,6 @@ from apixis.core.utils.exception import InvalidContextError
 from httpx import ASGITransport, AsyncClient
 
 from apix.agent.core.graph import AgentGraph, AgentGraphCreator
-from apix.agent.core.tool.mcp import mcp_mgr
 from apix.agent.core.utils.message import ApixAiMessage, ApixToolMessage
 
 
@@ -26,14 +24,7 @@ class State(TypedDict, total=False):
     value: int
 
 
-@pytest.fixture
-def closed_scopes(monkeypatch):
-    close = AsyncMock()
-    monkeypatch.setattr(mcp_mgr, "close_agent_scope", close)
-    return close
-
-
-async def test_prepared_and_restored_contexts_close_their_own_scope(closed_scopes):
+async def test_prepared_and_restored_contexts_keep_distinct_run_ids():
     runs = []
 
     def first(state):
@@ -47,17 +38,18 @@ async def test_prepared_and_restored_contexts_close_their_own_scope(closed_scope
     assert isinstance(graph, AgentGraph)
     context = graph.create_context({"messages": []})
     assert await graph.invoke(graph_context=context) == {"messages": [], "value": 2}
-    closed_scopes.assert_awaited_once_with(context.run_id)
+    assert context.status == "finished"
     restored = graph.restore_context(context.get_snapshot(0))
     assert await graph.invoke(graph_context=restored) == {"messages": [], "value": 2}
     assert restored.run_id != context.run_id
-    assert closed_scopes.await_count == 2
+    assert restored.status == "finished"
+    assert runs == [context.run_id, restored.run_id]
 
 
 @pytest.mark.parametrize(
     "error", [RuntimeError("node failed"), asyncio.CancelledError()]
 )
-async def test_failure_and_node_cancellation_close_scope(closed_scopes, error):
+async def test_failure_and_node_cancellation_record_terminal_status(error):
     async def fail(state):
         raise error
 
@@ -65,10 +57,12 @@ async def test_failure_and_node_cancellation_close_scope(closed_scopes, error):
     context = graph.create_context({"messages": []})
     with pytest.raises(type(error)):
         await graph.invoke(graph_context=context)
-    closed_scopes.assert_awaited_once_with(context.run_id)
+    assert context.status == (
+        "aborted" if isinstance(error, asyncio.CancelledError) else "failed"
+    )
 
 
-async def test_rejected_context_reuse_does_not_close_active_scope(closed_scopes):
+async def test_rejected_context_reuse_preserves_active_invocation():
     started, release = asyncio.Event(), asyncio.Event()
 
     async def wait(state):
@@ -85,14 +79,14 @@ async def test_rejected_context_reuse_does_not_close_active_scope(closed_scopes)
             await graph.invoke(graph_context=context)
         with pytest.raises(TypeError):
             await graph.invoke({}, graph_context=context)
-        closed_scopes.assert_not_awaited()
+        assert not task.done()
     finally:
         release.set()
         await asyncio.wait_for(task, 1)
-    closed_scopes.assert_awaited_once_with(context.run_id)
+    assert context.status == "finished"
 
 
-async def test_foreign_context_is_rejected_without_closing_its_scope(closed_scopes):
+async def test_foreign_context_is_rejected_without_changing_its_status():
     first = AgentGraphCreator(State).compile_agent(None)
     second = AgentGraphCreator(State).compile_agent(None)
     assert first.namespace != second.namespace
@@ -100,10 +94,9 @@ async def test_foreign_context_is_rejected_without_closing_its_scope(closed_scop
     with pytest.raises(InvalidContextError):
         await second.invoke(graph_context=context)
     assert context.status == "pending"
-    closed_scopes.assert_not_awaited()
 
 
-async def test_closing_stream_aborts_context_before_releasing_scope(closed_scopes):
+async def test_closing_stream_aborts_context():
     release = asyncio.Event()
 
     async def emit(state):
@@ -116,11 +109,40 @@ async def test_closing_stream_aborts_context_before_releasing_scope(closed_scope
     async with aclosing(graph.stream(graph_context=context)) as stream:
         assert await asyncio.wait_for(anext(stream), 1) == "chunk"
     assert context.status == "aborted"
-    closed_scopes.assert_awaited_once_with(context.run_id)
     release.set()
 
 
-async def test_custom_messages_key_reaches_tool_node(closed_scopes):
+@pytest.mark.parametrize("compiler", ["compile_graph", "compile_agent"])
+@pytest.mark.parametrize("no_snapshot", [False, True])
+async def test_compiler_forwards_checkpoint_settings(compiler, no_snapshot):
+    def first(state):
+        return Command(update={"value": 1}, goto="second")
+
+    def second(state):
+        return {"value": state["value"] + 1}
+
+    creator = AgentGraphCreator(State).add_nodes([first, second])
+    graph = getattr(creator, compiler)(
+        "first", max_steps=2, max_snapshots=1, no_snapshot=no_snapshot
+    )
+    context = graph.create_context({"messages": []})
+    assert await graph.invoke(graph_context=context) == {"messages": [], "value": 2}
+    assert context.max_snapshots == 1
+    assert len(context.get_all_snapshots()) == (0 if no_snapshot else 1)
+
+
+@pytest.mark.parametrize("compiler", ["compile_graph", "compile_agent"])
+async def test_compiler_forwards_execution_budget(compiler):
+    def repeat(state):
+        return Command(goto="repeat")
+
+    creator = AgentGraphCreator(State).add_node(repeat)
+    graph = getattr(creator, compiler)("repeat", max_steps=1)
+    with pytest.raises(RecursionError, match="maximum of 1 steps"):
+        await graph.invoke({"messages": []})
+
+
+async def test_custom_messages_key_reaches_tool_node():
     class CustomState(TypedDict):
         conversation: Annotated[list, AutoMerge()]
 
@@ -195,7 +217,7 @@ async def test_server_lifespan_can_restart_with_local_events_and_health_check(
     assert stop.await_count == 2
 
 
-async def test_add_tools_forwards_llm_binding_with_custom_messages_key(closed_scopes):
+async def test_add_tools_forwards_llm_binding_with_custom_messages_key():
     class CustomState(TypedDict, total=False):
         conversation: Annotated[list, AutoMerge()]
         observed: str

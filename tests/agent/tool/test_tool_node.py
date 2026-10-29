@@ -1,16 +1,15 @@
 """Tests for agent tool wrapping and ToolNode execution."""
-import json
-
 import asyncio
+import importlib
+import inspect
+import json
+import typing
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
 from enum import Enum
-import inspect
-import importlib
 from pathlib import Path
-import typing
 from typing import (
     Annotated,
     Any,
@@ -22,6 +21,7 @@ from typing import (
 from uuid import UUID
 
 import pytest
+from apixis.core.graph import Command, GraphManager
 from pydantic import BaseModel
 
 from apix.agent.core.tool import (
@@ -31,14 +31,13 @@ from apix.agent.core.tool import (
     ToolNode,
     tool,
 )
+from apix.agent.core.utils.exception import InvalidToolArgsError
 from apix.agent.core.utils.message import (
     ApixAiMessage,
     ApixToolMessage,
 )
-from apix.agent.core.utils.exception import InvalidToolArgsError
-from apixis.core.graph import Command, GraphManager
 
-tool_module = importlib.import_module("apix.agent.core.tool.tool")
+tool_module = importlib.import_module("apix.agent.core.tool.function.tool")
 
 
 class TextUnit(Enum):
@@ -434,7 +433,7 @@ def test_graph_manager_accepts_tool_node_as_base_node():
     node = ToolNode(lambda: "unused")
     manager = GraphManager().add_node(node)
 
-    assert manager._nodes[node.name] is node
+    assert manager._nodes[node.name].node is node
 
 
 @pytest.mark.parametrize(
@@ -686,7 +685,7 @@ def test_tool_rejects_callable_without_a_name():
 
 
 def test_unresolved_forward_reference_falls_back_to_unconstrained_schema():
-    def unresolved(value: "TypeThatDoesNotExist"):
+    def unresolved(value: "TypeThatDoesNotExist"):  # noqa: F821 - exercise unresolved annotations
         return value
 
     wrapped = Tool(unresolved)
@@ -999,13 +998,17 @@ async def test_every_tool_result_is_stringified(value):
     assert command.goto is None
 
 
-def test_all_tool_import_paths_share_one_class_and_decorator():
-    from apix.agent.core.tool.tool_node import Tool as node_tool, tool as node_decorator
+def test_public_function_and_mcp_tools_share_the_base_contract():
+    from apix.agent.core.tool import BaseTool
+    from apix.agent.core.tool.function import Tool as function_tool
+    from apix.agent.core.tool.function import tool as decorator
     from apix.agent.core.tool.mcp import MCPTool
 
-    assert Tool is tool_module.Tool is node_tool
-    assert tool is tool_module.tool is node_decorator
-    assert issubclass(MCPTool, Tool)
+    assert Tool is tool_module.Tool is function_tool
+    assert tool is tool_module.tool is decorator
+    assert issubclass(Tool, BaseTool)
+    assert issubclass(MCPTool, BaseTool)
+    assert not issubclass(MCPTool, Tool)
 
 
 @pytest.mark.asyncio

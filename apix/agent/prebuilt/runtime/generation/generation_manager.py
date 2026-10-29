@@ -265,14 +265,12 @@ class GenerationManager:
         if not gen:
             return
         
-        logger.trace()
 
         async with gen.status_condition:
             await gen.status_condition.wait_for(
                 lambda: gen.status in ("finished", "aborted")
             )
 
-        logger.trace()
 
 
     def get_generation(self, user_uid: str, generation_id: str) -> Optional[Generation]:

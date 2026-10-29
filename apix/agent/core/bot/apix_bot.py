@@ -9,7 +9,7 @@ from typing import Any, Self
 from my_llm import MessageStream
 
 from apix.agent.core.bot.provider import BaseProvider
-from apix.agent.core.tool import Tool, ToolNode
+from apix.agent.core.tool import BaseTool, ToolNode
 from apix.agent.core.utils.context import RoleSchema, to_prompt
 from apix.agent.core.utils.message import ApixAiMessage, ApixMessageBase
 
@@ -88,7 +88,7 @@ class ApixBot:
 
     @staticmethod
     def _schemas(
-        tool_set: Iterable[Tool] | ToolNode, permissions: set[str] | None = None
+        tool_set: Iterable[BaseTool] | ToolNode, permissions: set[str] | None = None
     ) -> list[dict]:
         """Filter tools and copy validated schemas with unique function names."""
         if isinstance(tool_set, ToolNode):
@@ -96,16 +96,16 @@ class ApixBot:
         else:
             if isinstance(tool_set, (str, bytes, Mapping)):
                 raise TypeError(
-                    "tool_set must be an iterable of Tool objects or ToolNode"
+                    "tool_set must be an iterable of BaseTool objects or ToolNode"
                 )
             try:
                 tools = list(tool_set)
             except TypeError as exc:
                 raise TypeError(
-                    "tool_set must be an iterable of Tool objects or ToolNode"
+                    "tool_set must be an iterable of BaseTool objects or ToolNode"
                 ) from exc
-            if any(not isinstance(tool, Tool) for tool in tools):
-                raise TypeError("tool_set must contain only Tool objects")
+            if any(not isinstance(tool, BaseTool) for tool in tools):
+                raise TypeError("tool_set must contain only BaseTool objects")
             schemas = [
                 tool.get_schema()
                 for tool in tools
@@ -118,13 +118,13 @@ class ApixBot:
 
     def bind_tools(
         self,
-        tool_set: Iterable[Tool] | ToolNode,
+        tool_set: Iterable[BaseTool] | ToolNode,
         tool_permission_set: set[str] | None = None,
     ) -> Self:
         """Replace the function tools available to subsequent requests.
 
         Args:
-            tool_set: Iterable of Apix Tool objects or a ToolNode supplying
+            tool_set: Iterable of BaseTool objects or a ToolNode supplying
                 schemas. An empty iterable clears the current tools.
             tool_permission_set: Allowed tool names. None allows all tools;
                 an empty set allows none.
@@ -133,7 +133,7 @@ class ApixBot:
             This bot, allowing chained configuration calls.
 
         Raises:
-            TypeError: tool_set is invalid or contains objects other than Tool.
+            TypeError: tool_set is invalid or contains objects other than BaseTool.
             ValueError: A schema is invalid or function names are duplicated.
         """
         self._tool_schemas = self._schemas(tool_set, tool_permission_set)
@@ -163,7 +163,7 @@ class ApixBot:
 
     async def invoke(
         self, messages: list, system_prompt: list | None = None,
-        *, tools: Iterable[Tool] | ToolNode | None = None, **parameters: Any,
+        *, tools: Iterable[BaseTool] | ToolNode | None = None, **parameters: Any,
     ) -> ApixAiMessage:
         """Generate a complete Chat assistant message without executing tools.
 
@@ -179,7 +179,7 @@ class ApixBot:
 
     async def stream(
         self, messages: list, system_prompt: list | None = None,
-        *, tools: Iterable[Tool] | ToolNode | None = None, **parameters: Any,
+        *, tools: Iterable[BaseTool] | ToolNode | None = None, **parameters: Any,
     ) -> MessageStream:
         """Return the library stream: use async with, then read stream.result.
 

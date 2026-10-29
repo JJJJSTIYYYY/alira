@@ -19,7 +19,6 @@ async def search_web_by_keywords(
     tool_call_id: Annotated[str, InjectedToolCallId]
 ) -> Command:
 
-    logger.trace()
 
     target = state.get("target")
     generation_id = state.get("generation_id")
@@ -156,7 +155,6 @@ async def search_web_by_urls(
     tool_call_id: Annotated[str, InjectedToolCallId]
 ) -> Command:
 
-    logger.trace()
 
     target = state.get("target")
     generation_id = state.get("generation_id")
