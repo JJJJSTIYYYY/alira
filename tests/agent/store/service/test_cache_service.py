@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from apix.agent.store.core.service import cache_service as cache_module
-from apix.agent.store.core.service.cache_service import CacheService
+from apix.agent.store.core.service.cache import cache_service as cache_module
+from apix.agent.store.core.service.cache.cache_service import CacheService
 
 
 @pytest.fixture

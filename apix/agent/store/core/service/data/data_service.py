@@ -1,12 +1,32 @@
 import asyncio
 import json
 import re
-import sqlite3
 import time
+from collections.abc import AsyncIterator, Awaitable
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
+from sqlite3 import SQLITE_BUSY, SQLITE_LOCKED
+from typing import Any
 from uuid import uuid4
 
+from sqlalchemy import case, event, func, insert, literal, or_, select, update
+from sqlalchemy.engine import URL, Connection
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
+from sqlalchemy.sql import Executable
+
+from apix.agent.store.core.service.data.schema import (
+    agent_skills,
+    conversations,
+    cron_task,
+    llm_provider,
+    longterm_memory,
+    mcp_server,
+    messages,
+    metadata,
+    shortterm_memory,
+    users,
+)
 from apix.agent.store.core.service.utils.decorator import service_handler
 from apix.agent.store.core.service.utils.message_fields import (
     decode_message_row,
@@ -17,152 +37,172 @@ from apix.common.lifespan.auto_init import auto_init
 from apix.config.base_config import SQLITE_DATABASE
 
 
-T = TypeVar("T")
-
-
 def _identity_failure(exc: Exception) -> dict:
     return {
         "success": False,
-        "messages": {
-            "msg": f"{type(exc).__name__}: {exc}",
-            "uid": None,
-        },
+        "messages": {"msg": f"{type(exc).__name__}: {exc}", "uid": None},
     }
 
 
+async def _database_io[T](operation: Awaitable[T]) -> T:
+    """Finish driver I/O before cancellation can roll back or close a connection.
+
+    Cancelling SQLAlchemy's driver await invalidates the connection, which would
+    discard an in-memory database. Keep the connection usable for rollback.
+    """
+    pending = asyncio.ensure_future(operation)
+    try:
+        return await asyncio.shield(pending)
+    except asyncio.CancelledError:
+        finished = asyncio.gather(pending, return_exceptions=True)
+        while not finished.done():
+            try:
+                await asyncio.shield(finished)
+            except asyncio.CancelledError:
+                continue
+        raise
+
+
+@asynccontextmanager
+async def _engine_transaction(
+    engine: AsyncEngine, *, immediate: bool = False
+) -> AsyncIterator[AsyncConnection]:
+    async with engine.connect() as connection:
+        if immediate:
+            await connection.execution_options(sqlite_begin_immediate=True)
+        try:
+            await _database_io(connection.begin())
+            yield connection
+        except BaseException:
+            await _database_io(connection.rollback())
+            raise
+        else:
+            await _database_io(connection.commit())
+
+
 class DataService:
-    """SQLite persistence with one connection and serialized worker-thread calls.
+    """SQLite persistence using SQLAlchemy Core and the aiosqlite driver.
 
-    Call ``start()`` before storage operations and ``stop()`` to close the
-    connection. Storage methods return result dictionaries rather than raising
-    ordinary exceptions; lifecycle methods propagate their exceptions.
+    Call ``start()`` before use and ``stop()`` to release the engine. Each
+    operation owns a transaction; operations and lifecycle changes are serialized
+    within the service, including for an in-memory database. Storage methods
+    return result dictionaries; lifecycle errors propagate to the caller.
 
-    Row dictionaries contain the selected SQLite columns. Flags are integers,
-    and SQLite date-time strings are normalized to use a ``T`` separator.
-    JSON columns remain strings unless a method explicitly documents decoding.
-    Constraints and foreign keys are defined in ``utils/init_sqlite.sql``;
-    payloads are not otherwise schema-validated by this service.
+    Tables, constraints and indexes are defined in ``data/schema.py``. Row flags
+    remain integers, time strings use a ``T`` separator, and JSON columns remain
+    strings except for explicitly decoded message fields.
     """
 
-    def __init__(self, db_path: Optional[str | Path] = None):
-        """Create a service for ``db_path`` without opening the database.
-
-        Args:
-            db_path: SQLite file path, or ``":memory:"``. ``None`` uses
-                ``SQLITE_DATABASE``. File paths expand ``~``.
-        """
-        default_path = SQLITE_DATABASE
-        selected_path = str(db_path if db_path is not None else default_path)
+    def __init__(self, db_path: str | Path | None = None):
+        """Select a SQLite file or ``:memory:`` without opening it."""
+        selected_path = str(db_path if db_path is not None else SQLITE_DATABASE)
         self._db_path = (
             selected_path
             if selected_path == ":memory:"
             else str(Path(selected_path).expanduser())
         )
-        self._connection: Optional[sqlite3.Connection] = None
-        self._connection_lock = asyncio.Lock()
-        self._schema_path = Path(__file__).with_name("utils") / "init_sqlite.sql"
+        self._engine: AsyncEngine | None = None
+        self._lock = asyncio.Lock()
 
     def _conversation_id_generator(self) -> str:
-        """Generate a unique conversation ID using UUID4."""
         return str(uuid4())
 
-    async def start(self):
-        """Open the database and create missing tables and indexes.
-
-        Repeated calls while open do nothing. Creates the database's parent
-        folder when needed. Returns ``None``; initialization errors propagate.
-        """
-        async with self._connection_lock:
-            if self._connection is not None:
+    async def start(self) -> None:
+        """Open the database and initialize its tables; repeated calls are safe."""
+        async with self._lock:
+            if self._engine is not None:
                 return
-
             if self._db_path != ":memory:":
-                Path(self._db_path).expanduser().resolve().parent.mkdir(
-                    parents=True, exist_ok=True
-                )
-            schema = self._schema_path.read_text(encoding="utf-8")
+                Path(self._db_path).resolve().parent.mkdir(parents=True, exist_ok=True)
+            engine = create_async_engine(
+                URL.create("sqlite+aiosqlite", database=self._db_path),
+                hide_parameters=True,
+                connect_args={"timeout": 30},
+                **(
+                    {"pool_size": 1, "max_overflow": 0}
+                    if self._db_path != ":memory:"
+                    else {}
+                ),
+            )
 
-            def open_database() -> sqlite3.Connection:
-                connection = sqlite3.connect(
-                    self._db_path,
-                    timeout=30,
-                    check_same_thread=False,
-                )
+            @event.listens_for(engine.sync_engine, "connect")
+            def configure_connection(connection, _record) -> None:
+                # Let SQLAlchemy control BEGIN so reads and DDL also participate
+                # in transactions, instead of sqlite3's legacy transaction mode.
+                connection.isolation_level = None
+                cursor = connection.cursor()
                 try:
-                    connection.row_factory = sqlite3.Row
-                    connection.execute("PRAGMA foreign_keys = ON")
-                    connection.execute("PRAGMA busy_timeout = 30000")
-                    connection.execute("PRAGMA journal_mode = WAL")
-                    connection.executescript(schema)
-                    connection.commit()
-                    return connection
-                except Exception:
-                    connection.close()
-                    raise
+                    cursor.execute("PRAGMA foreign_keys = ON")
+                    cursor.execute("PRAGMA busy_timeout = 30000")
+                    cursor.execute("PRAGMA journal_mode = WAL")
+                finally:
+                    cursor.close()
 
-            self._connection = await asyncio.to_thread(open_database)
+            @event.listens_for(engine.sync_engine, "begin")
+            def begin_transaction(connection: Connection) -> None:
+                connection.exec_driver_sql(
+                    "BEGIN IMMEDIATE"
+                    if connection.get_execution_options().get("sqlite_begin_immediate")
+                    else "BEGIN"
+                )
 
-    async def stop(self):
-        """Commit pending work and close the database connection.
+            try:
+                for attempt in range(4):
+                    try:
+                        async with _engine_transaction(
+                            engine, immediate=True
+                        ) as connection:
+                            await _database_io(connection.run_sync(metadata.create_all))
+                        break
+                    except OperationalError as exc:
+                        # Concurrent first connections can race while enabling WAL.
+                        # busy_timeout does not wait for every journal-mode change.
+                        code = getattr(exc.orig, "sqlite_errorcode", 0)
+                        if (
+                            code & 0xFF not in {SQLITE_BUSY, SQLITE_LOCKED}
+                            or attempt == 3
+                        ):
+                            raise
+                        await asyncio.sleep(0.05 * (2**attempt))
+            except BaseException:
+                await _database_io(engine.dispose())
+                raise
+            self._engine = engine
 
-        Does nothing when already closed. Returns ``None``; closing errors
-        propagate. The service can be opened again with ``start()``.
-        """
-        async with self._connection_lock:
-            connection = self._connection
-            if connection is None:
-                return
-            self._connection = None
+    async def stop(self) -> None:
+        """Wait for the active operation, then release connections; restartable."""
+        async with self._lock:
+            if self._engine is not None:
+                try:
+                    await _database_io(self._engine.dispose())
+                finally:
+                    self._engine = None
 
-            def close_database() -> None:
-                connection.commit()
-                connection.close()
-
-            await asyncio.to_thread(close_database)
-
-    async def _run(self, operation: Callable[[sqlite3.Connection], T]) -> T:
-        async with self._connection_lock:
-            connection = self._connection
-            if connection is None:
+    @asynccontextmanager
+    async def _transaction(self) -> AsyncIterator[AsyncConnection]:
+        async with self._lock:
+            if self._engine is None:
                 raise RuntimeError(
                     "SQLite database is not initialized, call start() first"
                 )
+            async with _engine_transaction(self._engine) as connection:
+                yield connection
 
-            def run_operation() -> T:
-                try:
-                    result = operation(connection)
-                    connection.commit()
-                    return result
-                except Exception:
-                    connection.rollback()
-                    raise
-
-            return await asyncio.to_thread(run_operation)
-
-    async def _execute(self, sql: str, params: tuple[Any, ...] = ()) -> int:
-        def operation(connection: sqlite3.Connection) -> int:
-            return connection.execute(sql, params).rowcount
-
-        return await self._run(operation)
-
-    async def _executemany(
-        self, sql: str, params: list[tuple[Any, ...]]
+    async def _execute(
+        self,
+        statement: Executable,
+        params: dict[str, Any] | list[dict[str, Any]] | None = None,
     ) -> int:
-        def operation(connection: sqlite3.Connection) -> int:
-            return connection.executemany(sql, params).rowcount
-
-        return await self._run(operation)
+        async with self._transaction() as connection:
+            result = await _database_io(connection.execute(statement, params))
+            return result.rowcount
 
     async def _fetch_all(
-        self, sql: str, params: tuple[Any, ...] = ()
+        self, statement: Executable, params: dict[str, Any] | None = None
     ) -> list[dict[str, Any]]:
-        def operation(connection: sqlite3.Connection) -> list[dict[str, Any]]:
-            return [
-                self._normalize_row(dict(row))
-                for row in connection.execute(sql, params).fetchall()
-            ]
-
-        return await self._run(operation)
+        async with self._transaction() as connection:
+            result = await _database_io(connection.execute(statement, params))
+            return [self._normalize_row(dict(row)) for row in result.mappings()]
 
     @staticmethod
     def _json(value: Any, default: Any) -> str:
@@ -201,13 +241,13 @@ class DataService:
         """
         user_uid = payload["user_uid"]
         await self._execute(
-            "INSERT INTO users (user_uid, username, password) VALUES (?, ?, ?)",
-            (user_uid, payload["username"], payload["password"]),
+            insert(users).values(
+                user_uid=user_uid,
+                username=payload["username"],
+                password=payload["password"],
+            )
         )
-        return {
-            "success": True,
-            "messages": {"msg": "success", "uid": user_uid},
-        }
+        return {"success": True, "messages": {"msg": "success", "uid": user_uid}}
 
     @service_handler(failure_factory=_identity_failure)
     async def verify_user(self, payload: dict) -> dict:
@@ -223,9 +263,10 @@ class DataService:
                 Zero matches are a failure, as are database errors.
         """
         rows = await self._fetch_all(
-            "SELECT user_uid, username FROM users "
-            "WHERE username = ? AND password = ?",
-            (payload["username"], payload["password"]),
+            select(users.c.user_uid, users.c.username).where(
+                users.c.username == payload["username"],
+                users.c.password == payload["password"],
+            )
         )
         if len(rows) != 1:
             raise Exception("User do not exist or wrong password.")
@@ -249,9 +290,12 @@ class DataService:
                 when the existence check does not meet ``exist``.
         """
         rows = await self._fetch_all(
-            "SELECT user_uid, username FROM users "
-            "WHERE user_uid = ? OR username = ?",
-            (payload["user_uid"], payload.get("username")),
+            select(users.c.user_uid, users.c.username).where(
+                or_(
+                    users.c.user_uid == payload["user_uid"],
+                    users.c.username == literal(payload.get("username")),
+                )
+            )
         )
         if exist and not rows:
             raise Exception("User do not exist.")
@@ -278,15 +322,24 @@ class DataService:
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         rows = await self._fetch_all(
-            """
-            SELECT conversation_uid, title, work_space, last_active_at,
-                   created_at, latest_cursor, is_pinned, has_new_message,
-                   is_cron
-            FROM conversations
-            WHERE user_uid = ? AND is_deleted != 1
-            ORDER BY is_pinned DESC, last_active_at DESC
-            """,
-            (str(payload["user_uid"]),),
+            select(
+                conversations.c.conversation_uid,
+                conversations.c.title,
+                conversations.c.work_space,
+                conversations.c.last_active_at,
+                conversations.c.created_at,
+                conversations.c.latest_cursor,
+                conversations.c.is_pinned,
+                conversations.c.has_new_message,
+                conversations.c.is_cron,
+            )
+            .where(
+                conversations.c.user_uid == str(payload["user_uid"]),
+                conversations.c.is_deleted != 1,
+            )
+            .order_by(
+                conversations.c.is_pinned.desc(), conversations.c.last_active_at.desc()
+            )
         )
         return {"success": True, "messages": rows}
 
@@ -305,14 +358,21 @@ class DataService:
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         rows = await self._fetch_all(
-            """
-            SELECT conversation_uid, title, work_space, last_active_at,
-                   created_at, latest_cursor, is_pinned, has_new_message
-            FROM conversations
-            WHERE conversation_uid = ? AND is_deleted != 1
-            LIMIT 1
-            """,
-            (payload["conversation_uid"],),
+            select(
+                conversations.c.conversation_uid,
+                conversations.c.title,
+                conversations.c.work_space,
+                conversations.c.last_active_at,
+                conversations.c.created_at,
+                conversations.c.latest_cursor,
+                conversations.c.is_pinned,
+                conversations.c.has_new_message,
+            )
+            .where(
+                conversations.c.conversation_uid == payload["conversation_uid"],
+                conversations.c.is_deleted != 1,
+            )
+            .limit(1)
         )
         return {"success": True, "messages": rows}
 
@@ -333,24 +393,16 @@ class DataService:
         """
         conversation_uid = self._conversation_id_generator()
         await self._execute(
-            """
-            INSERT INTO conversations (
-                user_uid, platform, conversation_uid, title, work_space,
-                last_active_at, latest_cursor, is_cron
-            ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 0, ?)
-            """,
-            (
-                payload["user_uid"],
-                payload.get("platform", "default"),
-                conversation_uid,
-                (
-                    "New Conversation..."
-                    if payload.get("title") is None
-                    else payload["title"]
-                ),
-                payload.get("workspace") or "",
-                payload.get("is_cron", False),
-            ),
+            insert(conversations).values(
+                user_uid=payload["user_uid"],
+                platform=payload.get("platform", "default"),
+                conversation_uid=conversation_uid,
+                title="New Conversation..."
+                if payload.get("title") is None
+                else payload["title"],
+                work_space=payload.get("workspace") or "",
+                is_cron=payload.get("is_cron", False),
+            )
         )
         return {"success": True, "messages": {"conversation_uid": conversation_uid}}
 
@@ -369,26 +421,27 @@ class DataService:
                 conversation matches. Does not update activity timestamps.
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
-        conversation_uid = payload["conversation_uid"]
         await self._execute(
-            """
-            UPDATE conversations
-            SET title = COALESCE(?, title),
-                work_space = COALESCE(?, work_space),
-                is_pinned = COALESCE(?, is_pinned),
-                is_deleted = COALESCE(?, is_deleted),
-                has_new_message = COALESCE(?, has_new_message)
-            WHERE user_uid = ? AND conversation_uid = ?
-            """,
-            (
-                payload.get("title"),
-                payload.get("workspace"),
-                payload.get("is_pinned"),
-                payload.get("is_deleted"),
-                payload.get("has_new_message"),
-                payload["user_uid"],
-                conversation_uid,
-            ),
+            update(conversations)
+            .where(
+                conversations.c.user_uid == payload["user_uid"],
+                conversations.c.conversation_uid == payload["conversation_uid"],
+            )
+            .values(
+                title=func.coalesce(payload.get("title"), conversations.c.title),
+                work_space=func.coalesce(
+                    payload.get("workspace"), conversations.c.work_space
+                ),
+                is_pinned=func.coalesce(
+                    payload.get("is_pinned"), conversations.c.is_pinned
+                ),
+                is_deleted=func.coalesce(
+                    payload.get("is_deleted"), conversations.c.is_deleted
+                ),
+                has_new_message=func.coalesce(
+                    payload.get("has_new_message"), conversations.c.has_new_message
+                ),
+            )
         )
         return {"success": True, "messages": "success"}
 
@@ -429,84 +482,68 @@ class DataService:
         message = payload["message"]
         if not message:
             raise ValueError("Messages list is empty")
-
         role = message["role"]
-        metadata = self._json(message.get("metadata"), {})
-        extensions = self._json(message.get("extensions"), {})
-
-        def operation(connection: sqlite3.Connection) -> dict[str, Any]:
-            connection.execute("BEGIN IMMEDIATE")
-            conversation = connection.execute(
-                """
-                SELECT id, latest_cursor
-                FROM conversations
-                WHERE user_uid = ? AND conversation_uid = ?
-                  AND is_deleted = 0
-                """,
-                (user_uid, conversation_uid),
-            ).fetchone()
+        async with self._transaction() as connection:
+            # Allocate the cursor with the first write. SQLite serializes this
+            # UPDATE across engines, avoiding a read-then-write race.
+            result = await _database_io(
+                connection.execute(
+                    update(conversations)
+                    .where(
+                        conversations.c.user_uid == user_uid,
+                        conversations.c.conversation_uid == conversation_uid,
+                        conversations.c.is_deleted == 0,
+                    )
+                    .values(
+                        latest_cursor=conversations.c.latest_cursor + 1,
+                        last_active_at=func.current_timestamp(),
+                        has_new_message=0 if role == "user" else 1,
+                    )
+                    .returning(conversations.c.id, conversations.c.latest_cursor)
+                )
+            )
+            conversation = result.mappings().one_or_none()
             if conversation is None:
                 raise RuntimeError("Conversation not found or deleted")
-
-            cursor = int(conversation["latest_cursor"]) + 1
-            insert_cursor = connection.execute(
-                """
-                INSERT INTO messages (
-                    message_uid, msg_cursor, user_uid, conversation_id,
-                    conversation_uid, generation_id, node_id, parent_id,
-                    role, name, content, tool_calls, tool_call_id, refusal,
-                    reasoning_content, audio, annotations, function_call, metadata, extensions
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    message["message_uid"],
-                    cursor,
-                    user_uid,
-                    conversation["id"],
-                    conversation_uid,
-                    message.get("generation_id", ""),
-                    message.get("node_id", ""),
-                    message.get("parent_id", ""),
-                    role,
-                    message.get("name"),
-                    encode_content(message.get("content")),
-                    encode_optional(message.get("tool_calls")),
-                    message.get("tool_call_id"),
-                    message.get("refusal"),
-                    message.get("reasoning_content"),
-                    encode_optional(message.get("audio")),
-                    encode_optional(message.get("annotations")),
-                    encode_optional(message.get("function_call")),
-                    metadata,
-                    extensions,
-                ),
+            cursor = conversation["latest_cursor"]
+            result = await _database_io(
+                connection.execute(
+                    insert(messages)
+                    .values(
+                        message_uid=message["message_uid"],
+                        msg_cursor=cursor,
+                        user_uid=user_uid,
+                        conversation_id=conversation["id"],
+                        conversation_uid=conversation_uid,
+                        generation_id=message.get("generation_id", ""),
+                        node_id=message.get("node_id", ""),
+                        parent_id=message.get("parent_id", ""),
+                        role=role,
+                        name=message.get("name"),
+                        content=encode_content(message.get("content")),
+                        tool_calls=encode_optional(message.get("tool_calls")),
+                        tool_call_id=message.get("tool_call_id"),
+                        refusal=message.get("refusal"),
+                        reasoning_content=message.get("reasoning_content"),
+                        audio=encode_optional(message.get("audio")),
+                        annotations=encode_optional(message.get("annotations")),
+                        function_call=encode_optional(message.get("function_call")),
+                        metadata=self._json(message.get("metadata"), {}),
+                        extensions=self._json(message.get("extensions"), {}),
+                    )
+                    .returning(messages.c.timestamp)
+                )
             )
-            connection.execute(
-                """
-                UPDATE conversations
-                SET latest_cursor = ?,
-                    last_active_at = CURRENT_TIMESTAMP,
-                    has_new_message = ?
-                WHERE id = ?
-                """,
-                (
-                    cursor,
-                    0 if role == "user" else 1,
-                    conversation["id"],
-                ),
-            )
-            created = connection.execute(
-                "SELECT timestamp FROM messages WHERE id = ?",
-                (insert_cursor.lastrowid,),
-            ).fetchone()
-            result = {
-                "msg_cursor": cursor,
-                "timestamp": created["timestamp"],
-            }
-            return self._normalize_row(result)
-
-        result = await self._run(operation)
-        return {"success": True, "messages": result}
+            timestamp = result.scalar_one()
+        return {
+            "success": True,
+            "messages": self._normalize_row(
+                {
+                    "msg_cursor": cursor,
+                    "timestamp": timestamp,
+                }
+            ),
+        }
 
     @service_handler
     async def delete_messages(self, payload: dict) -> dict:
@@ -529,30 +566,23 @@ class DataService:
             raise ValueError("Messages list is empty")
         user_uid = payload["user_uid"]
         conversation_uid = payload["conversation_uid"]
-
-        def operation(connection: sqlite3.Connection) -> list[dict]:
-            result: list[dict] = []
+        deleted = []
+        async with self._transaction() as connection:
             for node_id in node_ids:
-                rows = connection.execute(
-                    """
-                    SELECT id, message_uid FROM messages
-                    WHERE user_uid = ? AND conversation_uid = ? AND node_id = ?
-                    """,
-                    (user_uid, conversation_uid, node_id),
-                ).fetchall()
-                if rows:
-                    connection.executemany(
-                        "UPDATE messages SET is_deleted = 1 WHERE id = ?",
-                        [(row["id"],) for row in rows],
+                result = await _database_io(
+                    connection.execute(
+                        update(messages)
+                        .where(
+                            messages.c.user_uid == user_uid,
+                            messages.c.conversation_uid == conversation_uid,
+                            messages.c.node_id == node_id,
+                        )
+                        .values(is_deleted=1)
+                        .returning(messages.c.message_uid)
                     )
-                result.extend(
-                    {"message_uid": row["message_uid"]}
-                    for row in rows
-                    if row["message_uid"]
                 )
-            return result
-
-        return {"success": True, "messages": await self._run(operation)}
+                deleted.extend({"message_uid": uid} for uid in result.scalars() if uid)
+        return {"success": True, "messages": deleted}
 
     @service_handler
     async def fetch_messages_after_cursor(self, payload: dict) -> dict:
@@ -581,31 +611,41 @@ class DataService:
                 no ``next_cursor`` key.
         """
         after_cursor = max(int(payload.get("cursor", 0)), 0)
-        limit = int(payload.get("limit", 65535))
         rows = await self._fetch_all(
-            """
-            SELECT message_uid, msg_cursor, role, name, content, tool_calls,
-                   tool_call_id, refusal, reasoning_content, audio, annotations, function_call, metadata,
-                   extensions, timestamp, generation_id, node_id, parent_id,
-                   is_deleted
-            FROM messages
-            WHERE user_uid = ? AND conversation_uid = ? AND msg_cursor >= ?
-            ORDER BY msg_cursor ASC
-            LIMIT ?
-            """,
-            (
-                payload["user_uid"],
-                payload["conversation_uid"],
-                after_cursor,
-                limit,
-            ),
+            select(
+                messages.c.message_uid,
+                messages.c.msg_cursor,
+                messages.c.role,
+                messages.c.name,
+                messages.c.content,
+                messages.c.tool_calls,
+                messages.c.tool_call_id,
+                messages.c.refusal,
+                messages.c.reasoning_content,
+                messages.c.audio,
+                messages.c.annotations,
+                messages.c.function_call,
+                messages.c.metadata,
+                messages.c.extensions,
+                messages.c.timestamp,
+                messages.c.generation_id,
+                messages.c.node_id,
+                messages.c.parent_id,
+                messages.c.is_deleted,
+            )
+            .where(
+                messages.c.user_uid == payload["user_uid"],
+                messages.c.conversation_uid == payload["conversation_uid"],
+                messages.c.msg_cursor >= after_cursor,
+            )
+            .order_by(messages.c.msg_cursor)
+            .limit(int(payload.get("limit", 65535)))
         )
         rows = [decode_message_row(row, content_json=True) for row in rows]
-        next_cursor = rows[-1]["msg_cursor"] + 1 if rows else after_cursor
         return {
             "success": True,
             "messages": rows,
-            "next_cursor": next_cursor,
+            "next_cursor": rows[-1]["msg_cursor"] + 1 if rows else after_cursor,
         }
 
     @service_handler
@@ -632,20 +672,33 @@ class DataService:
         keyword = re.sub(r"[_\\\s]+", "%", keyword)
         keyword = re.sub(r"%+", "%", keyword).strip("%")
         rows = await self._fetch_all(
-            """
-            SELECT m.conversation_uid, m.generation_id, m.role, m.content,
-                   c.title, c.last_active_at
-            FROM messages AS m
-            JOIN conversations AS c ON c.id = m.conversation_id
-            WHERE c.user_uid = ? AND c.is_deleted = 0
-              AND m.is_deleted = 0 AND m.role IN ('user', 'assistant')
-              AND m.content LIKE ?
-            ORDER BY c.last_active_at DESC, m.id DESC
-            LIMIT 300
-            """,
-            (payload["user_uid"], f"%{keyword}%"),
+            select(
+                messages.c.conversation_uid,
+                messages.c.generation_id,
+                messages.c.role,
+                messages.c.content,
+                conversations.c.title,
+                conversations.c.last_active_at,
+            )
+            .select_from(
+                messages.join(
+                    conversations, conversations.c.id == messages.c.conversation_id
+                )
+            )
+            .where(
+                conversations.c.user_uid == payload["user_uid"],
+                conversations.c.is_deleted == 0,
+                messages.c.is_deleted == 0,
+                messages.c.role.in_(["user", "assistant"]),
+                messages.c.content.like(f"%{keyword}%"),
+            )
+            .order_by(conversations.c.last_active_at.desc(), messages.c.id.desc())
+            .limit(300)
         )
-        return {"success": True, "messages": [decode_message_row(row, content_json=True) for row in rows]}
+        return {
+            "success": True,
+            "messages": [decode_message_row(row, content_json=True) for row in rows],
+        }
 
     # --------------------------------------------------
     # Skills
@@ -668,30 +721,21 @@ class DataService:
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         user_uid = payload["user_uid"]
-        params = []
-        for skill in payload.get("skills", []):
-            params.append(
-                (
-                    skill["skill_id"],
-                    skill["skill_name"],
-                    skill["skill_description"],
-                    skill.get("skill_version", "v1.0"),
-                    skill["package_path"],
-                    skill["package_size"],
-                    skill.get("package_sha256"),
-                    user_uid,
-                )
-            )
+        params = [
+            {
+                "skill_id": skill["skill_id"],
+                "skill_name": skill["skill_name"],
+                "skill_description": skill["skill_description"],
+                "skill_version": skill.get("skill_version", "v1.0"),
+                "package_path": skill["package_path"],
+                "package_size": skill["package_size"],
+                "package_sha256": skill.get("package_sha256"),
+                "user_uid": user_uid,
+            }
+            for skill in payload.get("skills", [])
+        ]
         if params:
-            await self._executemany(
-                """
-                INSERT INTO agent_skills (
-                    skill_id, skill_name, skill_description, skill_version,
-                    package_path, package_size, package_sha256, user_uid
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                params,
-            )
+            await self._execute(insert(agent_skills), params)
         return {"success": True, "messages": "success"}
 
     @service_handler
@@ -709,21 +753,22 @@ class DataService:
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         await self._execute(
-            """
-            UPDATE agent_skills
-            SET is_active = COALESCE(?, is_active),
-                deleted = COALESCE(?, deleted),
-                deleted_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP
-                                  ELSE deleted_at END
-            WHERE skill_id = ? AND user_uid = ? AND deleted = 0
-            """,
-            (
-                payload.get("is_active"),
-                payload.get("deleted"),
-                payload.get("deleted"),
-                payload["skill_id"],
-                payload["user_uid"],
-            ),
+            update(agent_skills)
+            .where(
+                agent_skills.c.skill_id == payload["skill_id"],
+                agent_skills.c.user_uid == payload["user_uid"],
+                agent_skills.c.deleted == 0,
+            )
+            .values(
+                is_active=func.coalesce(
+                    payload.get("is_active"), agent_skills.c.is_active
+                ),
+                deleted=func.coalesce(payload.get("deleted"), agent_skills.c.deleted),
+                deleted_at=case(
+                    (literal(payload.get("deleted")) == 1, func.current_timestamp()),
+                    else_=agent_skills.c.deleted_at,
+                ),
+            )
         )
         return {"success": True, "messages": "success"}
 
@@ -743,15 +788,22 @@ class DataService:
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         rows = await self._fetch_all(
-            """
-            SELECT skill_id, skill_name, skill_description, skill_version,
-                   package_path, package_size, is_active, upload_at
-            FROM agent_skills
-            WHERE user_uid = ? AND deleted = 0
-            ORDER BY upload_at DESC
-            LIMIT ?
-            """,
-            (payload["user_uid"], int(payload.get("limit", 5))),
+            select(
+                agent_skills.c.skill_id,
+                agent_skills.c.skill_name,
+                agent_skills.c.skill_description,
+                agent_skills.c.skill_version,
+                agent_skills.c.package_path,
+                agent_skills.c.package_size,
+                agent_skills.c.is_active,
+                agent_skills.c.upload_at,
+            )
+            .where(
+                agent_skills.c.user_uid == payload["user_uid"],
+                agent_skills.c.deleted == 0,
+            )
+            .order_by(agent_skills.c.upload_at.desc())
+            .limit(int(payload.get("limit", 5)))
         )
         return {"success": True, "messages": rows}
 
@@ -771,15 +823,24 @@ class DataService:
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         rows = await self._fetch_all(
-            """
-            SELECT skill_id, skill_name, skill_description, skill_version,
-                   package_path, package_size, is_active, upload_at,
-                   deleted, deleted_at
-            FROM agent_skills
-            WHERE user_uid = ? AND skill_id = ? AND deleted = 0
-            LIMIT 1
-            """,
-            (payload["user_uid"], payload["skill_id"]),
+            select(
+                agent_skills.c.skill_id,
+                agent_skills.c.skill_name,
+                agent_skills.c.skill_description,
+                agent_skills.c.skill_version,
+                agent_skills.c.package_path,
+                agent_skills.c.package_size,
+                agent_skills.c.is_active,
+                agent_skills.c.upload_at,
+                agent_skills.c.deleted,
+                agent_skills.c.deleted_at,
+            )
+            .where(
+                agent_skills.c.user_uid == payload["user_uid"],
+                agent_skills.c.skill_id == payload["skill_id"],
+                agent_skills.c.deleted == 0,
+            )
+            .limit(1)
         )
         return {"success": True, "messages": rows}
 
@@ -801,14 +862,18 @@ class DataService:
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         rows = await self._fetch_all(
-            """
-            SELECT memory_id, content, created_timestamp
-            FROM shortterm_memory
-            WHERE user_uid = ? AND conversation_uid = ? AND is_deleted = 0
-            ORDER BY created_timestamp DESC
-            LIMIT 1
-            """,
-            (payload["user_uid"], payload["conversation_uid"]),
+            select(
+                shortterm_memory.c.memory_id,
+                shortterm_memory.c.content,
+                shortterm_memory.c.created_timestamp,
+            )
+            .where(
+                shortterm_memory.c.user_uid == payload["user_uid"],
+                shortterm_memory.c.conversation_uid == payload["conversation_uid"],
+                shortterm_memory.c.is_deleted == 0,
+            )
+            .order_by(shortterm_memory.c.created_timestamp.desc())
+            .limit(1)
         )
         return {"success": True, "messages": rows}
 
@@ -826,19 +891,13 @@ class DataService:
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         await self._execute(
-            """
-            INSERT INTO shortterm_memory (
-                memory_id, user_uid, conversation_uid, content,
-                created_timestamp
-            ) VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                payload["memory_id"],
-                payload["user_uid"],
-                payload["conversation_uid"],
-                payload["content"],
-                int(time.time() * 1_000_000),
-            ),
+            insert(shortterm_memory).values(
+                memory_id=payload["memory_id"],
+                user_uid=payload["user_uid"],
+                conversation_uid=payload["conversation_uid"],
+                content=payload["content"],
+                created_timestamp=int(time.time() * 1_000_000),
+            )
         )
         return {"success": True, "messages": "success"}
 
@@ -857,18 +916,15 @@ class DataService:
         """
         memory_ids = payload["memory_ids"]
         if memory_ids:
-            placeholders = ", ".join("?" for _ in memory_ids)
             await self._execute(
-                f"""
-                UPDATE shortterm_memory SET is_deleted = 1
-                WHERE user_uid = ? AND conversation_uid = ?
-                  AND is_deleted = 0 AND memory_id IN ({placeholders})
-                """,
-                (
-                    payload["user_uid"],
-                    payload["conversation_uid"],
-                    *memory_ids,
-                ),
+                update(shortterm_memory)
+                .where(
+                    shortterm_memory.c.user_uid == payload["user_uid"],
+                    shortterm_memory.c.conversation_uid == payload["conversation_uid"],
+                    shortterm_memory.c.is_deleted == 0,
+                    shortterm_memory.c.memory_id.in_(memory_ids),
+                )
+                .values(is_deleted=1)
             )
         return {"success": True, "messages": "success"}
 
@@ -890,13 +946,18 @@ class DataService:
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         rows = await self._fetch_all(
-            """
-            SELECT memory_id, title, memory_date AS date, content, source
-            FROM longterm_memory
-            WHERE user_uid = ? AND is_deleted = 0
-            ORDER BY memory_date DESC, id DESC
-            """,
-            (payload["user_uid"],),
+            select(
+                longterm_memory.c.memory_id,
+                longterm_memory.c.title,
+                longterm_memory.c.memory_date.label("date"),
+                longterm_memory.c.content,
+                longterm_memory.c.source,
+            )
+            .where(
+                longterm_memory.c.user_uid == payload["user_uid"],
+                longterm_memory.c.is_deleted == 0,
+            )
+            .order_by(longterm_memory.c.memory_date.desc(), longterm_memory.c.id.desc())
         )
         return {"success": True, "messages": rows}
 
@@ -916,19 +977,14 @@ class DataService:
         """
         memory_id = payload["memory_id"]
         await self._execute(
-            """
-            INSERT INTO longterm_memory (
-                memory_id, user_uid, title, memory_date, content, source
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                memory_id,
-                payload["user_uid"],
-                payload["title"],
-                payload["date"],
-                payload["content"],
-                payload["source"],
-            ),
+            insert(longterm_memory).values(
+                memory_id=memory_id,
+                user_uid=payload["user_uid"],
+                title=payload["title"],
+                memory_date=payload["date"],
+                content=payload["content"],
+                source=payload["source"],
+            )
         )
         return {"success": True, "messages": {"memory_id": memory_id}}
 
@@ -950,30 +1006,28 @@ class DataService:
         """
         is_deleted = payload.get("is_deleted")
         await self._execute(
-            """
-            UPDATE longterm_memory
-            SET title = COALESCE(?, title),
-                memory_date = COALESCE(?, memory_date),
-                content = COALESCE(?, content),
-                source = COALESCE(?, source),
-                is_deleted = COALESCE(?, is_deleted),
-                deleted_at = CASE
-                    WHEN ? = 1 THEN CURRENT_TIMESTAMP
-                    ELSE deleted_at
-                END,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE memory_id = ? AND user_uid = ? AND is_deleted = 0
-            """,
-            (
-                payload.get("title"),
-                payload.get("date"),
-                payload.get("content"),
-                payload.get("source"),
-                is_deleted,
-                is_deleted,
-                payload["memory_id"],
-                payload["user_uid"],
-            ),
+            update(longterm_memory)
+            .where(
+                longterm_memory.c.memory_id == payload["memory_id"],
+                longterm_memory.c.user_uid == payload["user_uid"],
+                longterm_memory.c.is_deleted == 0,
+            )
+            .values(
+                title=func.coalesce(payload.get("title"), longterm_memory.c.title),
+                memory_date=func.coalesce(
+                    payload.get("date"), longterm_memory.c.memory_date
+                ),
+                content=func.coalesce(
+                    payload.get("content"), longterm_memory.c.content
+                ),
+                source=func.coalesce(payload.get("source"), longterm_memory.c.source),
+                is_deleted=func.coalesce(is_deleted, longterm_memory.c.is_deleted),
+                deleted_at=case(
+                    (literal(is_deleted) == 1, func.current_timestamp()),
+                    else_=longterm_memory.c.deleted_at,
+                ),
+                updated_at=func.current_timestamp(),
+            )
         )
         return {"success": True, "messages": "success"}
 
@@ -998,21 +1052,15 @@ class DataService:
         """
         provider_id = payload["provider_id"]
         await self._execute(
-            """
-            INSERT INTO llm_provider (
-                provider_id, user_uid, provider_name, type, endpoint,
-                model_list, description
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                provider_id,
-                payload["user_uid"],
-                payload["provider_name"],
-                (payload.get("type", "openai") or "openai").lower(),
-                payload["endpoint"],
-                json.dumps(payload["model_list"]),
-                payload.get("description"),
-            ),
+            insert(llm_provider).values(
+                provider_id=provider_id,
+                user_uid=payload["user_uid"],
+                provider_name=payload["provider_name"],
+                type=(payload.get("type", "openai") or "openai").lower(),
+                endpoint=payload["endpoint"],
+                model_list=json.dumps(payload["model_list"]),
+                description=payload.get("description"),
+            )
         )
         return {"success": True, "messages": {"provider_id": provider_id}}
 
@@ -1031,14 +1079,20 @@ class DataService:
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         rows = await self._fetch_all(
-            """
-            SELECT provider_id, provider_name, type, endpoint, model_list,
-                   description, created_at
-            FROM llm_provider
-            WHERE user_uid = ? AND is_deleted = 0
-            ORDER BY created_at DESC
-            """,
-            (payload["user_uid"],),
+            select(
+                llm_provider.c.provider_id,
+                llm_provider.c.provider_name,
+                llm_provider.c.type,
+                llm_provider.c.endpoint,
+                llm_provider.c.model_list,
+                llm_provider.c.description,
+                llm_provider.c.created_at,
+            )
+            .where(
+                llm_provider.c.user_uid == payload["user_uid"],
+                llm_provider.c.is_deleted == 0,
+            )
+            .order_by(llm_provider.c.created_at.desc())
         )
         return {"success": True, "messages": rows}
 
@@ -1055,14 +1109,20 @@ class DataService:
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         rows = await self._fetch_all(
-            """
-            SELECT provider_id, provider_name, type, endpoint, model_list,
-                   description, created_at
-            FROM llm_provider
-            WHERE provider_id = ? AND is_deleted = 0
-            LIMIT 1
-            """,
-            (payload["provider_id"],),
+            select(
+                llm_provider.c.provider_id,
+                llm_provider.c.provider_name,
+                llm_provider.c.type,
+                llm_provider.c.endpoint,
+                llm_provider.c.model_list,
+                llm_provider.c.description,
+                llm_provider.c.created_at,
+            )
+            .where(
+                llm_provider.c.provider_id == payload["provider_id"],
+                llm_provider.c.is_deleted == 0,
+            )
+            .limit(1)
         )
         return {"success": True, "messages": rows}
 
@@ -1089,26 +1149,28 @@ class DataService:
         if isinstance(model_list, list):
             model_list = json.dumps(model_list)
         await self._execute(
-            """
-            UPDATE llm_provider
-            SET provider_name = COALESCE(?, provider_name),
-                type = COALESCE(?, type),
-                endpoint = COALESCE(?, endpoint),
-                model_list = COALESCE(?, model_list),
-                description = COALESCE(?, description),
-                is_deleted = COALESCE(?, is_deleted)
-            WHERE provider_id = ? AND user_uid = ? AND is_deleted = 0
-            """,
-            (
-                payload.get("provider_name"),
-                provider_type,
-                payload.get("endpoint"),
-                model_list,
-                payload.get("description"),
-                payload.get("is_deleted"),
-                payload["provider_id"],
-                payload["user_uid"],
-            ),
+            update(llm_provider)
+            .where(
+                llm_provider.c.provider_id == payload["provider_id"],
+                llm_provider.c.user_uid == payload["user_uid"],
+                llm_provider.c.is_deleted == 0,
+            )
+            .values(
+                provider_name=func.coalesce(
+                    payload.get("provider_name"), llm_provider.c.provider_name
+                ),
+                type=func.coalesce(provider_type, llm_provider.c.type),
+                endpoint=func.coalesce(
+                    payload.get("endpoint"), llm_provider.c.endpoint
+                ),
+                model_list=func.coalesce(model_list, llm_provider.c.model_list),
+                description=func.coalesce(
+                    payload.get("description"), llm_provider.c.description
+                ),
+                is_deleted=func.coalesce(
+                    payload.get("is_deleted"), llm_provider.c.is_deleted
+                ),
+            )
         )
         return {"success": True, "messages": "success"}
 
@@ -1134,21 +1196,15 @@ class DataService:
         """
         mcp_id = payload["mcp_id"]
         await self._execute(
-            """
-            INSERT INTO mcp_server (
-                mcp_id, user_uid, mcp_name, transport, endpoint, config,
-                description
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                mcp_id,
-                payload["user_uid"],
-                payload["mcp_name"],
-                payload["transport"],
-                payload["endpoint"],
-                json.dumps(payload.get("config", {})),
-                payload.get("description"),
-            ),
+            insert(mcp_server).values(
+                mcp_id=mcp_id,
+                user_uid=payload["user_uid"],
+                mcp_name=payload["mcp_name"],
+                transport=payload["transport"],
+                endpoint=payload["endpoint"],
+                config=json.dumps(payload.get("config", {})),
+                description=payload.get("description"),
+            )
         )
         return {"success": True, "messages": {"mcp_id": mcp_id}}
 
@@ -1167,14 +1223,22 @@ class DataService:
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         rows = await self._fetch_all(
-            """
-            SELECT mcp_id, mcp_name, transport, endpoint, config,
-                   description, enabled, tool_count, created_at
-            FROM mcp_server
-            WHERE user_uid = ? AND is_deleted = 0
-            ORDER BY created_at DESC
-            """,
-            (payload["user_uid"],),
+            select(
+                mcp_server.c.mcp_id,
+                mcp_server.c.mcp_name,
+                mcp_server.c.transport,
+                mcp_server.c.endpoint,
+                mcp_server.c.config,
+                mcp_server.c.description,
+                mcp_server.c.enabled,
+                mcp_server.c.tool_count,
+                mcp_server.c.created_at,
+            )
+            .where(
+                mcp_server.c.user_uid == payload["user_uid"],
+                mcp_server.c.is_deleted == 0,
+            )
+            .order_by(mcp_server.c.created_at.desc())
         )
         return {"success": True, "messages": rows}
 
@@ -1192,13 +1256,19 @@ class DataService:
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         rows = await self._fetch_all(
-            """
-            SELECT mcp_id, mcp_name, transport, endpoint, config
-            FROM mcp_server
-            WHERE user_uid = ? AND enabled = 1 AND is_deleted = 0
-            ORDER BY created_at ASC
-            """,
-            (payload["user_uid"],),
+            select(
+                mcp_server.c.mcp_id,
+                mcp_server.c.mcp_name,
+                mcp_server.c.transport,
+                mcp_server.c.endpoint,
+                mcp_server.c.config,
+            )
+            .where(
+                mcp_server.c.user_uid == payload["user_uid"],
+                mcp_server.c.enabled == 1,
+                mcp_server.c.is_deleted == 0,
+            )
+            .order_by(mcp_server.c.created_at.asc())
         )
         return {"success": True, "messages": rows}
 
@@ -1222,30 +1292,30 @@ class DataService:
         if isinstance(config, (dict, list)):
             config = json.dumps(config)
         await self._execute(
-            """
-            UPDATE mcp_server
-            SET mcp_name = COALESCE(?, mcp_name),
-                transport = COALESCE(?, transport),
-                endpoint = COALESCE(?, endpoint),
-                config = COALESCE(?, config),
-                description = COALESCE(?, description),
-                enabled = COALESCE(?, enabled),
-                tool_count = COALESCE(?, tool_count),
-                is_deleted = COALESCE(?, is_deleted)
-            WHERE mcp_id = ? AND user_uid = ? AND is_deleted = 0
-            """,
-            (
-                payload.get("mcp_name"),
-                payload.get("transport"),
-                payload.get("endpoint"),
-                config,
-                payload.get("description"),
-                payload.get("enabled"),
-                payload.get("tool_count"),
-                payload.get("is_deleted"),
-                payload["mcp_id"],
-                payload["user_uid"],
-            ),
+            update(mcp_server)
+            .where(
+                mcp_server.c.mcp_id == payload["mcp_id"],
+                mcp_server.c.user_uid == payload["user_uid"],
+                mcp_server.c.is_deleted == 0,
+            )
+            .values(
+                mcp_name=func.coalesce(payload.get("mcp_name"), mcp_server.c.mcp_name),
+                transport=func.coalesce(
+                    payload.get("transport"), mcp_server.c.transport
+                ),
+                endpoint=func.coalesce(payload.get("endpoint"), mcp_server.c.endpoint),
+                config=func.coalesce(config, mcp_server.c.config),
+                description=func.coalesce(
+                    payload.get("description"), mcp_server.c.description
+                ),
+                enabled=func.coalesce(payload.get("enabled"), mcp_server.c.enabled),
+                tool_count=func.coalesce(
+                    payload.get("tool_count"), mcp_server.c.tool_count
+                ),
+                is_deleted=func.coalesce(
+                    payload.get("is_deleted"), mcp_server.c.is_deleted
+                ),
+            )
         )
         return {"success": True, "messages": "success"}
 
@@ -1276,25 +1346,19 @@ class DataService:
         """
         task_id = payload["task_id"]
         await self._execute(
-            """
-            INSERT INTO cron_task (
-                task_id, user_uid, conversation_uid, platform, name,
-                prompt, execute, exec_time, repeat, extra_config, description
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                task_id,
-                payload["user_uid"],
-                payload.get("conversation_uid"),
-                payload.get("platform") or "default",
-                payload.get("task_name"),
-                payload.get("prompt"),
-                payload.get("execute"),
-                payload.get("exec_time"),
-                payload.get("repeat") or "once",
-                self._json(payload.get("extra_config"), {}),
-                payload.get("description", ""),
-            ),
+            insert(cron_task).values(
+                task_id=task_id,
+                user_uid=payload["user_uid"],
+                conversation_uid=payload.get("conversation_uid"),
+                platform=payload.get("platform") or "default",
+                name=payload.get("task_name"),
+                prompt=payload.get("prompt"),
+                execute=payload.get("execute"),
+                exec_time=payload.get("exec_time"),
+                repeat=payload.get("repeat") or "once",
+                extra_config=self._json(payload.get("extra_config"), {}),
+                description=payload.get("description", ""),
+            )
         )
         return {"success": True, "messages": {"task_id": task_id}}
 
@@ -1314,14 +1378,23 @@ class DataService:
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         rows = await self._fetch_all(
-            """
-            SELECT task_id, user_uid, conversation_uid, platform,
-                   name, prompt, execute, exec_time, repeat, extra_config,
-                   description, created_at, updated_at
-            FROM cron_task
-            WHERE enabled = 1 AND is_deleted = 0
-            ORDER BY exec_time ASC
-            """
+            select(
+                cron_task.c.task_id,
+                cron_task.c.user_uid,
+                cron_task.c.conversation_uid,
+                cron_task.c.platform,
+                cron_task.c.name,
+                cron_task.c.prompt,
+                cron_task.c.execute,
+                cron_task.c.exec_time,
+                cron_task.c.repeat,
+                cron_task.c.extra_config,
+                cron_task.c.description,
+                cron_task.c.created_at,
+                cron_task.c.updated_at,
+            )
+            .where(cron_task.c.enabled == 1, cron_task.c.is_deleted == 0)
+            .order_by(cron_task.c.exec_time.asc())
         )
         return {"success": True, "messages": rows}
 
@@ -1341,15 +1414,25 @@ class DataService:
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         rows = await self._fetch_all(
-            """
-            SELECT task_id, conversation_uid, platform, name, prompt,
-                   execute, exec_time, repeat, extra_config, description,
-                   enabled, created_at, updated_at
-            FROM cron_task
-            WHERE user_uid = ? AND is_deleted = 0
-            ORDER BY exec_time ASC
-            """,
-            (payload["user_uid"],),
+            select(
+                cron_task.c.task_id,
+                cron_task.c.conversation_uid,
+                cron_task.c.platform,
+                cron_task.c.name,
+                cron_task.c.prompt,
+                cron_task.c.execute,
+                cron_task.c.exec_time,
+                cron_task.c.repeat,
+                cron_task.c.extra_config,
+                cron_task.c.description,
+                cron_task.c.enabled,
+                cron_task.c.created_at,
+                cron_task.c.updated_at,
+            )
+            .where(
+                cron_task.c.user_uid == payload["user_uid"], cron_task.c.is_deleted == 0
+            )
+            .order_by(cron_task.c.exec_time.asc())
         )
         return {"success": True, "messages": rows}
 
@@ -1366,15 +1449,26 @@ class DataService:
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         rows = await self._fetch_all(
-            """
-            SELECT task_id, user_uid, conversation_uid, platform, name,
-                   prompt, execute, exec_time, repeat, extra_config,
-                   description, enabled, created_at, updated_at
-            FROM cron_task
-            WHERE task_id = ? AND is_deleted = 0
-            LIMIT 1
-            """,
-            (payload["task_id"],),
+            select(
+                cron_task.c.task_id,
+                cron_task.c.user_uid,
+                cron_task.c.conversation_uid,
+                cron_task.c.platform,
+                cron_task.c.name,
+                cron_task.c.prompt,
+                cron_task.c.execute,
+                cron_task.c.exec_time,
+                cron_task.c.repeat,
+                cron_task.c.extra_config,
+                cron_task.c.description,
+                cron_task.c.enabled,
+                cron_task.c.created_at,
+                cron_task.c.updated_at,
+            )
+            .where(
+                cron_task.c.task_id == payload["task_id"], cron_task.c.is_deleted == 0
+            )
+            .limit(1)
         )
         return {"success": True, "messages": rows}
 
@@ -1401,36 +1495,32 @@ class DataService:
         if isinstance(extra_config, (dict, list)):
             extra_config = json.dumps(extra_config)
         await self._execute(
-            """
-            UPDATE cron_task
-            SET conversation_uid = COALESCE(?, conversation_uid),
-                platform = COALESCE(?, platform),
-                name = COALESCE(?, name),
-                prompt = COALESCE(?, prompt),
-                execute = COALESCE(?, execute),
-                exec_time = COALESCE(?, exec_time),
-                repeat = COALESCE(?, repeat),
-                extra_config = COALESCE(?, extra_config),
-                description = COALESCE(?, description),
-                enabled = COALESCE(?, enabled),
-                is_deleted = COALESCE(?, is_deleted),
-                updated_at = CURRENT_TIMESTAMP
-            WHERE task_id = ? AND is_deleted = 0
-            """,
-            (
-                payload.get("conversation_uid"),
-                payload.get("platform"),
-                payload.get("task_name"),
-                payload.get("prompt"),
-                payload.get("execute"),
-                payload.get("exec_time"),
-                payload.get("repeat"),
-                extra_config,
-                payload.get("description"),
-                payload.get("enabled"),
-                payload.get("is_deleted"),
-                payload["task_id"],
-            ),
+            update(cron_task)
+            .where(
+                cron_task.c.task_id == payload["task_id"], cron_task.c.is_deleted == 0
+            )
+            .values(
+                conversation_uid=func.coalesce(
+                    payload.get("conversation_uid"), cron_task.c.conversation_uid
+                ),
+                platform=func.coalesce(payload.get("platform"), cron_task.c.platform),
+                name=func.coalesce(payload.get("task_name"), cron_task.c.name),
+                prompt=func.coalesce(payload.get("prompt"), cron_task.c.prompt),
+                execute=func.coalesce(payload.get("execute"), cron_task.c.execute),
+                exec_time=func.coalesce(
+                    payload.get("exec_time"), cron_task.c.exec_time
+                ),
+                repeat=func.coalesce(payload.get("repeat"), cron_task.c.repeat),
+                extra_config=func.coalesce(extra_config, cron_task.c.extra_config),
+                description=func.coalesce(
+                    payload.get("description"), cron_task.c.description
+                ),
+                enabled=func.coalesce(payload.get("enabled"), cron_task.c.enabled),
+                is_deleted=func.coalesce(
+                    payload.get("is_deleted"), cron_task.c.is_deleted
+                ),
+                updated_at=func.current_timestamp(),
+            )
         )
         return {"success": True, "messages": "success"}
 

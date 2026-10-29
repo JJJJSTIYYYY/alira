@@ -117,22 +117,16 @@ SDK 错误及库的 `StreamError`、`IncompleteStreamError` 等异常直接向�
 
 ## 数据库
 
-SQLite 和 MySQL 的 messages 表同步增加协议列，但不接受 `developer` 角色。
-`content` 使用 JSON 编码存储，读取时恢复原值。SQLite 的 JSON 列为带校验的 TEXT，
-MySQL 使用 JSON 列。初始化 SQL 将数据库默认排序规则统一为 `utf8mb4_unicode_ci`，
-使存储过程参数与表字段保持一致。游标、消息标识、树分支、软删除和业务扩展保持原有语义。
+数据库服务使用 SQLAlchemy Core + aiosqlite，SQLite 文件位置由
+`DATA_STORE.sqlite.database` 配置。`DataService.start()` 创建异步引擎并通过
+`data/schema.py` 中的表定义创建缺失表；`stop()` 等待当前事务结束后释放连接，支持重启。
+应用中的服务实例继续由 `auto_init` 管理生命周期。
 
-本项目当前不需要保留旧数据，不提供旧消息结构的迁移或兼容路径。
-新数据库由存储服务启动时执行对应的初始化 SQL；若已有空数据库采用旧表结构，
-应重新建表后使用当前初始化 SQL。
+每次存储操作使用独立事务。消息游标通过原子更新分配，与消息写入一起提交或回滚，
+多个服务实例访问同一数据库时也不会重复分配游标。外键约束、WAL 和 30 秒忙等待
+在连接建立时启用。取消任务时先等待当前底层 SQL 结束，再回滚未提交的事务，
+避免取消导致内存数据库的连接失效。
 
-在 macOS 上，从 Codex 运行临时 mysqld 时需在获得授权后使用沙箱外执行。
-沙箱对 `hw.cachelinesize` 的读取限制可能导致 MySQL 在 `Aligned_atomic` 初始化时崩溃；
-这不表示已有数据库损坏，也无需为此重装 MySQL。
-
-真实 MySQL 9.5.0 已验证新库初始化、消息写入、工具回放和多模态内容读取。
-可对隔离的、使用无密码 root 的临时测试实例运行集成测试；测试会创建并清理独立数据库：
-
-```sh
-APIX_TEST_MYSQL_SOCKET=/path/to/test/mysql.sock uv run pytest tests/agent/store/server/test_mysql_chat_live.py -q
-```
+`messages` 表存储 Chat 协议字段，不接受 `developer` 角色。JSON 列为带校验的
+TEXT，`content` 和工具调用等协议字段在读取时恢复原值；`metadata`、`extensions`
+保留 JSON 文本，并支持消息游标、树分支和软删除。

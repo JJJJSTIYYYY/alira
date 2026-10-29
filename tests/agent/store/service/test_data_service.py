@@ -1,9 +1,13 @@
+import asyncio
 import json
 import sqlite3
+import threading
+from contextlib import closing
 
 import pytest
+from sqlalchemy import text
 
-from apix.agent.store.core.service.data_service import DataService
+from apix.agent.store.core.service.data.data_service import DataService
 
 
 @pytest.fixture
@@ -41,88 +45,322 @@ async def test_lifecycle_helpers_and_transaction_rollback(tmp_path):
     service = DataService(path)
 
     with pytest.raises(RuntimeError, match="call start"):
-        await service._fetch_all("SELECT 1")
+        await service._fetch_all(text("SELECT 1"))
 
-    await service.start()
-    connection = service._connection
-    await service.start()
-    assert service._connection is connection
-    assert path.exists()
-    tables = await service._fetch_all(
-        "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
-    )
-    assert {row["name"] for row in tables} >= {
-        "users",
-        "conversations",
-        "messages",
-        "agent_skills",
-        "shortterm_memory",
-        "longterm_memory",
-        "llm_provider",
-        "mcp_server",
-        "cron_task",
-    }
-    message_columns = [
-        row["name"]
-        for row in await service._fetch_all("PRAGMA table_info(messages)")
-    ]
-    assert message_columns == [
-        "id",
-        "message_uid",
-        "msg_cursor",
-        "user_uid",
-        "conversation_id",
-        "conversation_uid",
-        "generation_id",
-        "node_id",
-        "parent_id",
-        "role",
-        "name",
-        "content",
-        "tool_calls",
-        "tool_call_id",
-        "refusal",
-        "reasoning_content",
-        "audio",
-        "annotations",
-        "function_call",
-        "metadata",
-        "extensions",
-        "timestamp",
-        "is_deleted",
-    ]
-
-    def fail_after_insert(conn):
-        conn.execute(
-            "INSERT INTO users (user_uid, username, password) VALUES (?, ?, ?)",
-            ("rolled-back", "rolled-back", "secret"),
+    try:
+        await asyncio.gather(service.start(), service.start())
+        assert path.exists()
+        tables = await service._fetch_all(
+            text("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
         )
-        raise RuntimeError("force rollback")
+        assert {row["name"] for row in tables} >= {
+            "users",
+            "conversations",
+            "messages",
+            "agent_skills",
+            "shortterm_memory",
+            "longterm_memory",
+            "llm_provider",
+            "mcp_server",
+            "cron_task",
+        }
+        message_columns = [
+            row["name"]
+            for row in await service._fetch_all(text("PRAGMA table_info(messages)"))
+        ]
+        assert message_columns == [
+            "id",
+            "message_uid",
+            "msg_cursor",
+            "user_uid",
+            "conversation_id",
+            "conversation_uid",
+            "generation_id",
+            "node_id",
+            "parent_id",
+            "role",
+            "name",
+            "content",
+            "tool_calls",
+            "tool_call_id",
+            "refusal",
+            "reasoning_content",
+            "audio",
+            "annotations",
+            "function_call",
+            "metadata",
+            "extensions",
+            "timestamp",
+            "is_deleted",
+        ]
 
-    with pytest.raises(RuntimeError, match="force rollback"):
-        await service._run(fail_after_insert)
-    assert await service._fetch_all(
-        "SELECT * FROM users WHERE user_uid = ?", ("rolled-back",)
-    ) == []
-    assert service._json(None, {}) == "{}"
-    assert service._json(["a"], []) == '["a"]'
-    assert service._json('{"already":"json"}', {}) == '{"already":"json"}'
-    assert service._normalize_row(
-        {
-            "created_at": "2026-01-02 03:04:05",
-            "timestamp": "2026-01-02 03:04:06",
+        with pytest.raises(RuntimeError, match="force rollback"):
+            async with service._transaction() as connection:
+                await connection.execute(
+                    text(
+                        "INSERT INTO users (user_uid, username, password) "
+                        "VALUES (:user_uid, :username, :password)"
+                    ),
+                    {
+                        "user_uid": "rolled-back",
+                        "username": "rolled-back",
+                        "password": "secret",
+                    },
+                )
+                raise RuntimeError("force rollback")
+        assert await service._fetch_all(
+            text("SELECT * FROM users WHERE user_uid = :user_uid"),
+            {"user_uid": "rolled-back"},
+        ) == []
+        assert service._json(None, {}) == "{}"
+        assert service._json(["a"], []) == '["a"]'
+        assert service._json('{"already":"json"}', {}) == '{"already":"json"}'
+        assert service._normalize_row(
+            {
+                "created_at": "2026-01-02 03:04:05",
+                "timestamp": "2026-01-02 03:04:06",
+                "content": "leave me alone",
+            }
+        ) == {
+            "created_at": "2026-01-02T03:04:05",
+            "timestamp": "2026-01-02T03:04:06",
             "content": "leave me alone",
         }
-    ) == {
-        "created_at": "2026-01-02T03:04:05",
-        "timestamp": "2026-01-02T03:04:06",
-        "content": "leave me alone",
-    }
 
-    await service.stop()
+    finally:
+        await service.stop()
     await service.stop()
     with pytest.raises(RuntimeError, match="call start"):
-        await service._execute("SELECT 1")
+        await service._execute(text("SELECT 1"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("db_name", ["store #1?.sqlite3", ":memory:"])
+async def test_repeated_start_and_stop_preserve_expected_storage(tmp_path, db_name):
+    path = db_name if db_name == ":memory:" else tmp_path / db_name
+    service = DataService(path)
+    user = {"user_uid": "user-1", "username": "alice", "password": "secret"}
+    try:
+        await asyncio.gather(service.start(), service.start())
+        assert (await service.create_a_user(user))["success"]
+        await service.start()
+        assert (await service.verify_user(user))["success"]
+
+        await asyncio.gather(service.stop(), service.stop())
+        await service.start()
+        restored = await service.verify_user(user)
+        if db_name == ":memory:":
+            assert restored["success"] is False
+            assert (await service.create_a_user(user))["success"]
+        else:
+            assert restored["messages"]["uid"] == "user-1"
+
+        assert (await service.create_conversation({"user_uid": "missing"}))[
+            "success"
+        ] is False
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wal_enabled", [False, True])
+async def test_multiple_services_can_initialize_the_same_database(tmp_path, wal_enabled):
+    path = tmp_path / "shared.sqlite3"
+    if wal_enabled:
+        with closing(sqlite3.connect(path)) as connection:
+            assert connection.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"
+    services = [DataService(path) for _ in range(3)]
+    try:
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                *(service.start() for service in services), return_exceptions=True
+            ),
+            timeout=10,
+        )
+        assert results == [None, None, None], results
+        for index, service in enumerate(services):
+            assert (await service.create_a_user({
+                "user_uid": f"user-{index}",
+                "username": f"user-{index}",
+                "password": "secret",
+            }))["success"]
+        assert await services[0]._fetch_all(
+            text("SELECT user_uid FROM users ORDER BY user_uid")
+        ) == [{"user_uid": f"user-{index}"} for index in range(3)]
+    finally:
+        await asyncio.gather(*(service.stop() for service in services))
+
+
+@pytest.mark.asyncio
+async def test_cancelled_transaction_rolls_back_and_allows_stop_and_restart(tmp_path):
+    service = DataService(tmp_path / "cancelled.sqlite3")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    task = None
+
+    async def pending_write():
+        async with service._transaction() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO users (user_uid, username, password) "
+                    "VALUES (:user_uid, :username, :password)"
+                ),
+                {
+                    "user_uid": "cancelled",
+                    "username": "cancelled",
+                    "password": "secret",
+                },
+            )
+            entered.set()
+            await release.wait()
+
+    try:
+        await service.start()
+        task = asyncio.create_task(pending_write())
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+
+        await asyncio.wait_for(service.stop(), timeout=2)
+        await asyncio.wait_for(service.start(), timeout=2)
+        assert await service._fetch_all(
+            text("SELECT user_uid FROM users WHERE user_uid = :user_uid"),
+            {"user_uid": "cancelled"},
+        ) == []
+        assert (await service.create_a_user(
+            {"user_uid": "cancelled", "username": "cancelled", "password": "secret"}
+        ))["success"]
+        assert (await service.verify_user(
+            {"username": "cancelled", "password": "secret"}
+        ))["messages"]["uid"] == "cancelled"
+    finally:
+        release.set()
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await service.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_count", [1, 2])
+async def test_cancelling_active_sql_keeps_the_in_memory_database(cancel_count):
+    service = DataService(":memory:")
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+    task = None
+    user = {"user_uid": "existing", "username": "existing", "password": "secret"}
+
+    def slow_sql():
+        loop.call_soon_threadsafe(entered.set)
+        if not release.wait(timeout=5):
+            raise RuntimeError("SQL query was not released")
+        return "cancelled"
+
+    try:
+        await service.start()
+        assert (await service.create_a_user(user))["success"]
+        async with service._transaction() as connection:
+            await connection.run_sync(
+                lambda sync_connection: sync_connection.connection.create_function(
+                    "slow_sql", 0, slow_sql
+                )
+            )
+        task = asyncio.create_task(service._execute(text(
+            "INSERT INTO users (user_uid, username, password) "
+            "VALUES ('cancelled', slow_sql(), 'secret')"
+        )))
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        for _ in range(cancel_count):
+            task.cancel()
+            await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+
+        assert (await service.verify_user(user))["messages"]["uid"] == "existing"
+        assert (await service.create_a_user({
+            "user_uid": "new", "username": "new", "password": "secret"
+        }))["success"]
+        assert await service._fetch_all(
+            text("SELECT user_uid FROM users ORDER BY user_uid")
+        ) == [{"user_uid": "existing"}, {"user_uid": "new"}]
+    finally:
+        release.set()
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await service.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("service_count", [1, 2])
+async def test_concurrent_appends_allocate_unique_contiguous_cursors(
+    tmp_path, monkeypatch, service_count
+):
+    path = tmp_path / "concurrent.sqlite3"
+    services = [DataService(path) for _ in range(service_count)]
+    payload = {"user_uid": "user-1", "conversation_uid": "conv-1"}
+    count = 24
+    try:
+        for service in services:
+            await service.start()
+        await create_user_and_conversation(services[0], monkeypatch)
+        results = await asyncio.wait_for(
+            asyncio.gather(*(
+                services[index % service_count].append_message({
+                    **payload,
+                    "message": {
+                        "message_uid": f"message-{index}",
+                        "node_id": f"node-{index}",
+                        "role": "assistant",
+                        "content": f"concurrent-{index}",
+                    },
+                })
+                for index in range(count)
+            )),
+            timeout=10,
+        )
+        assert all(result["success"] for result in results), results
+        assert sorted(result["messages"]["msg_cursor"] for result in results) == list(
+            range(1, count + 1)
+        )
+        fetched = await services[0].fetch_messages_after_cursor(payload)
+        assert [row["msg_cursor"] for row in fetched["messages"]] == list(
+            range(1, count + 1)
+        )
+        assert len({row["message_uid"] for row in fetched["messages"]}) == count
+        meta = await services[0].get_conversation_meta_by_id(payload)
+        assert meta["messages"][0]["latest_cursor"] == count
+    finally:
+        await asyncio.gather(*(service.stop() for service in services))
+
+
+@pytest.mark.asyncio
+async def test_failed_message_insert_does_not_advance_conversation_cursor(
+    db, monkeypatch
+):
+    await create_user_and_conversation(db, monkeypatch)
+    payload = {
+        "user_uid": "user-1",
+        "conversation_uid": "conv-1",
+        "message": {"message_uid": "message-1", "role": "user", "content": "first"},
+    }
+    assert (await db.append_message(payload))["messages"]["msg_cursor"] == 1
+    assert (await db.append_message(payload))["success"] is False
+    meta = await db.get_conversation_meta_by_id(payload)
+    assert meta["messages"][0]["latest_cursor"] == 1
+    assert meta["messages"][0]["has_new_message"] == 0
+
+    payload["message"] = {
+        "message_uid": "message-2", "role": "assistant", "content": "second"
+    }
+    assert (await db.append_message(payload))["messages"]["msg_cursor"] == 2
+    fetched = await db.fetch_messages_after_cursor(payload)
+    assert [row["message_uid"] for row in fetched["messages"]] == [
+        "message-1", "message-2"
+    ]
 
 
 @pytest.mark.asyncio
@@ -222,7 +460,7 @@ async def test_users_conversations_and_messages(db, monkeypatch):
     assert "T" in first["messages"]["timestamp"]
     conversation_row = (
         await db._fetch_all(
-            "SELECT latest_cursor, has_new_message FROM conversations"
+            text("SELECT latest_cursor, has_new_message FROM conversations")
         )
     )[0]
     assert conversation_row == {
@@ -455,12 +693,12 @@ async def test_longterm_memory_crud_and_constraints(db):
         }
     ]
     deleted_row = (await db._fetch_all(
-        """
+        text("""
         SELECT is_deleted, deleted_at
         FROM longterm_memory
-        WHERE memory_id = ?
-        """,
-        ("memory-1",),
+        WHERE memory_id = :memory_id
+        """),
+        {"memory_id": "memory-1"},
     ))[0]
     assert deleted_row["is_deleted"] == 1
     assert "T" in deleted_row["deleted_at"]

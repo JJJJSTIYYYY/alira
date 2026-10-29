@@ -3,8 +3,8 @@ from uuid import UUID
 
 import pytest
 
-from apix.agent.store.core.service.cache_service import CacheService
-from apix.agent.store.core.service.data_service import DataService
+from apix.agent.store.core.service.cache.cache_service import CacheService
+from apix.agent.store.core.service.data.data_service import DataService
 from apix.agent.store.core.service.utils import decorator as service_utils
 from apix.agent.store.core.service.utils.decorator import service_handler
 

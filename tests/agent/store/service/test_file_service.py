@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from apix.agent.store.core.service import file_service as file_module
-from apix.agent.store.core.service.file_service import FileService
+from apix.agent.store.core.service.data import file_service as file_module
+from apix.agent.store.core.service.data.file_service import FileService
 
 
 def make_skill_zip(path: Path, frontmatter: str | None, *, nested=True) -> Path:
@@ -73,7 +73,7 @@ async def test_handle_skill_package_moves_valid_zip_and_extracts_metadata(
 ):
     monkeypatch.setattr(file_module, "APIX_BASE_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(
-        "apix.agent.store.core.service.file_service.uuid4",
+        "apix.agent.store.core.service.data.file_service.uuid4",
         lambda: SimpleNamespace(hex="fixedid")
     )
     source = make_skill_zip(

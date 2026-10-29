@@ -10,8 +10,6 @@ RELEASE_NOTES.md
 # Python
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
 *.so
 *.egg-info/
 .coverage
@@ -40,6 +38,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+logs/
+*.log
 
 # Env & IDE
 .env
@@ -55,11 +55,6 @@ pnpm-debug.log*
 .apix_data
 .ruff_cache
 config.yaml
-
-# logs
-logs/
-*.log
-cache/
 tmp/
 temp/
 
@@ -67,14 +62,3 @@ temp/
 *.sqlite3
 *.db
 test-results
-
-# logs
-logs/
-*.log
-cache/
-tmp/
-temp/
-
-# Extra
-*.sqlite3
-*.db

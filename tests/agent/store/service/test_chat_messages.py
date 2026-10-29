@@ -1,11 +1,14 @@
 """Persistence of canonical Chat messages in newly initialized databases."""
-import json
 
 import pytest
 
-from apix.agent.core.utils.message import ApixAiMessage, ApixSystemMessage, ApixToolMessage, ApixUserMessage
+from apix.agent.core.utils.message import (
+    ApixAiMessage,
+    ApixSystemMessage,
+    ApixToolMessage,
+)
 from apix.agent.prebuilt.adapter.context.context_adapter import AIContextAdapter
-from apix.agent.store.core.service.data_service import DataService
+from apix.agent.store.core.service.data.data_service import DataService
 from tests.agent.store.service.test_data_service import create_user_and_conversation
 
 
@@ -27,6 +30,8 @@ async def test_sqlite_content_and_protocol_fields_round_trip(tmp_path, monkeypat
         assert (await db.append_message(payload))["success"]
         tool = ApixToolMessage(content="", tool_call_id="c1", extensions={"active_file": "notes.md"})
         assert (await db.append_message({**payload, "message": adapter.convert_to_dict_message(tool, "generation")}))["success"]
+        await db.stop()
+        await db.start()
         fetched = await db.fetch_messages_after_cursor(payload)
         assert fetched["success"]
         row = fetched["messages"][0]

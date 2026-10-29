@@ -10,8 +10,8 @@ from apix.agent.store.core.data_server_manager import (
     data_server_manager as dsm,
     query_store,
 )
-from apix.agent.store.core.service.cache_service import CacheService
-from apix.agent.store.core.service.data_service import DataService
+from apix.agent.store.core.service.cache.cache_service import CacheService
+from apix.agent.store.core.service.data.data_service import DataService
 from apix.common.lifespan.auto_init import auto_init
 
 
