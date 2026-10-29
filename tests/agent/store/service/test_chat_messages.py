@@ -5,14 +5,14 @@ import pytest
 
 from apix.agent.core.utils.message import ApixAiMessage, ApixSystemMessage, ApixToolMessage, ApixUserMessage
 from apix.agent.prebuilt.adapter.context.context_adapter import AIContextAdapter
-from apix.agent.store.core.server.data_store.sqlite_server import SqliteService
-from tests.agent.store.server.test_sqlite_server import create_user_and_conversation
+from apix.agent.store.core.service.data_service import DataService
+from tests.agent.store.service.test_data_service import create_user_and_conversation
 
 
 @pytest.mark.parametrize("content", [None, "", "null", '[{"type":"text"}]', [
     {"type": "text", "text": "look"}, {"type": "image_url", "image_url": {"url": "https://example.test/a.png"}}]])
 async def test_sqlite_content_and_protocol_fields_round_trip(tmp_path, monkeypatch, content):
-    db = SqliteService(tmp_path / "chat.sqlite3")
+    db = DataService(tmp_path / "chat.sqlite3")
     await db.start()
     try:
         await create_user_and_conversation(db, monkeypatch)

@@ -7,7 +7,7 @@ from apix.agent.core.utils.message import ApixSystemMessage, ApixUserMessage, Ap
 from apix.agent.core.utils.funcs import convert_generation_id_to_message_node_id
 from apix.agent.core.utils.context import LongtermMemory, ShorttermMemory, Skill, Todo
 from apix.common.utils.logger import logger
-from apix.agent.store.core.server.data_store.message_fields import CHAT_OPTIONAL_FIELDS, decode_message_row
+from apix.agent.store.core.service.utils.message_fields import CHAT_OPTIONAL_FIELDS, decode_message_row
 
 
 class AIContextAdapter:

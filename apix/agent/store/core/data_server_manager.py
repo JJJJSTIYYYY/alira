@@ -5,33 +5,18 @@ from typing import Any,  Callable
 from apix.agent.store.core.execute_layer import DataExecutors
 from apix.common.lifespan.auto_init import auto_init
 from apix.common.utils.logger import logger
-from apix.config.base_config import WORKER_COUNT, CACHE_STORE_TYPE, DATA_STORE_TYPE
-from apix.agent.store.core.server.cache_store.cache_server_base import CacheServerBase
-from apix.agent.store.core.server.data_store.data_server_base import DataServerBase
-
-if CACHE_STORE_TYPE == 'redis':
-    from apix.agent.store.core.server.cache_store.redis_server import cache_server
-elif CACHE_STORE_TYPE == 'builtin':
-    from apix.agent.store.core.server.cache_store.builtin_server import cache_server
-else:
-    raise NotImplementedError()
-
-if DATA_STORE_TYPE == 'mysql':
-    from apix.agent.store.core.server.data_store.mysql_server import data_server
-elif DATA_STORE_TYPE == 'sqlite':
-    from apix.agent.store.core.server.data_store.sqlite_server import data_server
-else:
-    raise NotImplementedError()
-
-from apix.agent.store.core.server.file_store.file_server import FileService, file_server
+from apix.config.base_config import WORKER_COUNT
+from apix.agent.store.core.service.cache_service import CacheService, cache_service
+from apix.agent.store.core.service.data_service import DataService, data_service
+from apix.agent.store.core.service.file_service import FileService, file_service
 
 class DataServerManager:
 
     def __init__(
         self,
         *,
-        cache_store: CacheServerBase,
-        data_store: DataServerBase,
+        cache_store: CacheService,
+        data_store: DataService,
         file_server: FileService,
         worker_count: int = 4,
     ):
@@ -193,9 +178,9 @@ class DataServerManager:
 
 
 data_server_manager = DataServerManager(
-    cache_store=cache_server,
-    data_store=data_server,
-    file_server=file_server,
+    cache_store=cache_service,
+    data_store=data_service,
+    file_server=file_service,
     worker_count=WORKER_COUNT,
 )
 auto_init.register(data_server_manager)

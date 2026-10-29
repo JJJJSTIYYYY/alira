@@ -8,8 +8,8 @@ import pytest
 
 from apix.agent.store.core import execute_layer as execute_module
 from apix.agent.store.core.execute_layer import DataExecutors
-from apix.agent.store.core.server.file_store import file_server as file_module
-from apix.agent.store.core.server.file_store.file_server import FileService
+from apix.agent.store.core.service import file_service as file_module
+from apix.agent.store.core.service.file_service import FileService
 
 
 def make_executor(*, data_store, file_server):

@@ -6,11 +6,11 @@ from typing import Any, Awaitable, Callable, TypeVar, cast
 from uuid import uuid4
 from datetime import datetime
 
-from apix.agent.store.core.server.data_store.message_fields import decode_message_row
+from apix.agent.store.core.service.utils.message_fields import decode_message_row
 from apix.agent.store.utils.message_node_helper import MessageNodeHelper
-from apix.agent.store.core.server.data_store.data_server_base import DataServerBase
-from apix.agent.store.core.server.cache_store.cache_server_base import CacheServerBase
-from apix.agent.store.core.server.file_store.file_server import FileService
+from apix.agent.store.core.service.cache_service import CacheService
+from apix.agent.store.core.service.data_service import DataService
+from apix.agent.store.core.service.file_service import FileService
 from apix.agent.store.utils.decorator import task_handler
 from apix.common.utils.logger import logger
 
@@ -63,8 +63,8 @@ class DataExecutors:
     def __init__(
         self, 
         *, 
-        cache_store: CacheServerBase, 
-        data_store: DataServerBase, 
+        cache_store: CacheService,
+        data_store: DataService,
         file_server: FileService,
     ):
         self.cache_store = cache_store
@@ -200,15 +200,7 @@ class DataExecutors:
         
     @data_task_handler("create_a_user")
     async def create_a_user(self, payload: dict) -> dict:
-        """
-        Ensure user exists in persistent storage.
-
-        Workflow:
-        - Insert user if not exists
-        - Update user info if exists
-
-        Redis is NOT involved.
-        """
+        """Create a user after checking that the account does not exist."""
         res = await self.data_store.ensure_user_exists(payload, exist=False)
         if not res.get("success"):
             return res
@@ -217,24 +209,12 @@ class DataExecutors:
         
     @data_task_handler("verify_user")
     async def verify_user(self, payload: dict) -> dict:
-        """
-        Ensure user exists in persistent storage.
-
-        Workflow:
-        - Insert user if not exists
-        - Update user info if exists
-
-        Redis is NOT involved.
-        """
+        """Verify the supplied user credentials."""
         return await self.data_store.verify_user(payload)
         
     @data_task_handler("ensure_user_exists")
     async def ensure_user_exists(self, payload: dict) -> dict:
-        """
-        Ensure user exists in persistent storage.
-
-        Redis is NOT involved.
-        """
+        """Ensure the user exists in persistent storage."""
         return await self.data_store.ensure_user_exists(payload)
         
     # --------------------------------------------------
@@ -243,57 +223,30 @@ class DataExecutors:
 
     @data_task_handler("create_new_conversation")
     async def create_new_conversation(self, payload: dict) -> dict:
-        """
-        Create a new conversation record.
-
-        Workflow:
-        1. Ensure user exists in MySQL
-        2. Create a new conversation in MySQL
-
-        Redis is NOT involved.
-        """
+        """Create a conversation after checking that the user exists."""
         res = await self.data_store.ensure_user_exists(payload)
         if not res.get("success"):
             return res
 
-        # 2. Create conversation
         return await self.data_store.create_conversation(payload)
 
     @data_task_handler("update_conversation")
     async def update_conversation(self, payload: dict) -> dict:
-        """
-        Update a conversation record.
-        This method could delete a conversation record in mysql.
-
-        Workflow:
-        1. Set target conversation messages cache expired in redis if is_deleted is True.
-        2. Update conversation recoard in mysql.
-
-        Redis failure NOT fail the whole operation.
-        """
+        """Update a conversation and invalidate its messages when deleted."""
         if payload.get("is_deleted", False):
             expire_payload = payload.copy()
             expire_payload.pop("task_hash", "")
             await self.cache_store.expire_immediately(expire_payload)
-        # 2. Update conversation
         return await self.data_store.update_conversation(payload)
         
     @data_task_handler("fetch_conversation_list")
     async def fetch_conversation_list(self, payload: dict) -> dict:
-        """
-        Fetch user's conversation list.
-
-        Redis is NOT involved.
-        """
+        """Fetch the user's conversation list."""
         return await self.data_store.fetch_conversation_list(payload)
         
     @data_task_handler("get_conversation_meta_by_id")
     async def get_conversation_meta_by_id(self, payload: dict) -> dict:
-        """
-        Fetch user's conversation list.
-
-        Redis is NOT involved.
-        """
+        """Fetch metadata for one conversation."""
         return await self.data_store.get_conversation_meta_by_id(payload)
         
     # --------------------------------------------------
@@ -302,34 +255,26 @@ class DataExecutors:
 
     @data_task_handler("append_message")
     async def append_message(self, payload: dict) -> dict:
-        """
-        Append a single message to MySQL and try to backfill Redis.
-
-        Workflow:
-        1. Persist message to MySQL (source of truth)
-        2. Best-effort append to Redis if cache exists
-
-        Redis failure NOT fail the whole operation.
-        """
+        """Persist a message, then update cached messages and branch state."""
         message = payload["message"]
-        # 1. Persist to MySQL
+        # 1. Persist to SQLite
         res = await self.data_store.append_message(copy.deepcopy(payload))
         if not res.get("success"):
             return res
 
-        # 2. Best-effort backfill Redis
+        # 2. Best-effort cache update
         message.update(res.get("messages") or {})
         message["is_deleted"] = False
         payload.update({
             "message": message
         })
         try:
-            logger.info(f"Redis backfill payload: {payload}")
+            logger.info(f"Cache backfill payload: {payload}")
             await self.cache_store.append_message(payload)
         except Exception as e:
-            # Redis failure should not break main flow
+            # Cache failure should not break main flow
             logger.warning(
-                f"Redis backfill failed: {e}"
+                f"Cache backfill failed: {e}"
             )
 
         user_uid = payload["user_uid"]
@@ -350,21 +295,13 @@ class DataExecutors:
 
     @data_task_handler("delete_messages")
     async def delete_messages(self, payload: dict) -> dict:
-        """
-        Delete one or more message from MySQL and try to expire Redis.
-
-        Workflow:
-        - Delete message from MySQL (source of truth)
-        - Expire cache in Redis if exists
-
-        Redis failure NOT fail the whole operation.
-        """
+        """Invalidate cached messages and delete persisted messages."""
         try:
             await self.cache_store.expire_immediately(payload)
         except Exception as e:
-            # Redis failure should not break main flow
+            # Cache failure should not break main flow
             logger.warning(
-                f"Redis backfill failed: {e}"
+                f"Cache invalidation failed: {e}"
             )
 
         res = await self.data_store.delete_messages(payload)
@@ -519,10 +456,10 @@ class DataExecutors:
                 f"Get cached message id chain fialed: {e}, skip."
             )
 
-        # 1. Redis
-        redis_res = await self.cache_store.get_recent_messages(payload)
-        if redis_res.get("success") and redis_res.get("cache_hit"):
-            messages = redis_res.get("messages", [])
+        # 1. Cache
+        cache_result = await self.cache_store.get_recent_messages(payload)
+        if cache_result.get("success") and cache_result.get("cache_hit"):
+            messages = cache_result.get("messages", [])
 
             parsed_messages, branches, node_id_chain = self._build_visible_messages(
                 messages,
@@ -534,24 +471,24 @@ class DataExecutors:
             payload["node_id_chain"] = node_id_chain
             await self.cache_store.cache_current_messages_branch_chain(payload)
 
-            redis_res["messages"] = parsed_messages
-            redis_res["branches"] = branches
-            redis_res["current_chain"] = node_id_chain
-            return redis_res
+            cache_result["messages"] = parsed_messages
+            cache_result["branches"] = branches
+            cache_result["current_chain"] = node_id_chain
+            return cache_result
 
-        # 2. MySQL
-        mysql_payload = payload.copy()
-        mysql_payload["cursor"] = 1
+        # 2. SQLite
+        store_payload = payload.copy()
+        store_payload["cursor"] = 1
 
-        mysql_res = await self.data_store.fetch_messages_after_cursor(mysql_payload)
-        if not mysql_res.get("success"):
-            return mysql_res
+        store_result = await self.data_store.fetch_messages_after_cursor(store_payload)
+        if not store_result.get("success"):
+            return store_result
 
-        messages = mysql_res.get("messages", [])
+        messages = store_result.get("messages", [])
         if not messages:
-            mysql_res["branches"] = {}
-            mysql_res["current_chain"] = []
-            return mysql_res
+            store_result["branches"] = {}
+            store_result["current_chain"] = []
+            return store_result
 
         # 3. backfill
         try:
@@ -560,7 +497,7 @@ class DataExecutors:
             await self.cache_store.backfill_messages(backfill_payload)
         except Exception as e:
             logger.warning(
-                f"Redis backfill failed: {e}"
+                f"Cache backfill failed: {e}"
             )
 
         # 4. build branch
@@ -575,10 +512,10 @@ class DataExecutors:
         payload["node_id_chain"] = node_id_chain
         await self.cache_store.cache_current_messages_branch_chain(payload)
 
-        mysql_res["messages"] = parsed_messages
-        mysql_res["branches"] = branches
-        mysql_res["current_chain"] = node_id_chain
-        return mysql_res
+        store_result["messages"] = parsed_messages
+        store_result["branches"] = branches
+        store_result["current_chain"] = node_id_chain
+        return store_result
 
     @data_task_handler("get_messages_for_user")
     async def get_messages_for_user(self, payload: dict) -> dict:
@@ -599,10 +536,10 @@ class DataExecutors:
                 f"Get cached message id chain fialed: {e}, skip."
             )
 
-        # 1. Redis
-        redis_res = await self.cache_store.get_recent_messages(payload)
-        if redis_res.get("success") and redis_res.get("cache_hit"):
-            messages = redis_res.get("messages", [])
+        # 1. Cache
+        cache_result = await self.cache_store.get_recent_messages(payload)
+        if cache_result.get("success") and cache_result.get("cache_hit"):
+            messages = cache_result.get("messages", [])
 
             parsed_messages, branches, node_id_chain = self._build_visible_messages(
                 messages,
@@ -613,21 +550,21 @@ class DataExecutors:
             payload["node_id_chain"] = node_id_chain
             await self.cache_store.cache_current_messages_branch_chain(payload)
 
-            redis_res["messages"] = parsed_messages
-            redis_res["branches"] = branches
-            return redis_res
+            cache_result["messages"] = parsed_messages
+            cache_result["branches"] = branches
+            return cache_result
 
-        # 2. MySQL
-        mysql_payload = payload.copy()
-        mysql_payload["cursor"] = 1
+        # 2. SQLite
+        store_payload = payload.copy()
+        store_payload["cursor"] = 1
 
-        mysql_res = await self.data_store.fetch_messages_after_cursor(mysql_payload)
-        if not mysql_res.get("success"):
-            return mysql_res
+        store_result = await self.data_store.fetch_messages_after_cursor(store_payload)
+        if not store_result.get("success"):
+            return store_result
 
-        messages = mysql_res.get("messages", [])
+        messages = store_result.get("messages", [])
         if not messages:
-            return mysql_res
+            return store_result
 
         # 3. backfill
         try:
@@ -636,7 +573,7 @@ class DataExecutors:
             await self.cache_store.backfill_messages(backfill_payload)
         except Exception as e:
             logger.warning(
-                f"Redis backfill failed: {e}"
+                f"Cache backfill failed: {e}"
             )
 
         # 4. build branch
@@ -650,9 +587,9 @@ class DataExecutors:
         payload["node_id_chain"] = node_id_chain
         await self.cache_store.cache_current_messages_branch_chain(payload)
 
-        mysql_res["messages"] = parsed_messages
-        mysql_res["branches"] = branches
-        return mysql_res
+        store_result["messages"] = parsed_messages
+        store_result["branches"] = branches
+        return store_result
         
     @data_task_handler("search_messages_by_keyword")
     async def search_messages_by_keyword(self, payload: dict) -> dict:
@@ -699,9 +636,9 @@ class DataExecutors:
             "user_uid": payload["user_uid"],
             "skills": file_res.get("messages", []),
         }
-        mysql_res = await self.data_store.insert_skill_info(skill_payload)
-        if not mysql_res.get("success"):
-            return mysql_res
+        store_result = await self.data_store.insert_skill_info(skill_payload)
+        if not store_result.get("success"):
+            return store_result
 
         await self._invalidate_resources(
             {"cache_group": f"skills:{payload.get('user_uid') or '-'}"}
@@ -991,14 +928,14 @@ class DataExecutors:
         """
         Get all cron task meta in database.
         """
-        mysql_res = await self.data_store.get_all_enabled_cron_tasks(payload)
+        store_result = await self.data_store.get_all_enabled_cron_tasks(payload)
 
-        if not mysql_res.get("success"):
-            return mysql_res
+        if not store_result.get("success"):
+            return store_result
 
         parsed = []
 
-        crons = mysql_res.get("messages", []) or []
+        crons = store_result.get("messages", []) or []
 
         for cron in crons:
 
@@ -1012,9 +949,9 @@ class DataExecutors:
 
             parsed.append(cron)
 
-        mysql_res["messages"] = parsed
+        store_result["messages"] = parsed
 
-        return mysql_res
+        return store_result
         
 
     @data_task_handler("get_cron_tasks")
@@ -1022,14 +959,14 @@ class DataExecutors:
         """
         Get all cron task meta in database.
         """
-        mysql_res = await self.data_store.get_cron_tasks(payload)
+        store_result = await self.data_store.get_cron_tasks(payload)
 
-        if not mysql_res.get("success"):
-            return mysql_res
+        if not store_result.get("success"):
+            return store_result
 
         parsed = []
 
-        crons = mysql_res.get("messages", []) or []
+        crons = store_result.get("messages", []) or []
 
         for cron in crons:
 
@@ -1043,9 +980,9 @@ class DataExecutors:
 
             parsed.append(cron)
 
-        mysql_res["messages"] = parsed
+        store_result["messages"] = parsed
 
-        return mysql_res
+        return store_result
         
 
     @data_task_handler("get_cron_task_by_id")
@@ -1053,14 +990,14 @@ class DataExecutors:
         """
         Get a cron task meta in database.
         """
-        mysql_res = await self.data_store.get_cron_task_by_id(payload)
+        store_result = await self.data_store.get_cron_task_by_id(payload)
 
-        if not mysql_res.get("success"):
-            return mysql_res
+        if not store_result.get("success"):
+            return store_result
 
         parsed = []
 
-        crons = mysql_res.get("messages", []) or []
+        crons = store_result.get("messages", []) or []
 
         for cron in crons:
 
@@ -1074,9 +1011,9 @@ class DataExecutors:
 
             parsed.append(cron)
 
-        mysql_res["messages"] = parsed
+        store_result["messages"] = parsed
 
-        return mysql_res
+        return store_result
         
 
     @data_task_handler("update_cron_task")

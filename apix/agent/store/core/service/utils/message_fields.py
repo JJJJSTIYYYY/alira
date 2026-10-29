@@ -1,4 +1,4 @@
-"""JSON persistence for Chat message columns shared by both SQL stores."""
+"""JSON persistence for Chat message columns used by the data service."""
 
 import json
 from typing import Any

@@ -1,7 +1,6 @@
 """Apix application settings backed by Apixis configuration."""
 
 import os
-from typing import Literal
 
 from apixis.core.config.base import _get_config
 
@@ -38,10 +37,6 @@ CACHE_CLEAN_INTERVAL = _get_config("RUNTIME.cache_clean_interval", 300)
 
 
 # Cache
-CACHE_STORE_TYPE: Literal["builtin", "redis"] = _get_config(
-    "CACHE.store_type",
-    "builtin",
-)
 HOT_CACHE_DEFAULT_EXPIRE_SECONDS = _get_config(
     "CACHE.hot_cache_default_expire_seconds",
     600,
@@ -51,31 +46,12 @@ STATIC_CACHE_DEFAULT_EXPIRE_SECONDS = _get_config(
     604800,
 )
 
-MEMO_REDIS_URL = _get_config(
-    "CACHE.redis.url",
-    "redis://localhost:6379",
-)
-REDIS_POOL_SIZE = _get_config("CACHE.redis.pool_size", 3)
-
 
 # Data store
-DATA_STORE_TYPE: Literal["sqlite", "mysql"] = _get_config(
-    "DATA_STORE.type",
-    "sqlite",
-)
-
 SQLITE_DATABASE = _get_config(
     "DATA_STORE.sqlite.database",
     os.path.join(APIX_BASE_DIR, "sqlite", "apix.sqlite3"),
 )
-
-MYSQL_BASE_URL = _get_config("DATA_STORE.mysql.base_url", "localhost")
-MYSQL_PORT = _get_config("DATA_STORE.mysql.port", 3307)
-MYSQL_USER = _get_config("DATA_STORE.mysql.user", "apix")
-MYSQL_PASSWORD = _get_config("DATA_STORE.mysql.password", "apixapix")
-MYSQL_DATABASE = _get_config("DATA_STORE.mysql.database", "apix_database")
-MYSQL_CHARSET = _get_config("DATA_STORE.mysql.charset", "utf8mb4")
-AUTO_COMMIT = _get_config("DATA_STORE.mysql.auto_commit", True)
 
 
 # LLM

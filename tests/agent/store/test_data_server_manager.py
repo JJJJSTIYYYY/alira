@@ -1,13 +1,17 @@
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import pytest
 
 from apix.agent.store.core.data_server_manager import (
     DataServerManager,
     data_server_manager as dsm,
+    query_store,
 )
+from apix.agent.store.core.service.cache_service import CacheService
+from apix.agent.store.core.service.data_service import DataService
 from apix.common.lifespan.auto_init import auto_init
 
 
@@ -52,9 +56,104 @@ async def manager():
 
 def test_module_singleton_is_import_safe_and_registered_for_lifecycle():
     assert isinstance(dsm, DataServerManager)
+    assert isinstance(dsm.executor.cache_store, CacheService)
+    assert isinstance(dsm.executor.data_store, DataService)
     assert dsm in auto_init._services
     assert dsm._workers == []
     assert "create_new_conversation" in dsm._handle
+
+
+@pytest.mark.asyncio
+async def test_query_store_uses_sqlite_and_builtin_across_restart(tmp_path, monkeypatch):
+    data_store = DataService(tmp_path / "store.sqlite3")
+    cache_store = CacheService(tmp_path / "cache.json")
+    manager = DataServerManager(
+        cache_store=cache_store,
+        data_store=data_store,
+        file_server=SimpleNamespace(),
+        worker_count=1,
+    )
+    monkeypatch.setattr(
+        "apix.agent.store.core.data_server_manager.data_server_manager", manager
+    )
+    await data_store.start()
+    await cache_store.start()
+    try:
+        await query_store(
+            "create_a_user",
+            {"user_uid": "user-1", "username": "alice", "password": "secret"},
+        )
+        existing_uid = "987654321012345678"
+        with monkeypatch.context() as legacy_id:
+            legacy_id.setattr(
+                data_store, "_conversation_id_generator", lambda: existing_uid
+            )
+            existing = await query_store(
+                "create_new_conversation", {"user_uid": "user-1"}
+            )
+        assert existing["messages"]["conversation_uid"] == existing_uid
+
+        created = await query_store(
+            "create_new_conversation", {"user_uid": "user-1"}
+        )
+        conversation_uid = created["messages"]["conversation_uid"]
+        assert isinstance(conversation_uid, str)
+        assert UUID(conversation_uid).version == 4
+
+        for uid in (existing_uid, conversation_uid):
+            payload = {"user_uid": "user-1", "conversation_uid": uid}
+            await query_store(
+                "append_message",
+                {
+                    **payload,
+                    "message": {
+                        "message_uid": f"message-{uid}",
+                        "node_id": f"node-{uid}",
+                        "parent_id": "-",
+                        "role": "user",
+                        "content": f"hello {uid}",
+                    },
+                },
+            )
+            assert not (await cache_store.get_recent_messages(payload))["cache_hit"]
+            request = {**payload, "current_node_id": f"node-{uid}"}
+            fetched = await query_store("get_messages", request.copy())
+            assert not fetched.get("cache_hit", False)
+            assert [row["content"] for row in fetched["messages"]] == [f"hello {uid}"]
+            cached = await query_store("get_messages", request.copy())
+            assert cached["cache_hit"] is True
+            assert cached["messages"] == fetched["messages"]
+
+        await manager.stop()
+        await cache_store.stop()
+        await data_store.stop()
+        await data_store.start()
+        await cache_store.start()
+
+        conversations = await query_store(
+            "fetch_conversation_list", {"user_uid": "user-1"}
+        )
+        assert {row["conversation_uid"] for row in conversations["messages"]} == {
+            existing_uid,
+            conversation_uid,
+        }
+        for uid in (existing_uid, conversation_uid):
+            request = {
+                "user_uid": "user-1",
+                "conversation_uid": uid,
+                "current_node_id": f"node-{uid}",
+            }
+            restored = await query_store("get_messages", request.copy())
+            assert restored["cache_hit"] is True
+            assert [row["content"] for row in restored["messages"]] == [f"hello {uid}"]
+            await cache_store.expire_immediately(request)
+            fetched = await query_store("get_messages", request.copy())
+            assert not fetched.get("cache_hit", False)
+            assert fetched["messages"] == restored["messages"]
+    finally:
+        await manager.stop()
+        await cache_store.stop()
+        await data_store.stop()
 
 
 def test_constructor_registers_executor_handlers_and_validates_worker_count():

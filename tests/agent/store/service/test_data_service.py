@@ -3,12 +3,12 @@ import sqlite3
 
 import pytest
 
-from apix.agent.store.core.server.data_store.sqlite_server import SqliteService
+from apix.agent.store.core.service.data_service import DataService
 
 
 @pytest.fixture
 async def db(tmp_path):
-    service = SqliteService(tmp_path / "nested" / "apix.sqlite3")
+    service = DataService(tmp_path / "nested" / "apix.sqlite3")
     await service.start()
     try:
         yield service
@@ -17,7 +17,7 @@ async def db(tmp_path):
 
 
 async def create_user_and_conversation(
-    db: SqliteService, monkeypatch, *, user_uid="user-1", conversation_uid="conv-1"
+    db: DataService, monkeypatch, *, user_uid="user-1", conversation_uid="conv-1"
 ):
     created = await db.create_a_user(
         {"user_uid": user_uid, "username": f"name-{user_uid}", "password": "secret"}
@@ -38,7 +38,7 @@ async def create_user_and_conversation(
 @pytest.mark.asyncio
 async def test_lifecycle_helpers_and_transaction_rollback(tmp_path):
     path = tmp_path / "deep" / "database.sqlite3"
-    service = SqliteService(path)
+    service = DataService(path)
 
     with pytest.raises(RuntimeError, match="call start"):
         await service._fetch_all("SELECT 1")

@@ -32,7 +32,7 @@ def test_application_owns_storage_root_configuration(monkeypatch, base_dir):
 
 @pytest.mark.parametrize("data_store", ["sqlite", "mysql"])
 @pytest.mark.parametrize("cache_store", ["builtin", "redis"])
-def test_storage_settings_ignore_legacy_remote_configuration(
+def test_storage_settings_ignore_removed_backends(
     monkeypatch, data_store, cache_store
 ):
     monkeypatch.setattr(
@@ -41,10 +41,43 @@ def test_storage_settings_ignore_legacy_remote_configuration(
         {
             "REMOTE_GATEWAY": {"enable": True},
             "EVENT_CHANNEL": {"type": "kafka"},
-            "DATA_STORE": {"type": data_store},
-            "CACHE": {"store_type": cache_store},
+            "DATA_STORE": {
+                "type": data_store,
+                "sqlite": {"database": "/tmp/custom-apix.sqlite3"},
+                "mysql": {
+                    "base_url": "unused",
+                    "port": 3307,
+                    "user": "unused",
+                    "password": "unused",
+                    "database": "unused",
+                    "charset": "utf8mb4",
+                    "auto_commit": False,
+                },
+            },
+            "CACHE": {
+                "store_type": cache_store,
+                "redis": {"url": "redis://unused", "pool_size": 99},
+                "hot_cache_default_expire_seconds": 17,
+                "static_cache_default_expire_seconds": 29,
+            },
+            "RUNTIME": {"cache_clean_interval": 41},
         },
     )
     settings = runpy.run_path(base_config.__file__)
-    assert settings["DATA_STORE_TYPE"] == data_store
-    assert settings["CACHE_STORE_TYPE"] == cache_store
+    assert settings["SQLITE_DATABASE"] == "/tmp/custom-apix.sqlite3"
+    assert settings["HOT_CACHE_DEFAULT_EXPIRE_SECONDS"] == 17
+    assert settings["STATIC_CACHE_DEFAULT_EXPIRE_SECONDS"] == 29
+    assert settings["CACHE_CLEAN_INTERVAL"] == 41
+    assert {
+        "DATA_STORE_TYPE",
+        "CACHE_STORE_TYPE",
+        "MEMO_REDIS_URL",
+        "REDIS_POOL_SIZE",
+        "MYSQL_BASE_URL",
+        "MYSQL_PORT",
+        "MYSQL_USER",
+        "MYSQL_PASSWORD",
+        "MYSQL_DATABASE",
+        "MYSQL_CHARSET",
+        "AUTO_COMMIT",
+    }.isdisjoint(settings)

@@ -5,12 +5,15 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar
+from uuid import uuid4
 
-from apix.agent.store.core.server.data_store.data_server_base import DataServerBase
-from apix.agent.store.core.server.data_store.utils import data_store_handler
+from apix.agent.store.core.service.utils.decorator import service_handler
+from apix.agent.store.core.service.utils.message_fields import (
+    decode_message_row,
+    encode_content,
+    encode_optional,
+)
 from apix.common.lifespan.auto_init import auto_init
-from apix.agent.store.core.server.data_store.message_fields import decode_message_row, encode_content, encode_optional
-from apix.common.utils.logger import logger
 from apix.config.base_config import SQLITE_DATABASE
 
 
@@ -27,15 +30,27 @@ def _identity_failure(exc: Exception) -> dict:
     }
 
 
-class SqliteService(DataServerBase):
-    """SQLite-backed replacement for :class:`MysqlService`.
+class DataService:
+    """SQLite persistence with one connection and serialized worker-thread calls.
 
-    A single connection is shared by the service. SQLite calls run in a worker
-    thread and are serialized with an asyncio lock, so synchronous sqlite3 I/O
-    never blocks the event loop and one connection is never used concurrently.
+    Call ``start()`` before storage operations and ``stop()`` to close the
+    connection. Storage methods return result dictionaries rather than raising
+    ordinary exceptions; lifecycle methods propagate their exceptions.
+
+    Row dictionaries contain the selected SQLite columns. Flags are integers,
+    and SQLite date-time strings are normalized to use a ``T`` separator.
+    JSON columns remain strings unless a method explicitly documents decoding.
+    Constraints and foreign keys are defined in ``utils/init_sqlite.sql``;
+    payloads are not otherwise schema-validated by this service.
     """
 
     def __init__(self, db_path: Optional[str | Path] = None):
+        """Create a service for ``db_path`` without opening the database.
+
+        Args:
+            db_path: SQLite file path, or ``":memory:"``. ``None`` uses
+                ``SQLITE_DATABASE``. File paths expand ``~``.
+        """
         default_path = SQLITE_DATABASE
         selected_path = str(db_path if db_path is not None else default_path)
         self._db_path = (
@@ -45,10 +60,18 @@ class SqliteService(DataServerBase):
         )
         self._connection: Optional[sqlite3.Connection] = None
         self._connection_lock = asyncio.Lock()
-        self._schema_path = Path(__file__).with_name("init_sqlite.sql")
+        self._schema_path = Path(__file__).with_name("utils") / "init_sqlite.sql"
+
+    def _conversation_id_generator(self) -> str:
+        """Generate a unique conversation ID using UUID4."""
+        return str(uuid4())
 
     async def start(self):
-        """Open the database and create missing tables/indexes."""
+        """Open the database and create missing tables and indexes.
+
+        Repeated calls while open do nothing. Creates the database's parent
+        folder when needed. Returns ``None``; initialization errors propagate.
+        """
         async with self._connection_lock:
             if self._connection is not None:
                 return
@@ -80,7 +103,11 @@ class SqliteService(DataServerBase):
             self._connection = await asyncio.to_thread(open_database)
 
     async def stop(self):
-        """Commit pending work and close the database connection."""
+        """Commit pending work and close the database connection.
+
+        Does nothing when already closed. Returns ``None``; closing errors
+        propagate. The service can be opened again with ``start()``.
+        """
         async with self._connection_lock:
             connection = self._connection
             if connection is None:
@@ -147,7 +174,7 @@ class SqliteService(DataServerBase):
 
     @staticmethod
     def _normalize_row(row: dict[str, Any]) -> dict[str, Any]:
-        """Match jsonable_encoder's ISO formatting for MySQL datetimes."""
+        """Normalize SQLite timestamps to ISO format."""
         for key, value in row.items():
             if not isinstance(value, str):
                 continue
@@ -160,8 +187,18 @@ class SqliteService(DataServerBase):
     # Users
     # --------------------------------------------------
 
-    @data_store_handler(failure_factory=_identity_failure)
+    @service_handler(failure_factory=_identity_failure)
     async def create_a_user(self, payload: dict) -> dict:
+        """Insert a user account; store the supplied password unchanged.
+
+        Args:
+            payload: Required ``user_uid``, ``username`` and ``password`` strings.
+                User IDs and usernames must each be unique.
+
+        Returns:
+            Success: ``{"success": True, "messages": {"msg": "success", "uid": user_uid}}``.
+            Failure: ``{"success": False, "messages": {"msg": "<ExceptionType>: <error>", "uid": None}}``.
+        """
         user_uid = payload["user_uid"]
         await self._execute(
             "INSERT INTO users (user_uid, username, password) VALUES (?, ?, ?)",
@@ -172,8 +209,19 @@ class SqliteService(DataServerBase):
             "messages": {"msg": "success", "uid": user_uid},
         }
 
-    @data_store_handler(failure_factory=_identity_failure)
+    @service_handler(failure_factory=_identity_failure)
     async def verify_user(self, payload: dict) -> dict:
+        """Match a username and password against a stored account.
+
+        Args:
+            payload: Required ``username`` and ``password`` strings, compared
+                directly with the stored values.
+
+        Returns:
+            Success: ``{"success": True, "messages": {"msg": "success", "uid": user_uid}}``.
+            Failure: ``{"success": False, "messages": {"msg": "<ExceptionType>: <error>", "uid": None}}``.
+                Zero matches are a failure, as are database errors.
+        """
         rows = await self._fetch_all(
             "SELECT user_uid, username FROM users "
             "WHERE username = ? AND password = ?",
@@ -186,8 +234,20 @@ class SqliteService(DataServerBase):
             "messages": {"msg": "success", "uid": rows[0]["user_uid"]},
         }
 
-    @data_store_handler
+    @service_handler
     async def ensure_user_exists(self, payload: dict, exist: bool = True) -> dict:
+        """Check whether a user ID or username exists.
+
+        Args:
+            payload: Required ``user_uid``; optional ``username`` (default ``None``).
+                A row matching either value counts as an existing user.
+            exist: ``True`` (default) requires a match; ``False`` requires none.
+
+        Returns:
+            Success: ``{"success": True, "messages": "success"}``.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``, including
+                when the existence check does not meet ``exist``.
+        """
         rows = await self._fetch_all(
             "SELECT user_uid, username FROM users "
             "WHERE user_uid = ? OR username = ?",
@@ -203,8 +263,20 @@ class SqliteService(DataServerBase):
     # Conversations
     # --------------------------------------------------
 
-    @data_store_handler
+    @service_handler
     async def fetch_conversation_list(self, payload: dict) -> dict:
+        """List a user's conversations, pinned first and then most recently active.
+
+        Args:
+            payload: Required ``user_uid``. Excludes rows with ``is_deleted = 1``.
+
+        Returns:
+            Success: ``{"success": True, "messages": rows}``, possibly empty.
+                Each row has ``conversation_uid``, ``title``, ``work_space``,
+                ``last_active_at``, ``created_at``, ``latest_cursor``, ``is_pinned``,
+                ``has_new_message`` and ``is_cron``. Flags are SQLite integers.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         rows = await self._fetch_all(
             """
             SELECT conversation_uid, title, work_space, last_active_at,
@@ -218,8 +290,20 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": rows}
 
-    @data_store_handler
+    @service_handler
     async def get_conversation_meta_by_id(self, payload: dict) -> dict:
+        """Get metadata for one conversation that is not marked deleted.
+
+        Args:
+            payload: Required ``conversation_uid``; no user filter is applied.
+
+        Returns:
+            Success: ``{"success": True, "messages": rows}``, with zero or one row.
+                Each row has ``conversation_uid``, ``title``, ``work_space``,
+                ``last_active_at``, ``created_at``, ``latest_cursor``, ``is_pinned``
+                and ``has_new_message``. Flags are SQLite integers.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         rows = await self._fetch_all(
             """
             SELECT conversation_uid, title, work_space, last_active_at,
@@ -232,8 +316,21 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": rows}
 
-    @data_store_handler
+    @service_handler
     async def create_conversation(self, payload: dict) -> dict:
+        """Create a conversation with a new UUID4 string ID.
+
+        Args:
+            payload: Required ``user_uid`` for an existing user. Optional fields:
+                ``platform`` defaults to ``"default"`` when absent; ``title``
+                defaults to ``"New Conversation..."`` when absent or ``None``;
+                falsey ``workspace`` becomes ``""``; ``is_cron`` defaults to
+                ``False``. The initial cursor is zero.
+
+        Returns:
+            Success: ``{"success": True, "messages": {"conversation_uid": str}}``.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         conversation_uid = self._conversation_id_generator()
         await self._execute(
             """
@@ -257,8 +354,21 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": {"conversation_uid": conversation_uid}}
 
-    @data_store_handler
+    @service_handler
     async def update_conversation(self, payload: dict) -> dict:
+        """Partially update a conversation owned by a user.
+
+        Args:
+            payload: Required ``user_uid`` and ``conversation_uid``. Optional
+                ``title``, ``workspace``, ``is_pinned``, ``is_deleted`` and
+                ``has_new_message``; absent or ``None`` values leave fields unchanged.
+                Deleted rows can also be updated or restored by this method.
+
+        Returns:
+            Success: ``{"success": True, "messages": "success"}``, even if no
+                conversation matches. Does not update activity timestamps.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         conversation_uid = payload["conversation_uid"]
         await self._execute(
             """
@@ -286,8 +396,34 @@ class SqliteService(DataServerBase):
     # Messages
     # --------------------------------------------------
 
-    @data_store_handler
+    @service_handler
     async def append_message(self, payload: dict) -> dict:
+        """Atomically insert one message and advance its conversation cursor.
+
+        Args:
+            payload: Required ``user_uid``, ``conversation_uid`` and a nonempty
+                ``message`` dictionary. The conversation must belong to the user
+                and have ``is_deleted = 0``.
+                ``message`` requires a unique ``message_uid`` and ``role`` from
+                ``user``, ``assistant``, ``system``, ``tool`` or ``info``.
+                Optional ``generation_id``, ``node_id`` and ``parent_id`` default
+                to ``""``. ``name``, ``content``, ``tool_calls``, ``tool_call_id``,
+                ``refusal``, ``reasoning_content``, ``audio``, ``annotations`` and
+                ``function_call`` default to ``None``. Content can be any
+                JSON-serializable value; tool calls/annotations must be arrays
+                and audio/function_call objects when present.
+                ``metadata`` and ``extensions`` default to empty objects, including
+                for ``None``; strings are used as JSON text and other values are
+                JSON-encoded. The schema enforces JSON validity.
+
+        Returns:
+            Success: ``{"success": True, "messages": {"msg_cursor": int, "timestamp": str}}``.
+                The timestamp uses a ``T`` separator. Updates ``latest_cursor``
+                and ``last_active_at``; ``has_new_message`` is zero for user
+                messages and one for other roles.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``;
+                the insert and conversation update are rolled back together.
+        """
         user_uid = payload["user_uid"]
         conversation_uid = payload["conversation_uid"]
         message = payload["message"]
@@ -372,8 +508,22 @@ class SqliteService(DataServerBase):
         result = await self._run(operation)
         return {"success": True, "messages": result}
 
-    @data_store_handler
+    @service_handler
     async def delete_messages(self, payload: dict) -> dict:
+        """Soft-delete every message matching any supplied node ID.
+
+        Args:
+            payload: Required ``user_uid``, ``conversation_uid`` and nonempty
+                ``messages`` (a list of node IDs, not message IDs). Matches are
+                scoped to the user and conversation, including already deleted
+                messages. Repeated node IDs may repeat returned message IDs.
+
+        Returns:
+            Success: ``{"success": True, "messages": [{"message_uid": str}, ...]}``.
+                Only truthy stored message IDs are returned. Unmatched node IDs
+                contribute no rows; empty input is a failure.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         node_ids = payload["messages"]
         if not node_ids:
             raise ValueError("Messages list is empty")
@@ -404,8 +554,32 @@ class SqliteService(DataServerBase):
 
         return {"success": True, "messages": await self._run(operation)}
 
-    @data_store_handler
+    @service_handler
     async def fetch_messages_after_cursor(self, payload: dict) -> dict:
+        """Fetch messages at or after a cursor, including soft-deleted messages.
+
+        Args:
+            payload: Required ``user_uid`` and ``conversation_uid``. ``cursor``
+                defaults to zero, is converted to ``int`` and clamped to zero.
+                ``limit`` defaults to 65535 and is converted to ``int``; SQLite
+                treats a negative limit as unlimited.
+
+        Returns:
+            Success: ``{"success": True, "messages": rows, "next_cursor": int}``.
+                Rows follow ascending ``msg_cursor`` order and contain
+                ``message_uid``, ``msg_cursor``, ``role``, ``name``, ``content``,
+                ``tool_calls``, ``tool_call_id``, ``refusal``, ``reasoning_content``,
+                ``audio``, ``annotations``, ``function_call``, ``metadata``,
+                ``extensions``, ``timestamp``, ``generation_id``, ``node_id``,
+                ``parent_id`` and integer ``is_deleted``. Content, tool calls,
+                audio, annotations and function_call are JSON-decoded; metadata
+                and extensions remain stored JSON text (or ``None`` for NULL
+                columns). Timestamps are strings.
+                ``next_cursor`` is the last row's cursor plus one, or the clamped
+                input cursor if no rows match.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``, with
+                no ``next_cursor`` key.
+        """
         after_cursor = max(int(payload.get("cursor", 0)), 0)
         limit = int(payload.get("limit", 65535))
         rows = await self._fetch_all(
@@ -434,8 +608,24 @@ class SqliteService(DataServerBase):
             "next_cursor": next_cursor,
         }
 
-    @data_store_handler
+    @service_handler
     async def search_messages_by_keyword(self, payload: dict) -> dict:
+        """Search undeleted user/assistant messages in undeleted conversations.
+
+        Args:
+            payload: Required string ``keyword`` and ``user_uid`` for the search.
+                Whitespace, underscores and backslashes become LIKE wildcards;
+                percent signs remain wildcards. A keyword containing only those
+                characters returns an empty success without querying the database.
+
+        Returns:
+            Success: ``{"success": True, "messages": rows}``, at most 300 rows,
+                ordered by conversation activity descending, then message ID
+                descending. Each row has ``conversation_uid``, ``generation_id``,
+                ``role``, JSON-decoded ``content``, ``title`` and string
+                ``last_active_at``.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         keyword = payload["keyword"]
         if not re.sub(r"[%_\\\s]+", "", keyword):
             return {"success": True, "messages": []}
@@ -461,8 +651,22 @@ class SqliteService(DataServerBase):
     # Skills
     # --------------------------------------------------
 
-    @data_store_handler
+    @service_handler
     async def insert_skill_info(self, payload: dict) -> dict:
+        """Insert skill metadata for a user.
+
+        Args:
+            payload: Required ``user_uid``; optional ``skills`` list (default
+                empty). Each skill requires ``skill_id``, ``skill_name``,
+                ``skill_description``, ``package_path`` and ``package_size``;
+                ``skill_version`` defaults to ``"v1.0"`` when absent and
+                ``package_sha256`` defaults to ``None``. IDs must be unique.
+
+        Returns:
+            Success: ``{"success": True, "messages": "success"}``; an empty
+                skills list is a no-op. New skills are inactive by default.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         user_uid = payload["user_uid"]
         params = []
         for skill in payload.get("skills", []):
@@ -490,8 +694,20 @@ class SqliteService(DataServerBase):
             )
         return {"success": True, "messages": "success"}
 
-    @data_store_handler
+    @service_handler
     async def update_skill_status(self, payload: dict) -> dict:
+        """Change activation or soft-deletion status of an undeleted skill.
+
+        Args:
+            payload: Required ``user_uid`` and ``skill_id``. Optional ``is_active``
+                and ``deleted`` flags; absent or ``None`` values leave fields
+                unchanged. Setting ``deleted`` to one records ``deleted_at``.
+
+        Returns:
+            Success: ``{"success": True, "messages": "success"}``, even if no
+                undeleted skill matches. This method cannot restore deleted skills.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         await self._execute(
             """
             UPDATE agent_skills
@@ -511,8 +727,21 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": "success"}
 
-    @data_store_handler
+    @service_handler
     async def fetch_available_skills(self, payload: dict) -> dict:
+        """List undeleted skills, including inactive skills, newest upload first.
+
+        Args:
+            payload: Required ``user_uid``; optional ``limit`` (default 5),
+                converted to ``int``. Negative limits are unlimited in SQLite.
+
+        Returns:
+            Success: ``{"success": True, "messages": rows}``, possibly empty.
+                Rows have ``skill_id``, ``skill_name``, ``skill_description``,
+                ``skill_version``, ``package_path``, ``package_size``, integer
+                ``is_active`` and string ``upload_at``.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         rows = await self._fetch_all(
             """
             SELECT skill_id, skill_name, skill_description, skill_version,
@@ -526,8 +755,21 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": rows}
 
-    @data_store_handler
+    @service_handler
     async def fetch_target_skill(self, payload: dict) -> dict:
+        """Get one undeleted skill owned by a user.
+
+        Args:
+            payload: Required ``user_uid`` and ``skill_id``.
+
+        Returns:
+            Success: ``{"success": True, "messages": rows}``, with zero or one row.
+                Rows have ``skill_id``, ``skill_name``, ``skill_description``,
+                ``skill_version``, ``package_path``, ``package_size``, integer
+                ``is_active``, string ``upload_at``, integer ``deleted`` and
+                nullable string ``deleted_at``.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         rows = await self._fetch_all(
             """
             SELECT skill_id, skill_name, skill_description, skill_version,
@@ -545,8 +787,19 @@ class SqliteService(DataServerBase):
     # Short-term memory
     # --------------------------------------------------
 
-    @data_store_handler
+    @service_handler
     async def fetch_shortterm_memory(self, payload: dict) -> dict:
+        """Get only the latest undeleted short-term memory for a conversation.
+
+        Args:
+            payload: Required ``user_uid`` and ``conversation_uid``.
+
+        Returns:
+            Success: ``{"success": True, "messages": rows}``, with zero or one row
+                containing ``memory_id``, ``content`` and integer
+                ``created_timestamp`` (Unix microseconds).
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         rows = await self._fetch_all(
             """
             SELECT memory_id, content, created_timestamp
@@ -559,8 +812,19 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": rows}
 
-    @data_store_handler
+    @service_handler
     async def insert_shortterm_memory(self, payload: dict) -> dict:
+        """Insert one short-term memory with the current Unix microsecond timestamp.
+
+        Args:
+            payload: Required ``memory_id``, ``user_uid``, ``conversation_uid``
+                and string ``content``. The memory ID must be unique; user and
+                conversation foreign keys must exist.
+
+        Returns:
+            Success: ``{"success": True, "messages": "success"}``.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         await self._execute(
             """
             INSERT INTO shortterm_memory (
@@ -578,8 +842,19 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": "success"}
 
-    @data_store_handler
+    @service_handler
     async def delete_shortterm_memory(self, payload: dict) -> dict:
+        """Soft-delete matching short-term memories in a user's conversation.
+
+        Args:
+            payload: Required ``memory_ids`` list. When nonempty, also requires
+                ``user_uid`` and ``conversation_uid``. Only undeleted rows match.
+
+        Returns:
+            Success: ``{"success": True, "messages": "success"}``, including
+                empty input or no matching rows.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         memory_ids = payload["memory_ids"]
         if memory_ids:
             placeholders = ", ".join("?" for _ in memory_ids)
@@ -601,8 +876,19 @@ class SqliteService(DataServerBase):
     # Long-term memory
     # --------------------------------------------------
 
-    @data_store_handler
+    @service_handler
     async def fetch_longterm_memory(self, payload: dict) -> dict:
+        """List a user's undeleted long-term memories, newest memory date first.
+
+        Args:
+            payload: Required ``user_uid``.
+
+        Returns:
+            Success: ``{"success": True, "messages": rows}``, possibly empty.
+                Each row has ``memory_id``, ``title``, ``date`` (YYYY-MM-DD),
+                ``content`` and ``source``. Equal dates sort by row ID descending.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         rows = await self._fetch_all(
             """
             SELECT memory_id, title, memory_date AS date, content, source
@@ -614,8 +900,20 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": rows}
 
-    @data_store_handler
+    @service_handler
     async def insert_longterm_memory(self, payload: dict) -> dict:
+        """Insert one long-term memory for an existing user.
+
+        Args:
+            payload: Required ``memory_id``, ``user_uid``, ``title``, ``date``,
+                ``content`` and ``source``. IDs must be unique; the schema checks
+                ``date`` as YYYY-MM-DD and restricts ``source`` to
+                ``"conversation"`` or ``"workspace"``.
+
+        Returns:
+            Success: ``{"success": True, "messages": {"memory_id": memory_id}}``.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         memory_id = payload["memory_id"]
         await self._execute(
             """
@@ -634,8 +932,22 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": {"memory_id": memory_id}}
 
-    @data_store_handler
+    @service_handler
     async def update_longterm_memory(self, payload: dict) -> dict:
+        """Partially update or soft-delete an undeleted long-term memory.
+
+        Args:
+            payload: Required ``memory_id`` and ``user_uid``. Optional ``title``,
+                ``date``, ``content``, ``source`` and ``is_deleted``; absent or
+                ``None`` values leave fields unchanged. Date/source constraints
+                match ``insert_longterm_memory``. Deletion records ``deleted_at``.
+
+        Returns:
+            Success: ``{"success": True, "messages": "success"}``, even if no
+                undeleted memory matches. Matching rows update ``updated_at``;
+                deleted memories cannot be restored by this method.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         is_deleted = payload.get("is_deleted")
         await self._execute(
             """
@@ -669,8 +981,21 @@ class SqliteService(DataServerBase):
     # LLM providers
     # --------------------------------------------------
 
-    @data_store_handler
+    @service_handler
     async def create_llm_provider(self, payload: dict) -> dict:
+        """Insert an LLM provider for an existing user.
+
+        Args:
+            payload: Required ``provider_id``, ``user_uid``, ``provider_name``,
+                ``endpoint`` and JSON-serializable ``model_list`` (normally a list).
+                ``type`` defaults to ``"openai"`` when absent or falsey and is
+                lowercased; the schema permits ``openai`` and ``anthropic``.
+                ``description`` defaults to ``None``. The provider ID must be unique.
+
+        Returns:
+            Success: ``{"success": True, "messages": {"provider_id": provider_id}}``.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         provider_id = payload["provider_id"]
         await self._execute(
             """
@@ -691,8 +1016,20 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": {"provider_id": provider_id}}
 
-    @data_store_handler
+    @service_handler
     async def get_llm_providers(self, payload: dict) -> dict:
+        """List a user's undeleted LLM providers, newest creation first.
+
+        Args:
+            payload: Required ``user_uid``.
+
+        Returns:
+            Success: ``{"success": True, "messages": rows}``, possibly empty.
+                Rows have ``provider_id``, ``provider_name``, ``type``, ``endpoint``,
+                ``model_list`` (JSON text), nullable ``description`` and string
+                ``created_at``.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         rows = await self._fetch_all(
             """
             SELECT provider_id, provider_name, type, endpoint, model_list,
@@ -705,8 +1042,18 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": rows}
 
-    @data_store_handler
+    @service_handler
     async def get_llm_provider_by_id(self, payload: dict) -> dict:
+        """Get one undeleted LLM provider by ID, without a user filter.
+
+        Args:
+            payload: Required ``provider_id``.
+
+        Returns:
+            Success: ``{"success": True, "messages": rows}``, with zero or one row
+                shaped as in ``get_llm_providers``; ``model_list`` is JSON text.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         rows = await self._fetch_all(
             """
             SELECT provider_id, provider_name, type, endpoint, model_list,
@@ -719,8 +1066,22 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": rows}
 
-    @data_store_handler
+    @service_handler
     async def update_llm_provider(self, payload: dict) -> dict:
+        """Partially update or soft-delete an undeleted LLM provider.
+
+        Args:
+            payload: Required ``provider_id`` and ``user_uid``. Optional
+                ``provider_name``, ``type``, ``endpoint``, ``model_list``,
+                ``description`` and ``is_deleted``; absent or ``None`` values
+                leave fields unchanged. String ``type`` is lowercased. A list
+                ``model_list`` is JSON-encoded; JSON text is used as supplied.
+
+        Returns:
+            Success: ``{"success": True, "messages": "success"}``, even if no
+                undeleted provider matches. Deleted providers cannot be restored.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         provider_type = payload.get("type")
         if isinstance(provider_type, str):
             provider_type = provider_type.lower()
@@ -755,8 +1116,22 @@ class SqliteService(DataServerBase):
     # MCP servers
     # --------------------------------------------------
 
-    @data_store_handler
+    @service_handler
     async def create_mcp_server(self, payload: dict) -> dict:
+        """Insert MCP server metadata for an existing user.
+
+        Args:
+            payload: Required ``mcp_id``, ``user_uid``, ``mcp_name``, ``transport``
+                and ``endpoint`` (which may be ``None``). Transport must be
+                ``stdio``, ``http``, ``streamable_http``, ``websocket`` or ``sse``.
+                Optional JSON-serializable ``config`` defaults to an empty object
+                when absent; ``description`` defaults to ``None``. IDs are unique.
+
+        Returns:
+            Success: ``{"success": True, "messages": {"mcp_id": mcp_id}}``.
+                New servers are enabled with a tool count of zero.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         mcp_id = payload["mcp_id"]
         await self._execute(
             """
@@ -777,8 +1152,20 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": {"mcp_id": mcp_id}}
 
-    @data_store_handler
+    @service_handler
     async def get_mcp_servers(self, payload: dict) -> dict:
+        """List a user's undeleted MCP servers, newest creation first.
+
+        Args:
+            payload: Required ``user_uid``.
+
+        Returns:
+            Success: ``{"success": True, "messages": rows}``, possibly empty.
+                Rows have ``mcp_id``, ``mcp_name``, ``transport``, nullable
+                ``endpoint``, JSON-text ``config``, nullable ``description``,
+                integer ``enabled`` and ``tool_count``, and string ``created_at``.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         rows = await self._fetch_all(
             """
             SELECT mcp_id, mcp_name, transport, endpoint, config,
@@ -791,8 +1178,19 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": rows}
 
-    @data_store_handler
+    @service_handler
     async def get_enabled_mcp_servers(self, payload: dict) -> dict:
+        """List a user's enabled, undeleted MCP servers, oldest creation first.
+
+        Args:
+            payload: Required ``user_uid``.
+
+        Returns:
+            Success: ``{"success": True, "messages": rows}``, possibly empty.
+                Rows have ``mcp_id``, ``mcp_name``, ``transport``, nullable
+                ``endpoint`` and JSON-text ``config``.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         rows = await self._fetch_all(
             """
             SELECT mcp_id, mcp_name, transport, endpoint, config
@@ -804,8 +1202,22 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": rows}
 
-    @data_store_handler
+    @service_handler
     async def update_mcp_server(self, payload: dict) -> dict:
+        """Partially update or soft-delete an undeleted MCP server.
+
+        Args:
+            payload: Required ``mcp_id`` and ``user_uid``. Optional ``mcp_name``,
+                ``transport``, ``endpoint``, ``config``, ``description``, ``enabled``,
+                ``tool_count`` and ``is_deleted``; absent or ``None`` values leave
+                fields unchanged. Dict/list configs are JSON-encoded; JSON text
+                is used as supplied. Transport retains its schema constraints.
+
+        Returns:
+            Success: ``{"success": True, "messages": "success"}``, even if no
+                undeleted server matches. Deleted servers cannot be restored.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         config = payload.get("config")
         if isinstance(config, (dict, list)):
             config = json.dumps(config)
@@ -841,8 +1253,27 @@ class SqliteService(DataServerBase):
     # Cron tasks
     # --------------------------------------------------
 
-    @data_store_handler
+    @service_handler
     async def create_cron_task(self, payload: dict) -> dict:
+        """Insert a scheduled task for an existing user and conversation.
+
+        Args:
+            payload: Required ``task_id`` and ``user_uid`` keys. The schema also
+                requires non-None ``conversation_uid``, ``task_name`` and
+                ``exec_time``; task IDs must be unique and foreign keys must exist.
+                Falsey ``platform`` defaults to ``"default"``; falsey ``repeat``
+                defaults to ``"once"``. Repeat permits ``once``, ``day``, ``week``,
+                ``month``, ``year`` and ``cron``. ``prompt`` and ``execute`` default
+                to ``None``; ``description`` defaults to ``""`` when absent.
+                ``extra_config`` defaults to an empty object when absent or
+                ``None``; JSON text is used as supplied and other values encoded.
+                ``exec_time`` is stored as supplied without date-time validation.
+
+        Returns:
+            Success: ``{"success": True, "messages": {"task_id": task_id}}``.
+                New tasks are enabled by default.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         task_id = payload["task_id"]
         await self._execute(
             """
@@ -867,8 +1298,21 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": {"task_id": task_id}}
 
-    @data_store_handler
+    @service_handler
     async def get_all_enabled_cron_tasks(self, payload: dict) -> dict:
+        """List all users' enabled, undeleted tasks by execution time ascending.
+
+        Args:
+            payload: Ignored; callers may pass an empty dictionary.
+
+        Returns:
+            Success: ``{"success": True, "messages": rows}``, possibly empty.
+                Rows have ``task_id``, ``user_uid``, ``conversation_uid``,
+                ``platform``, ``name``, ``prompt``, ``execute``, ``exec_time``,
+                ``repeat``, JSON-text ``extra_config``, nullable ``description``,
+                ``created_at`` and ``updated_at``. Time columns are strings.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         rows = await self._fetch_all(
             """
             SELECT task_id, user_uid, conversation_uid, platform,
@@ -881,8 +1325,21 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": rows}
 
-    @data_store_handler
+    @service_handler
     async def get_cron_tasks(self, payload: dict) -> dict:
+        """List a user's undeleted tasks by execution time ascending.
+
+        Args:
+            payload: Required ``user_uid``.
+
+        Returns:
+            Success: ``{"success": True, "messages": rows}``, possibly empty.
+                Rows have ``task_id``, ``conversation_uid``, ``platform``, ``name``,
+                ``prompt``, ``execute``, ``exec_time``, ``repeat``, JSON-text
+                ``extra_config``, nullable ``description``, integer ``enabled``,
+                ``created_at`` and ``updated_at``. Time columns are strings.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         rows = await self._fetch_all(
             """
             SELECT task_id, conversation_uid, platform, name, prompt,
@@ -896,8 +1353,18 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": rows}
 
-    @data_store_handler
+    @service_handler
     async def get_cron_task_by_id(self, payload: dict) -> dict:
+        """Get one undeleted task by ID, without a user filter.
+
+        Args:
+            payload: Required ``task_id``.
+
+        Returns:
+            Success: ``{"success": True, "messages": rows}``, with zero or one
+                row shaped as in ``get_cron_tasks`` plus ``user_uid``.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         rows = await self._fetch_all(
             """
             SELECT task_id, user_uid, conversation_uid, platform, name,
@@ -911,8 +1378,25 @@ class SqliteService(DataServerBase):
         )
         return {"success": True, "messages": rows}
 
-    @data_store_handler
+    @service_handler
     async def update_cron_task(self, payload: dict) -> dict:
+        """Partially update or soft-delete an undeleted task by ID.
+
+        Args:
+            payload: Required ``task_id``. Optional ``conversation_uid``,
+                ``platform``, ``task_name``, ``prompt``, ``execute``, ``exec_time``,
+                ``repeat``, ``extra_config``, ``description``, ``enabled`` and
+                ``is_deleted``; absent or ``None`` values leave fields unchanged.
+                Dict/list configs are JSON-encoded; JSON text is used as supplied.
+                The repeat/foreign-key constraints still apply. No user filter
+                or date-time validation is applied.
+
+        Returns:
+            Success: ``{"success": True, "messages": "success"}``, even if no
+                undeleted task matches. Matching rows update ``updated_at``;
+                deleted tasks cannot be restored by this method.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
         extra_config = payload.get("extra_config")
         if isinstance(extra_config, (dict, list)):
             extra_config = json.dumps(extra_config)
@@ -951,5 +1435,5 @@ class SqliteService(DataServerBase):
         return {"success": True, "messages": "success"}
 
 
-data_server = SqliteService()
-auto_init.register(data_server)
+data_service = DataService()
+auto_init.register(data_service)
