@@ -96,8 +96,8 @@ def test_database_row_conversion_ignores_database_generated_timestamp():
                 "role": "tool",
                 "name": "search",
                 "content": "result",
-                "metadata": '{"duration": 0.5}',
-                "extensions": '{}',
+                "metadata": {"duration": 0.5},
+                "extensions": {},
                 "tool_call_id": "call-4",
                 "timestamp": "2026-07-28T00:00:00",
             }

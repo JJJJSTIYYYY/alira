@@ -87,7 +87,7 @@ async def test_append_shortterm_validates_content_and_sends_payload(
         "memory-1",
     )
     assert query.await_args.kwargs == {
-        "action": "insert_shortterm_memory",
+        "action": "create_shortterm_memory",
         "payload": {
             "memory_id": "memory-1",
             "user_uid": "user-1",
@@ -188,7 +188,7 @@ async def test_get_skills_uses_skill_action_and_filters_inactive(
         }
     ]
     assert query.await_args_list[0].kwargs == {
-        "action": "fetch_skills",
+        "action": "list_skills",
         "payload": {"user_uid": "user-1", "limit": 999},
     }
     assert await adapter.get_skills_from_store(identity) == []

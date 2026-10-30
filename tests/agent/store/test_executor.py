@@ -1,26 +1,53 @@
 """Comprehensive tests for the store execution-layer orchestration."""
 
+import asyncio
 from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from apix.agent.store.core import execute_layer as execute_module
-from apix.agent.store.core.execute_layer import DataExecutors
+from apix.agent.store.core import executor as execute_module
+from apix.agent.store.core.executor import StoreExecutor
+from apix.agent.store.core.services.cache import CacheService
 
 
 def _executor(
     *,
     data_store=None,
     cache_store=None,
-    file_server=None,
-) -> DataExecutors:
-    return DataExecutors(
+    file_store=None,
+) -> StoreExecutor:
+    defaults = CacheService()
+    if cache_store is None:
+        cache_store = defaults
+    else:
+        for name in (
+            "get_resource",
+            "set_resource",
+            "delete_resources",
+            "get_messages",
+            "set_messages",
+            "delete_messages",
+            "append_message",
+            "get_branch_chain",
+            "set_branch_chain",
+            "update_branch_chain",
+        ):
+            if not hasattr(cache_store, name):
+                setattr(cache_store, name, getattr(defaults, name))
+    return StoreExecutor(
         data_store=data_store or SimpleNamespace(),
-        cache_store=cache_store or SimpleNamespace(),
-        file_server=file_server or SimpleNamespace(),
+        cache_store=cache_store,
+        file_store=file_store or SimpleNamespace(),
     )
+
+
+@pytest.fixture
+def message_nodes(monkeypatch):
+    helper = Mock()
+    monkeypatch.setattr(execute_module, "MessageNodeHelper", Mock(return_value=helper))
+    return helper
 
 
 def _row(
@@ -53,7 +80,7 @@ def test_export_handlers_returns_only_decorated_async_methods():
     handlers = executor.export_handlers()
 
     assert handlers["append_message"] == executor.append_message
-    assert handlers["get_messages"] == executor.get_messages
+    assert handlers["list_messages"] == executor.list_messages
     assert handlers["create_cron_task"] == executor.create_cron_task
     assert "export_handlers" not in handlers
     assert "public_callable" not in handlers
@@ -66,7 +93,7 @@ def test_export_handlers_rejects_decorated_sync_method(monkeypatch):
 
     invalid_handler._handler_name = "invalid_handler"
     monkeypatch.setattr(
-        DataExecutors,
+        StoreExecutor,
         "invalid_handler",
         invalid_handler,
         raising=False,
@@ -77,45 +104,94 @@ def test_export_handlers_rejects_decorated_sync_method(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_message_projection_decodes_rows_without_changing_cached_values():
+    payload = {
+        "user_uid": "user-1",
+        "conversation_uid": "conversation-1",
+        "current_node_id": "node-a",
+    }
+    rows = [
+        _row(
+            "node-a",
+            "-",
+            1,
+            "user",
+            metadata="invalid-json",
+            extensions='{"source":"json"}',
+        ),
+        _row("node-b", "-", 2, "user"),
+        _row(
+            "node-c",
+            "node-a",
+            3,
+            "assistant",
+            metadata='{"score":1}',
+            extensions="invalid-json",
+        ),
+    ]
+    rows[2]["content"] = "null"
+    rows[2]["tool_calls"] = '[{"id":"call-1"}]'
+    cache = CacheService()
+    await cache.set_messages({**payload, "messages": rows})
+
+    result = await _executor(cache_store=cache).list_user_messages(payload)
+
+    assert result["success"]
+    assert [row["node_id"] for row in result["messages"]] == ["node-a", "node-c"]
+    assert result["messages"][0]["metadata"] == {}
+    assert result["messages"][0]["extensions"] == {"source": "json"}
+    assert result["messages"][1]["metadata"] == {"score": 1}
+    assert result["messages"][1]["extensions"] == {}
+    assert result["messages"][1]["content"] == "null"
+    assert result["messages"][1]["tool_calls"] == [{"id": "call-1"}]
+    assert result["current_chain"] == ["node-a", "node-c"]
+    assert result["branches"]["-"] == [
+        {"node_id": "node-a", "cursor": 1},
+        {"node_id": "node-b", "cursor": 2},
+    ]
+    assert (await cache.get_messages(payload))["messages"] == rows
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("executor_method", "service_name", "store_method"),
     [
         ("verify_user", "data_store", "verify_user"),
         ("ensure_user_exists", "data_store", "ensure_user_exists"),
         (
-            "fetch_conversation_list",
+            "list_conversations",
             "data_store",
-            "fetch_conversation_list",
+            "list_conversations",
         ),
         (
-            "get_conversation_meta_by_id",
+            "get_conversation",
             "data_store",
-            "get_conversation_meta_by_id",
+            "get_conversation",
         ),
         (
-            "search_messages_by_keyword",
+            "search_messages",
             "data_store",
-            "search_messages_by_keyword",
+            "search_messages",
         ),
         (
-            "get_current_messages_branch_chain",
+            "get_branch_chain",
             "cache_store",
-            "get_current_messages_branch_chain",
+            "get_branch_chain",
         ),
         (
-            "fetch_shortterm_memory",
+            "list_shortterm_memories",
             "data_store",
-            "fetch_shortterm_memory",
+            "list_shortterm_memories",
         ),
         (
-            "insert_shortterm_memory",
+            "create_shortterm_memory",
             "data_store",
-            "insert_shortterm_memory",
+            "create_shortterm_memory",
         ),
         (
-            "fetch_longterm_memory",
+            "list_longterm_memories",
             "data_store",
-            "fetch_longterm_memory",
+            "list_longterm_memories",
         ),
         (
             "update_longterm_memory",
@@ -135,9 +211,10 @@ async def test_simple_handlers_forward_payload(
     payload = {"value": 1}
     messages = (
         []
-        if executor_method in {
-            "fetch_shortterm_memory",
-            "fetch_longterm_memory",
+        if executor_method
+        in {
+            "list_shortterm_memories",
+            "list_longterm_memories",
         }
         else "ok"
     )
@@ -157,39 +234,39 @@ async def test_simple_handlers_forward_payload(
         ("verify_user", "data_store", "verify_user"),
         ("ensure_user_exists", "data_store", "ensure_user_exists"),
         (
-            "fetch_conversation_list",
+            "list_conversations",
             "data_store",
-            "fetch_conversation_list",
+            "list_conversations",
         ),
         (
-            "get_conversation_meta_by_id",
+            "get_conversation",
             "data_store",
-            "get_conversation_meta_by_id",
+            "get_conversation",
         ),
         (
-            "search_messages_by_keyword",
+            "search_messages",
             "data_store",
-            "search_messages_by_keyword",
+            "search_messages",
         ),
         (
-            "get_current_messages_branch_chain",
+            "get_branch_chain",
             "cache_store",
-            "get_current_messages_branch_chain",
+            "get_branch_chain",
         ),
         (
-            "fetch_shortterm_memory",
+            "list_shortterm_memories",
             "data_store",
-            "fetch_shortterm_memory",
+            "list_shortterm_memories",
         ),
         (
-            "insert_shortterm_memory",
+            "create_shortterm_memory",
             "data_store",
-            "insert_shortterm_memory",
+            "create_shortterm_memory",
         ),
         (
-            "fetch_longterm_memory",
+            "list_longterm_memories",
             "data_store",
-            "fetch_longterm_memory",
+            "list_longterm_memories",
         ),
         (
             "update_longterm_memory",
@@ -220,9 +297,9 @@ async def test_simple_handlers_normalize_exceptions(
 @pytest.mark.parametrize(
     ("executor_method", "create_method", "ensure_kwargs"),
     [
-        ("create_a_user", "create_a_user", {"exist": False}),
+        ("create_user", "create_user", {"exist": False}),
         (
-            "create_new_conversation",
+            "create_conversation",
             "create_conversation",
             {},
         ),
@@ -252,8 +329,8 @@ async def test_create_handlers_check_user_then_create(
 @pytest.mark.parametrize(
     ("executor_method", "create_method"),
     [
-        ("create_a_user", "create_a_user"),
-        ("create_new_conversation", "create_conversation"),
+        ("create_user", "create_user"),
+        ("create_conversation", "create_conversation"),
     ],
 )
 async def test_create_handlers_short_circuit_and_normalize_exception(
@@ -280,39 +357,49 @@ async def test_create_handlers_short_circuit_and_normalize_exception(
 
 
 @pytest.mark.asyncio
-async def test_update_conversation_expires_deleted_conversation_cache():
+@pytest.mark.parametrize("write_succeeds", [True, False])
+async def test_conversation_deletion_invalidates_cache_only_after_persistence(
+    write_succeeds,
+):
     payload = {
+        "user_uid": "user-1",
         "conversation_uid": "conversation-1",
         "is_deleted": True,
-        "task_hash": "internal",
     }
-    cache_store = SimpleNamespace(expire_immediately=AsyncMock())
-    data_store = SimpleNamespace(
-        update_conversation=AsyncMock(
-            return_value={"success": True, "messages": "success"}
-        )
-    )
+    original = deepcopy(payload)
+    order = []
+    expected = {
+        "success": write_succeeds,
+        "messages": "saved" if write_succeeds else "write failed",
+    }
+
+    async def persist(request):
+        order.append("data")
+        assert request == original
+        return expected
+
+    async def invalidate(request):
+        order.append("cache")
+        assert request == original
+        return {"success": False, "messages": "cache unavailable"}
+
+    cache_store = SimpleNamespace(delete_messages=AsyncMock(side_effect=invalidate))
     executor = _executor(
-        data_store=data_store,
+        data_store=SimpleNamespace(update_conversation=AsyncMock(side_effect=persist)),
         cache_store=cache_store,
     )
 
-    result = await executor.update_conversation(payload)
-
-    assert result["success"] is True
-    cache_store.expire_immediately.assert_awaited_once_with(
-        {
-            "conversation_uid": "conversation-1",
-            "is_deleted": True,
-        }
-    )
-    data_store.update_conversation.assert_awaited_once_with(payload)
+    assert await executor.update_conversation(payload) == expected
+    assert order == (["data", "cache"] if write_succeeds else ["data"])
+    assert payload == original
 
 
 @pytest.mark.asyncio
 async def test_update_conversation_skips_cache_and_normalizes_failure():
     payload = {"is_deleted": False}
-    cache_store = SimpleNamespace(expire_immediately=AsyncMock())
+    cache_store = SimpleNamespace(
+        delete_messages=AsyncMock(return_value={"success": True, "messages": "success"})
+    )
     data_store = SimpleNamespace(
         update_conversation=AsyncMock(
             return_value={"success": True, "messages": "success"}
@@ -324,7 +411,7 @@ async def test_update_conversation_skips_cache_and_normalizes_failure():
     )
 
     assert (await executor.update_conversation(payload))["success"] is True
-    cache_store.expire_immediately.assert_not_awaited()
+    cache_store.delete_messages.assert_not_awaited()
 
     data_store.update_conversation.side_effect = RuntimeError("update failed")
     assert await executor.update_conversation(payload) == {
@@ -334,7 +421,7 @@ async def test_update_conversation_skips_cache_and_normalizes_failure():
 
 
 @pytest.mark.asyncio
-async def test_append_message_persists_updates_cache_and_branch_chain():
+async def test_append_message_persists_and_caches_a_private_snapshot():
     payload = {
         "user_uid": "user-1",
         "conversation_uid": "conversation-1",
@@ -343,51 +430,44 @@ async def test_append_message_persists_updates_cache_and_branch_chain():
             "role": "user",
             "node_id": "node-1",
             "parent_id": "-",
+            "content": [{"type": "text", "text": "hello"}],
         },
     }
-    data_store = SimpleNamespace(
-        append_message=AsyncMock(
-            return_value={
-                "success": True,
-                "messages": {
-                    "msg_cursor": 3,
-                    "timestamp": "2026-01-01T00:00:00",
-                },
-            }
-        )
-    )
+    original = deepcopy(payload)
+    persisted = []
+
+    async def persist(write_payload):
+        persisted.append(deepcopy(write_payload))
+        return {
+            "success": True,
+            "messages": {"msg_cursor": 3, "timestamp": "2026-01-01T00:00:00"},
+        }
+
+    data_store = SimpleNamespace(append_message=AsyncMock(side_effect=persist))
     cache_store = SimpleNamespace(
-        append_message=AsyncMock(),
-        update_current_messages_branch_chain_cache=AsyncMock(),
+        append_message=AsyncMock(return_value={"success": True}),
+        update_branch_chain=AsyncMock(return_value={"success": True}),
     )
-    executor = _executor(
-        data_store=data_store,
-        cache_store=cache_store,
-    )
+    executor = _executor(data_store=data_store, cache_store=cache_store)
 
     assert await executor.append_message(payload) == {
         "success": True,
         "messages": "success",
     }
-    cached_message = payload["message"]
-    assert cached_message["msg_cursor"] == 3
-    assert cached_message["message_uid"] == "message-1"
-    assert cached_message["timestamp"] == "2026-01-01T00:00:00"
-    assert cached_message["is_deleted"] is False
-    data_store.append_message.assert_awaited_once_with(
-        {
-            "user_uid": "user-1",
-            "conversation_uid": "conversation-1",
-            "message": {
-                "message_uid": "message-1",
-                "role": "user",
-                "node_id": "node-1",
-                "parent_id": "-",
-            },
-        }
-    )
-    cache_store.append_message.assert_awaited_once_with(payload)
-    cache_store.update_current_messages_branch_chain_cache.assert_awaited_once_with(
+    assert payload == original
+    assert persisted == [original]
+    write_payload = data_store.append_message.await_args.args[0]
+    cached_payload = cache_store.append_message.await_args.args[0]
+    assert cached_payload is write_payload
+    assert cached_payload is not payload
+    assert cached_payload["message"] is not payload["message"]
+    assert cached_payload["message"] == {
+        **original["message"],
+        "msg_cursor": 3,
+        "timestamp": "2026-01-01T00:00:00",
+        "is_deleted": False,
+    }
+    cache_store.update_branch_chain.assert_awaited_once_with(
         {
             "user_uid": "user-1",
             "conversation_uid": "conversation-1",
@@ -395,6 +475,40 @@ async def test_append_message_persists_updates_cache_and_branch_chain():
             "parent_id": "-",
         }
     )
+
+
+@pytest.mark.asyncio
+async def test_append_message_keeps_database_and_cache_snapshot_consistent_across_await():
+    payload = {
+        "user_uid": "user-1",
+        "conversation_uid": "conversation-1",
+        "message": {"content": [{"text": "original"}]},
+    }
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def persist(write_payload):
+        assert write_payload["message"]["content"] == [{"text": "original"}]
+        entered.set()
+        await release.wait()
+        assert write_payload["message"]["content"] == [{"text": "original"}]
+        return {"success": True, "messages": {"msg_cursor": 1}}
+
+    cache_store = SimpleNamespace(
+        append_message=AsyncMock(return_value={"success": True})
+    )
+    executor = _executor(
+        data_store=SimpleNamespace(append_message=AsyncMock(side_effect=persist)),
+        cache_store=cache_store,
+    )
+    task = asyncio.create_task(executor.append_message(payload))
+    await entered.wait()
+    payload["message"]["content"][0]["text"] = "changed"
+    release.set()
+    assert (await task)["success"] is True
+    assert cache_store.append_message.await_args.args[0]["message"]["content"] == [
+        {"text": "original"}
+    ]
 
 
 @pytest.mark.asyncio
@@ -405,12 +519,12 @@ async def test_append_message_short_circuits_and_ignores_cache_append_error():
         "message": {},
     }
     failure = {"success": False, "messages": "write failed"}
-    data_store = SimpleNamespace(
-        append_message=AsyncMock(return_value=failure)
-    )
+    data_store = SimpleNamespace(append_message=AsyncMock(return_value=failure))
     cache_store = SimpleNamespace(
-        append_message=AsyncMock(),
-        update_current_messages_branch_chain_cache=AsyncMock(),
+        append_message=AsyncMock(return_value={"success": True, "messages": "success"}),
+        update_branch_chain=AsyncMock(
+            return_value={"success": True, "messages": "success"}
+        ),
     )
     executor = _executor(
         data_store=data_store,
@@ -424,16 +538,23 @@ async def test_append_message_short_circuits_and_ignores_cache_append_error():
         "success": True,
         "messages": {"msg_cursor": 1},
     }
-    cache_store.append_message.side_effect = RuntimeError("cache down")
+    cache_store.append_message.return_value = {
+        "success": False,
+        "messages": "cache down",
+    }
 
     assert (await executor.append_message(payload))["success"] is True
-    cache_store.update_current_messages_branch_chain_cache.assert_awaited_once()
+    cache_store.update_branch_chain.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_append_message_normalizes_outer_exception():
     executor = _executor(
-        data_store=SimpleNamespace(append_message=AsyncMock()),
+        data_store=SimpleNamespace(
+            append_message=AsyncMock(
+                return_value={"success": True, "messages": "success"}
+            )
+        ),
         cache_store=SimpleNamespace(),
     )
 
@@ -460,13 +581,13 @@ async def test_delete_messages_deletes_related_memory_ids():
                 ],
             }
         ),
-        delete_shortterm_memory=AsyncMock(
-            return_value={"success": True}
-        ),
+        delete_shortterm_memories=AsyncMock(return_value={"success": True}),
     )
     cache_store = SimpleNamespace(
-        expire_immediately=AsyncMock(),
-        invalidate_resource=AsyncMock(
+        delete_messages=AsyncMock(
+            return_value={"success": True, "messages": "success"}
+        ),
+        delete_resources=AsyncMock(
             return_value={"success": True, "messages": "success"}
         ),
     )
@@ -479,15 +600,15 @@ async def test_delete_messages_deletes_related_memory_ids():
         "success": True,
         "messages": "success",
     }
-    cache_store.expire_immediately.assert_awaited_once_with(payload)
-    data_store.delete_shortterm_memory.assert_awaited_once_with(
+    cache_store.delete_messages.assert_awaited_once_with(payload)
+    data_store.delete_shortterm_memories.assert_awaited_once_with(
         {
             "user_uid": "user-1",
             "conversation_uid": "conversation-1",
             "memory_ids": ["memory-1"],
         }
     )
-    cache_store.invalidate_resource.assert_awaited_once_with(
+    cache_store.delete_resources.assert_awaited_once_with(
         {
             "cache_group": "shortterm-memory:user-1",
             "cache_key": "conversation-1",
@@ -498,17 +619,19 @@ async def test_delete_messages_deletes_related_memory_ids():
 @pytest.mark.asyncio
 async def test_delete_messages_handles_cache_store_and_memory_failures():
     payload = {"user_uid": "user-1"}
-    delete_messages = AsyncMock(
-        return_value={"success": True, "messages": None}
-    )
+    delete_messages = AsyncMock(return_value={"success": True, "messages": None})
     delete_memory = AsyncMock()
     cache_store = SimpleNamespace(
-        expire_immediately=AsyncMock(side_effect=RuntimeError("cache down")),
-        invalidate_resource=AsyncMock(),
+        delete_messages=AsyncMock(
+            return_value={"success": False, "messages": "cache down"}
+        ),
+        delete_resources=AsyncMock(
+            return_value={"success": True, "messages": "success"}
+        ),
     )
     data_store = SimpleNamespace(
         delete_messages=delete_messages,
-        delete_shortterm_memory=delete_memory,
+        delete_shortterm_memories=delete_memory,
     )
     executor = _executor(
         data_store=data_store,
@@ -521,6 +644,7 @@ async def test_delete_messages_handles_cache_store_and_memory_failures():
     failure = {"success": False, "messages": "delete failed"}
     delete_messages.return_value = failure
     assert await executor.delete_messages(payload) == failure
+    assert cache_store.delete_messages.await_count == 1
 
     delete_messages.return_value = {
         "success": True,
@@ -529,7 +653,7 @@ async def test_delete_messages_handles_cache_store_and_memory_failures():
     memory_failure = {"success": False, "messages": "memory failed"}
     delete_memory.return_value = memory_failure
     assert await executor.delete_messages(payload) == memory_failure
-    cache_store.invalidate_resource.assert_not_awaited()
+    cache_store.delete_resources.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -538,7 +662,11 @@ async def test_delete_messages_normalizes_outer_exception():
         data_store=SimpleNamespace(
             delete_messages=AsyncMock(side_effect=RuntimeError("db down"))
         ),
-        cache_store=SimpleNamespace(expire_immediately=AsyncMock()),
+        cache_store=SimpleNamespace(
+            delete_messages=AsyncMock(
+                return_value={"success": True, "messages": "success"}
+            )
+        ),
     )
 
     assert await executor.delete_messages({}) == {
@@ -547,180 +675,23 @@ async def test_delete_messages_normalizes_outer_exception():
     }
 
 
-def test_build_visible_messages_handles_empty_input():
-    assert _executor()._build_visible_messages(
-        [],
-        None,
-        ("user",),
-    ) == ([], {}, [])
-
-
-def test_build_visible_messages_parses_filters_and_reports_branches():
-    rows = [
-        _row(
-            "node-a",
-            "-",
-            1,
-            "user",
-            extensions='{"source": "json"}',
-            metadata="invalid-json",
-        ),
-        _row(
-            "node-a",
-            "-",
-            2,
-            "assistant",
-            extensions="invalid-json",
-            metadata='{"score": 1}',
-        ),
-        _row("node-a", "-", 3, "internal"),
-        _row("node-b", "-", 4, "user"),
-        _row("node-c", "node-a", 5, "tool", extensions="", metadata=""),
-        _row("node-c", "node-a", 6, "tool", deleted=True),
-    ]
-    executor = _executor()
-
-    parsed, branches, node_chain = executor._build_visible_messages(
-        rows,
-        "node-a",
-        ("user", "assistant", "tool"),
-    )
-
-    assert [message["msg_cursor"] for message in parsed] == [1, 2, 5]
-    assert parsed[0]["extensions"] == {"source": "json"}
-    assert parsed[0]["metadata"] == {}
-    assert parsed[1]["extensions"] == {}
-    assert parsed[1]["metadata"] == {"score": 1}
-    assert parsed[2]["extensions"] == {}
-    assert parsed[2]["metadata"] == {}
-    assert node_chain == ["node-a", "node-c"]
-    assert branches == {
-        "-": [
-            {"node_id": "node-a", "cursor": 1},
-            {"node_id": "node-b", "cursor": 4},
-        ]
-    }
-
-
-def test_build_visible_messages_strict_path_and_deleted_fallback():
-    rows = [
-        _row("parent", "-", 1, "user"),
-        _row("deleted", "parent", 2, "assistant", deleted=True),
-        _row("future", "parent", 3, "user"),
-    ]
-    executor = _executor()
-
-    parsed, branches, node_chain = executor._build_visible_messages(
-        rows,
-        "deleted",
-        ("user", "assistant"),
-        guess_children=False,
-    )
-
-    assert [message["node_id"] for message in parsed] == ["parent"]
-    assert branches == {}
-    assert node_chain == ["parent"]
-
-    parsed, _, _ = executor._build_visible_messages(
-        deepcopy(rows),
-        "missing",
-        ("user", "assistant"),
-        guess_children=False,
-    )
-    assert [message["node_id"] for message in parsed] == [
-        "parent",
-        "future",
-    ]
-
-
-def test_build_visible_messages_handles_missing_visible_and_cutoff_nodes(
-    monkeypatch,
-):
-    class DivergentNodeMap(dict):
-        def __contains__(self, key):
-            return True
-
-        def get(self, key, default=None):
-            return None
-
-    class MissingNodeHelper:
-        def __init__(self, messages):
-            self.node_map = DivergentNodeMap()
-
-        def find_nearest_visible(self, node_id):
-            return None
-
-        def get_path(self, node_id):
-            return []
-
-        def flatten_branch(self, branch):
-            return []
-
-    monkeypatch.setattr(
-        execute_module,
-        "MessageNodeHelper",
-        MissingNodeHelper,
-    )
-
-    assert _executor()._build_visible_messages(
-        [{"raw": True}],
-        "missing",
-        ("user",),
-        guess_children=False,
-    ) == ([], {}, [])
-
-
-def test_build_visible_messages_skips_duplicate_branch_parents(monkeypatch):
-    branch = [
-        {"node_id": "first", "parent_id": "same-parent"},
-        {"node_id": "second", "parent_id": "same-parent"},
-    ]
-
-    class DuplicateParentHelper:
-        def __init__(self, messages):
-            self.node_map = {"first": branch[0]}
-
-        def find_nearest_visible(self, node_id):
-            return branch[0]
-
-        def build_branch(self, node_id):
-            return branch
-
-        def flatten_branch(self, built_branch):
-            return []
-
-        def get_children(self, parent_id):
-            return []
-
-    monkeypatch.setattr(
-        execute_module,
-        "MessageNodeHelper",
-        DuplicateParentHelper,
-    )
-
-    assert _executor()._build_visible_messages(
-        [{"raw": True}],
-        "first",
-        ("user",),
-    ) == ([], {}, [])
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method_name", "expected_roles", "expected_guess"),
     [
         (
-            "get_messages",
+            "list_messages",
             ("user", "assistant", "system", "tool", "info"),
             False,
         ),
-        ("get_messages_for_user", ("user", "assistant", "info", "tool"), True),
+        ("list_user_messages", ("user", "assistant", "info", "tool"), True),
     ],
 )
-async def test_get_messages_uses_cached_chain_and_recent_messages(
+async def test_list_messages_uses_cached_chain_and_recent_messages(
     method_name,
     expected_roles,
     expected_guess,
+    message_nodes,
 ):
     payload = {
         "user_uid": "user-1",
@@ -728,24 +699,26 @@ async def test_get_messages_uses_cached_chain_and_recent_messages(
         "current_node_id": "-",
     }
     cache_store = SimpleNamespace(
-        get_current_messages_branch_chain=AsyncMock(
+        get_branch_chain=AsyncMock(
             return_value={
                 "success": True,
                 "cache_hit": True,
                 "messages": ["-", "cached-leaf"],
             }
         ),
-        get_recent_messages=AsyncMock(
+        get_messages=AsyncMock(
             return_value={
                 "success": True,
                 "cache_hit": True,
                 "messages": [{"raw": True}],
             }
         ),
-        cache_current_messages_branch_chain=AsyncMock(),
+        set_branch_chain=AsyncMock(
+            return_value={"success": True, "messages": "success"}
+        ),
     )
     executor = _executor(cache_store=cache_store)
-    executor._build_visible_messages = Mock(
+    message_nodes.build_visible_messages = Mock(
         return_value=(
             [{"parsed": True}],
             {"-": [{"node_id": "branch"}]},
@@ -757,19 +730,16 @@ async def test_get_messages_uses_cached_chain_and_recent_messages(
 
     assert result["messages"] == [{"parsed": True}]
     assert result["branches"] == {"-": [{"node_id": "branch"}]}
-    assert payload["node_id_chain"] == ["-", "cached-leaf"]
-    executor._build_visible_messages.assert_called_once_with(
-        [{"raw": True}],
+    assert "node_id_chain" not in payload
+    assert result["current_chain"] == ["-", "cached-leaf"]
+    execute_module.MessageNodeHelper.assert_called_once_with([{"raw": True}])
+    message_nodes.build_visible_messages.assert_called_once_with(
         "cached-leaf",
         allow_roles=expected_roles,
-        **(
-            {"guess_children": expected_guess}
-            if method_name == "get_messages"
-            else {}
-        ),
+        guess_children=expected_guess,
     )
-    cache_store.cache_current_messages_branch_chain.assert_awaited_once_with(
-        payload
+    cache_store.set_branch_chain.assert_awaited_once_with(
+        {**payload, "node_id_chain": ["-", "cached-leaf"]}
     )
 
 
@@ -778,26 +748,27 @@ async def test_get_messages_uses_cached_chain_and_recent_messages(
     ("method_name", "chain_response"),
     [
         (
-            "get_messages",
+            "list_messages",
             {"success": False, "cache_hit": True, "messages": ["ignored"]},
         ),
         (
-            "get_messages",
+            "list_messages",
             {"success": True, "cache_hit": True, "messages": []},
         ),
         (
-            "get_messages_for_user",
+            "list_user_messages",
             {"success": False, "cache_hit": True, "messages": ["ignored"]},
         ),
         (
-            "get_messages_for_user",
+            "list_user_messages",
             {"success": True, "cache_hit": True, "messages": []},
         ),
     ],
 )
-async def test_get_messages_ignores_unusable_cached_chains(
+async def test_list_messages_ignores_unusable_cached_chains(
     method_name,
     chain_response,
+    message_nodes,
 ):
     payload = {
         "user_uid": "user-1",
@@ -805,36 +776,37 @@ async def test_get_messages_ignores_unusable_cached_chains(
         "current_node_id": "-",
     }
     cache_store = SimpleNamespace(
-        get_current_messages_branch_chain=AsyncMock(
-            return_value=chain_response
-        ),
-        get_recent_messages=AsyncMock(
+        get_branch_chain=AsyncMock(return_value=chain_response),
+        get_messages=AsyncMock(
             return_value={
                 "success": True,
                 "cache_hit": True,
                 "messages": [{"raw": True}],
             }
         ),
-        cache_current_messages_branch_chain=AsyncMock(),
+        set_branch_chain=AsyncMock(
+            return_value={"success": True, "messages": "success"}
+        ),
     )
     executor = _executor(cache_store=cache_store)
-    executor._build_visible_messages = Mock(
+    message_nodes.build_visible_messages = Mock(
         return_value=([{"parsed": True}], {}, [])
     )
 
     result = await getattr(executor, method_name)(payload)
 
     assert result["messages"] == [{"parsed": True}]
-    assert executor._build_visible_messages.call_args.args[1] == "-"
+    assert message_nodes.build_visible_messages.call_args.args[0] == "-"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "method_name",
-    ["get_messages", "get_messages_for_user"],
+    ["list_messages", "list_user_messages"],
 )
-async def test_get_messages_falls_back_to_database_and_tolerates_cache_errors(
+async def test_list_messages_falls_back_to_database_and_tolerates_cache_errors(
     method_name,
+    message_nodes,
 ):
     payload = {
         "user_uid": "user-1",
@@ -843,19 +815,19 @@ async def test_get_messages_falls_back_to_database_and_tolerates_cache_errors(
     }
     raw_messages = [{"raw": True}]
     cache_store = SimpleNamespace(
-        get_current_messages_branch_chain=AsyncMock(
-            side_effect=RuntimeError("chain cache down")
+        get_branch_chain=AsyncMock(
+            return_value={"success": False, "messages": "chain cache down"}
         ),
-        get_recent_messages=AsyncMock(
-            return_value={"success": True, "cache_hit": False}
+        get_messages=AsyncMock(return_value={"success": True, "cache_hit": False}),
+        set_messages=AsyncMock(
+            return_value={"success": False, "messages": "message cache down"}
         ),
-        backfill_messages=AsyncMock(
-            side_effect=RuntimeError("message cache down")
+        set_branch_chain=AsyncMock(
+            return_value={"success": True, "messages": "success"}
         ),
-        cache_current_messages_branch_chain=AsyncMock(),
     )
     data_store = SimpleNamespace(
-        fetch_messages_after_cursor=AsyncMock(
+        list_messages=AsyncMock(
             return_value={
                 "success": True,
                 "messages": raw_messages,
@@ -866,7 +838,7 @@ async def test_get_messages_falls_back_to_database_and_tolerates_cache_errors(
         data_store=data_store,
         cache_store=cache_store,
     )
-    executor._build_visible_messages = Mock(
+    message_nodes.build_visible_messages = Mock(
         return_value=(
             [{"parsed": True}],
             {},
@@ -877,8 +849,9 @@ async def test_get_messages_falls_back_to_database_and_tolerates_cache_errors(
     result = await getattr(executor, method_name)(payload)
 
     assert result["messages"] == [{"parsed": True}]
-    assert payload["node_id_chain"] == ["node-1"]
-    data_store.fetch_messages_after_cursor.assert_awaited_once_with(
+    assert "node_id_chain" not in payload
+    assert result["current_chain"] == ["node-1"]
+    data_store.list_messages.assert_awaited_once_with(
         {
             "user_uid": "user-1",
             "conversation_uid": "conversation-1",
@@ -886,7 +859,7 @@ async def test_get_messages_falls_back_to_database_and_tolerates_cache_errors(
             "cursor": 1,
         }
     )
-    cache_store.backfill_messages.assert_awaited_once_with(
+    cache_store.set_messages.assert_awaited_once_with(
         {
             "user_uid": "user-1",
             "conversation_uid": "conversation-1",
@@ -899,21 +872,17 @@ async def test_get_messages_falls_back_to_database_and_tolerates_cache_errors(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "method_name",
-    ["get_messages", "get_messages_for_user"],
+    ["list_messages", "list_user_messages"],
 )
-async def test_get_messages_returns_database_failure_or_empty_result(
+async def test_list_messages_returns_database_failure_or_empty_result(
     method_name,
 ):
     payload = {"current_node_id": "known"}
     cache_store = SimpleNamespace(
-        get_recent_messages=AsyncMock(
-            return_value={"success": False, "cache_hit": False}
-        )
+        get_messages=AsyncMock(return_value={"success": False, "cache_hit": False})
     )
     failure = {"success": False, "messages": "db failed"}
-    data_store = SimpleNamespace(
-        fetch_messages_after_cursor=AsyncMock(return_value=failure)
-    )
+    data_store = SimpleNamespace(list_messages=AsyncMock(return_value=failure))
     executor = _executor(
         data_store=data_store,
         cache_store=cache_store,
@@ -922,46 +891,54 @@ async def test_get_messages_returns_database_failure_or_empty_result(
     assert await getattr(executor, method_name)(payload.copy()) == failure
 
     empty = {"success": True, "messages": []}
-    data_store.fetch_messages_after_cursor.return_value = empty
-    cache_store.get_recent_messages.return_value = {
+    data_store.list_messages.return_value = empty
+    cache_store.get_messages.return_value = {
         "success": True,
         "cache_hit": False,
     }
-    assert await getattr(executor, method_name)(payload.copy()) == empty
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "method_name",
-    ["get_messages", "get_messages_for_user"],
-)
-async def test_get_messages_normalizes_outer_exception(method_name):
-    executor = _executor(
-        cache_store=SimpleNamespace(
-            get_recent_messages=AsyncMock(
-                side_effect=RuntimeError("cache read failed")
-            )
-        )
-    )
-
-    assert await getattr(executor, method_name)(
-        {"current_node_id": "known"}
-    ) == {
-        "success": False,
-        "messages": "fail: cache read failed",
+    assert await getattr(executor, method_name)(payload.copy()) == {
+        **empty,
+        "branches": {},
+        "current_chain": [],
     }
 
 
 @pytest.mark.asyncio
-async def test_insert_skills_returns_database_metadata_failure():
+@pytest.mark.parametrize("method_name", ["list_messages", "list_user_messages"])
+async def test_message_readers_normalize_branch_assembly_exception(
+    method_name, message_nodes
+):
+    executor = _executor(
+        cache_store=SimpleNamespace(
+            get_messages=AsyncMock(
+                return_value={
+                    "success": True,
+                    "cache_hit": True,
+                    "messages": [],
+                }
+            )
+        )
+    )
+    message_nodes.build_visible_messages = Mock(
+        side_effect=ValueError("invalid message branch")
+    )
+
+    assert await getattr(executor, method_name)({"current_node_id": "known"}) == {
+        "success": False,
+        "messages": "fail: invalid message branch",
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_skills_returns_database_metadata_failure():
     failure = {"success": False, "messages": "metadata failed"}
     executor = _executor(
         data_store=SimpleNamespace(
             ensure_user_exists=AsyncMock(return_value={"success": True}),
-            insert_skill_info=AsyncMock(return_value=failure),
+            create_skills=AsyncMock(return_value=failure),
         ),
-        file_server=SimpleNamespace(
-            handle_skill_package=AsyncMock(
+        file_store=SimpleNamespace(
+            import_skill_packages=AsyncMock(
                 return_value={
                     "success": True,
                     "messages": [{"skill_id": "skill-1"}],
@@ -970,20 +947,18 @@ async def test_insert_skills_returns_database_metadata_failure():
         ),
     )
 
-    assert await executor.insert_skills({"user_uid": "user-1"}) == failure
+    assert await executor.create_skills({"user_uid": "user-1"}) == failure
 
 
 @pytest.mark.asyncio
-async def test_insert_skills_invalidates_cache_only_after_metadata_is_persisted(
+async def test_create_skills_invalidates_cache_only_after_metadata_is_persisted(
     monkeypatch,
 ):
     monkeypatch.setattr(
         execute_module,
         "datetime",
         SimpleNamespace(
-            now=lambda: SimpleNamespace(
-                strftime=lambda _: "2026-07-29 12:00:00"
-            )
+            now=lambda: SimpleNamespace(strftime=lambda _: "2026-07-29 12:00:00")
         ),
     )
     call_order = []
@@ -1007,22 +982,20 @@ async def test_insert_skills_invalidates_cache_only_after_metadata_is_persisted(
     executor = _executor(
         data_store=SimpleNamespace(
             ensure_user_exists=AsyncMock(return_value={"success": True}),
-            insert_skill_info=AsyncMock(side_effect=persist),
+            create_skills=AsyncMock(side_effect=persist),
         ),
-        file_server=SimpleNamespace(
-            handle_skill_package=AsyncMock(
+        file_store=SimpleNamespace(
+            import_skill_packages=AsyncMock(
                 return_value={
                     "success": True,
                     "messages": [skill_info],
                 }
             )
         ),
-        cache_store=SimpleNamespace(
-            invalidate_resource=AsyncMock(side_effect=invalidate)
-        ),
+        cache_store=SimpleNamespace(delete_resources=AsyncMock(side_effect=invalidate)),
     )
 
-    result = await executor.insert_skills({"user_uid": "user-1"})
+    result = await executor.create_skills({"user_uid": "user-1"})
 
     assert result == {
         "success": True,
@@ -1057,6 +1030,7 @@ async def test_insert_skills_invalidates_cache_only_after_metadata_is_persisted(
         ("create_llm_provider", "create_llm_provider", "provider_id"),
         ("create_mcp_server", "create_mcp_server", "mcp_id"),
         ("create_cron_task", "create_cron_task", "task_id"),
+        ("create_longterm_memory", "create_longterm_memory", "memory_id"),
     ],
 )
 async def test_create_metadata_handlers_generate_ids(
@@ -1070,17 +1044,13 @@ async def test_create_metadata_handlers_generate_ids(
         "uuid4",
         lambda: SimpleNamespace(hex="fixed-id"),
     )
-    handler = AsyncMock(
-        return_value={"success": True, "messages": "created"}
-    )
+    handler = AsyncMock(return_value={"success": True, "messages": "created"})
     payload = {"name": "demo"}
-    executor = _executor(
-        data_store=SimpleNamespace(**{store_method: handler})
-    )
+    executor = _executor(data_store=SimpleNamespace(**{store_method: handler}))
 
     assert (await getattr(executor, method_name)(payload))["success"] is True
-    assert payload[id_key] == "fixed-id"
-    handler.assert_awaited_once_with(payload)
+    assert id_key not in payload
+    handler.assert_awaited_once_with({**payload, id_key: "fixed-id"})
 
 
 @pytest.mark.asyncio
@@ -1098,11 +1068,7 @@ async def test_create_metadata_handlers_normalize_exceptions(
 ):
     executor = _executor(
         data_store=SimpleNamespace(
-            **{
-                store_method: AsyncMock(
-                    side_effect=RuntimeError("create failed")
-                )
-            }
+            **{store_method: AsyncMock(side_effect=RuntimeError("create failed"))}
         )
     )
 
@@ -1140,8 +1106,8 @@ async def test_create_metadata_handlers_normalize_exceptions(
             ({"cache_group": "mcp:user-1"},),
         ),
         (
-            "insert_longterm_memory",
-            "insert_longterm_memory",
+            "create_longterm_memory",
+            "create_longterm_memory",
             "memory_id",
             (
                 {
@@ -1175,12 +1141,8 @@ async def test_create_resource_handlers_invalidate_after_success(
         return {"success": True, "messages": "success"}
 
     executor = _executor(
-        data_store=SimpleNamespace(
-            **{store_method: AsyncMock(side_effect=persist)}
-        ),
-        cache_store=SimpleNamespace(
-            invalidate_resource=AsyncMock(side_effect=invalidate)
-        ),
+        data_store=SimpleNamespace(**{store_method: AsyncMock(side_effect=persist)}),
+        cache_store=SimpleNamespace(delete_resources=AsyncMock(side_effect=invalidate)),
     )
     payload = {"user_uid": "user-1"}
 
@@ -1195,25 +1157,21 @@ async def test_create_resource_handlers_invalidate_after_success(
 @pytest.mark.parametrize(
     ("method_name", "store_method"),
     [
-        ("get_llm_providers", "get_llm_providers"),
-        ("get_llm_provider_by_id", "get_llm_provider_by_id"),
+        ("list_llm_providers", "list_llm_providers"),
+        ("get_llm_provider", "get_llm_provider"),
     ],
 )
-async def test_llm_provider_readers_parse_model_lists(
+async def test_llm_provider_readers_preserve_native_model_lists(
     method_name,
     store_method,
 ):
     records = [
         {"provider_id": "one", "model_list": ["model-a"]},
-        {"provider_id": "two", "model_list": '["model-b"]'},
+        {"provider_id": "two", "model_list": ["model-b"]},
         {"provider_id": "three", "model_list": None},
     ]
-    handler = AsyncMock(
-        return_value={"success": True, "messages": records}
-    )
-    executor = _executor(
-        data_store=SimpleNamespace(**{store_method: handler})
-    )
+    handler = AsyncMock(return_value={"success": True, "messages": records})
+    executor = _executor(data_store=SimpleNamespace(**{store_method: handler}))
 
     result = await getattr(executor, method_name)({})
 
@@ -1226,32 +1184,19 @@ async def test_llm_provider_readers_parse_model_lists(
 @pytest.mark.parametrize(
     ("method_name", "store_method"),
     [
-        ("get_llm_providers", "get_llm_providers"),
-        ("get_llm_provider_by_id", "get_llm_provider_by_id"),
+        ("list_llm_providers", "list_llm_providers"),
+        ("get_llm_provider", "get_llm_provider"),
     ],
 )
-async def test_llm_provider_readers_return_failures_and_parse_errors(
+async def test_llm_provider_readers_return_store_failures(
     method_name,
     store_method,
 ):
     failure = {"success": False, "messages": "query failed"}
     handler = AsyncMock(return_value=failure)
-    executor = _executor(
-        data_store=SimpleNamespace(**{store_method: handler})
-    )
+    executor = _executor(data_store=SimpleNamespace(**{store_method: handler}))
 
     assert await getattr(executor, method_name)({}) == failure
-
-    handler.return_value = {
-        "success": True,
-        "messages": [{"model_list": "invalid-json"}],
-    }
-    assert await getattr(executor, method_name)({}) == {
-        "success": False,
-        (
-            "messages"
-        ): "fail: Expecting value: line 1 column 1 (char 0)",
-    }
 
     handler.side_effect = RuntimeError("query crashed")
     assert await getattr(executor, method_name)({}) == {
@@ -1264,27 +1209,23 @@ async def test_llm_provider_readers_return_failures_and_parse_errors(
 @pytest.mark.parametrize(
     ("method_name", "store_method"),
     [
-        ("get_mcp_servers", "get_mcp_servers"),
-        ("get_enabled_mcp_servers", "get_enabled_mcp_servers"),
+        ("list_mcp_servers", "list_mcp_servers"),
+        ("list_enabled_mcp_servers", "list_enabled_mcp_servers"),
     ],
 )
-async def test_mcp_readers_parse_configs_and_recover_invalid_json(
+async def test_mcp_readers_preserve_native_configs(
     method_name,
     store_method,
 ):
     records = [
         {"mcp_id": "dict", "config": {"url": "local"}},
         {"mcp_id": "list", "config": ["one"]},
-        {"mcp_id": "valid", "config": '{"url": "remote"}'},
-        {"mcp_id": "invalid", "config": "invalid-json"},
+        {"mcp_id": "valid", "config": {"url": "remote"}},
+        {"mcp_id": "invalid", "config": {}},
         {"mcp_id": "empty", "config": None},
     ]
-    handler = AsyncMock(
-        return_value={"success": True, "messages": records}
-    )
-    executor = _executor(
-        data_store=SimpleNamespace(**{store_method: handler})
-    )
+    handler = AsyncMock(return_value={"success": True, "messages": records})
+    executor = _executor(data_store=SimpleNamespace(**{store_method: handler}))
 
     result = await getattr(executor, method_name)({})
 
@@ -1299,8 +1240,8 @@ async def test_mcp_readers_parse_configs_and_recover_invalid_json(
 @pytest.mark.parametrize(
     ("method_name", "store_method"),
     [
-        ("get_mcp_servers", "get_mcp_servers"),
-        ("get_enabled_mcp_servers", "get_enabled_mcp_servers"),
+        ("list_mcp_servers", "list_mcp_servers"),
+        ("list_enabled_mcp_servers", "list_enabled_mcp_servers"),
     ],
 )
 async def test_mcp_readers_return_store_failure_and_exception(
@@ -1309,9 +1250,7 @@ async def test_mcp_readers_return_store_failure_and_exception(
 ):
     failure = {"success": False, "messages": "query failed"}
     handler = AsyncMock(return_value=failure)
-    executor = _executor(
-        data_store=SimpleNamespace(**{store_method: handler})
-    )
+    executor = _executor(data_store=SimpleNamespace(**{store_method: handler}))
 
     assert await getattr(executor, method_name)({}) == failure
 
@@ -1327,75 +1266,75 @@ async def test_mcp_readers_return_store_failure_and_exception(
     ("method_name", "payload", "store_method", "expected_cache"),
     [
         (
-            "fetch_skills",
+            "list_skills",
             {"user_uid": "user-1", "limit": 10},
-            "fetch_available_skills",
+            "list_skills",
             {
                 "cache_group": "skills:user-1",
                 "cache_key": "list:10",
             },
         ),
         (
-            "fetch_target_skill",
+            "get_skill",
             {"user_uid": "user-1", "skill_id": "skill-1"},
-            "fetch_target_skill",
+            "get_skill",
             {
                 "cache_group": "skills:user-1",
                 "cache_key": "item:skill-1",
             },
         ),
         (
-            "get_llm_providers",
+            "list_llm_providers",
             {"user_uid": "user-1"},
-            "get_llm_providers",
+            "list_llm_providers",
             {
                 "cache_group": "providers:list",
                 "cache_key": "user-1",
             },
         ),
         (
-            "get_llm_provider_by_id",
+            "get_llm_provider",
             {"provider_id": "provider-1"},
-            "get_llm_provider_by_id",
+            "get_llm_provider",
             {
                 "cache_group": "providers:item",
                 "cache_key": "provider-1",
             },
         ),
         (
-            "get_mcp_servers",
+            "list_mcp_servers",
             {"user_uid": "user-1"},
-            "get_mcp_servers",
+            "list_mcp_servers",
             {
                 "cache_group": "mcp:user-1",
                 "cache_key": "all",
             },
         ),
         (
-            "get_enabled_mcp_servers",
+            "list_enabled_mcp_servers",
             {"user_uid": "user-1"},
-            "get_enabled_mcp_servers",
+            "list_enabled_mcp_servers",
             {
                 "cache_group": "mcp:user-1",
                 "cache_key": "enabled",
             },
         ),
         (
-            "fetch_shortterm_memory",
+            "list_shortterm_memories",
             {
                 "user_uid": "user-1",
                 "conversation_uid": "conversation-1",
             },
-            "fetch_shortterm_memory",
+            "list_shortterm_memories",
             {
                 "cache_group": "shortterm-memory:user-1",
                 "cache_key": "conversation-1",
             },
         ),
         (
-            "fetch_longterm_memory",
+            "list_longterm_memories",
             {"user_uid": "user-1"},
-            "fetch_longterm_memory",
+            "list_longterm_memories",
             {
                 "cache_group": "longterm-memory",
                 "cache_key": "user-1",
@@ -1418,7 +1357,7 @@ async def test_resource_readers_use_cache_hits_without_querying_data_store(
                 "cache_hit": True,
             }
         ),
-        backfill_resource=AsyncMock(),
+        set_resource=AsyncMock(return_value={"success": True, "messages": "success"}),
     )
     data_reader = AsyncMock()
     executor = _executor(
@@ -1432,7 +1371,7 @@ async def test_resource_readers_use_cache_hits_without_querying_data_store(
     }
     cache_store.get_resource.assert_awaited_once_with(expected_cache)
     data_reader.assert_not_awaited()
-    cache_store.backfill_resource.assert_not_awaited()
+    cache_store.set_resource.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1447,9 +1386,9 @@ async def test_resource_readers_use_cache_hits_without_querying_data_store(
     ),
     [
         (
-            "fetch_skills",
+            "list_skills",
             {"user_uid": "user-1"},
-            "fetch_available_skills",
+            "list_skills",
             [{"skill_id": "skill-1"}],
             [{"skill_id": "skill-1"}],
             {
@@ -1458,10 +1397,10 @@ async def test_resource_readers_use_cache_hits_without_querying_data_store(
             },
         ),
         (
-            "get_llm_providers",
+            "list_llm_providers",
             {"user_uid": "user-1"},
-            "get_llm_providers",
-            [{"provider_id": "provider-1", "model_list": '["model-a"]'}],
+            "list_llm_providers",
+            [{"provider_id": "provider-1", "model_list": ["model-a"]}],
             [{"provider_id": "provider-1", "model_list": ["model-a"]}],
             {
                 "cache_group": "providers:list",
@@ -1469,10 +1408,10 @@ async def test_resource_readers_use_cache_hits_without_querying_data_store(
             },
         ),
         (
-            "get_mcp_servers",
+            "list_mcp_servers",
             {"user_uid": "user-1"},
-            "get_mcp_servers",
-            [{"mcp_id": "mcp-1", "config": '{"command": "demo"}'}],
+            "list_mcp_servers",
+            [{"mcp_id": "mcp-1", "config": {"command": "demo"}}],
             [{"mcp_id": "mcp-1", "config": {"command": "demo"}}],
             {
                 "cache_group": "mcp:user-1",
@@ -1480,12 +1419,12 @@ async def test_resource_readers_use_cache_hits_without_querying_data_store(
             },
         ),
         (
-            "fetch_shortterm_memory",
+            "list_shortterm_memories",
             {
                 "user_uid": "user-1",
                 "conversation_uid": "conversation-1",
             },
-            "fetch_shortterm_memory",
+            "list_shortterm_memories",
             [
                 {
                     "memory_id": "message-1",
@@ -1506,9 +1445,9 @@ async def test_resource_readers_use_cache_hits_without_querying_data_store(
             },
         ),
         (
-            "fetch_longterm_memory",
+            "list_longterm_memories",
             {"user_uid": "user-1"},
-            "fetch_longterm_memory",
+            "list_longterm_memories",
             [
                 {
                     "memory_id": "memory-1",
@@ -1534,7 +1473,7 @@ async def test_resource_readers_use_cache_hits_without_querying_data_store(
         ),
     ],
 )
-async def test_resource_readers_backfill_parsed_data_store_results(
+async def test_resource_readers_backfill_native_data_store_results(
     method_name,
     payload,
     store_method,
@@ -1550,9 +1489,7 @@ async def test_resource_readers_backfill_parsed_data_store_results(
                 "cache_hit": False,
             }
         ),
-        backfill_resource=AsyncMock(
-            return_value={"success": True, "messages": "success"}
-        ),
+        set_resource=AsyncMock(return_value={"success": True, "messages": "success"}),
     )
     data_reader = AsyncMock(
         return_value={
@@ -1569,7 +1506,7 @@ async def test_resource_readers_backfill_parsed_data_store_results(
 
     assert result == {"success": True, "messages": expected_messages}
     data_reader.assert_awaited_once_with(payload)
-    cache_store.backfill_resource.assert_awaited_once_with(
+    cache_store.set_resource.assert_awaited_once_with(
         {
             **expected_cache,
             "messages": expected_messages,
@@ -1581,7 +1518,7 @@ async def test_resource_readers_backfill_parsed_data_store_results(
 async def test_resource_read_falls_back_and_ignores_cache_failures():
     payload = {"user_uid": "user-1"}
     data_store = SimpleNamespace(
-        fetch_available_skills=AsyncMock(
+        list_skills=AsyncMock(
             return_value={
                 "success": True,
                 "messages": [{"skill_id": "skill-1"}],
@@ -1589,8 +1526,10 @@ async def test_resource_read_falls_back_and_ignores_cache_failures():
         )
     )
     cache_store = SimpleNamespace(
-        get_resource=AsyncMock(side_effect=RuntimeError("cache read down")),
-        backfill_resource=AsyncMock(
+        get_resource=AsyncMock(
+            return_value={"success": False, "messages": "cache read down"}
+        ),
+        set_resource=AsyncMock(
             return_value={
                 "success": False,
                 "messages": "cache write down",
@@ -1602,11 +1541,11 @@ async def test_resource_read_falls_back_and_ignores_cache_failures():
         cache_store=cache_store,
     )
 
-    assert await executor.fetch_skills(payload) == {
+    assert await executor.list_skills(payload) == {
         "success": True,
         "messages": [{"skill_id": "skill-1"}],
     }
-    data_store.fetch_available_skills.assert_awaited_once_with(payload)
+    data_store.list_skills.assert_awaited_once_with(payload)
 
     cache_store.get_resource.side_effect = None
     cache_store.get_resource.return_value = {
@@ -1614,9 +1553,12 @@ async def test_resource_read_falls_back_and_ignores_cache_failures():
         "messages": "cache unavailable",
         "cache_hit": False,
     }
-    cache_store.backfill_resource.side_effect = RuntimeError("cache write down")
-    assert (await executor.fetch_skills(payload))["success"] is True
-    assert data_store.fetch_available_skills.await_count == 2
+    cache_store.set_resource.return_value = {
+        "success": False,
+        "messages": "cache write down",
+    }
+    assert (await executor.list_skills(payload))["success"] is True
+    assert data_store.list_skills.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -1625,7 +1567,7 @@ async def test_resource_read_falls_back_and_ignores_cache_failures():
     [
         (
             "update_skill",
-            "update_skill_status",
+            "update_skill",
             {"user_uid": "user-1", "skill_id": "skill-1"},
             ({"cache_group": "skills:user-1"},),
         ),
@@ -1651,8 +1593,8 @@ async def test_resource_read_falls_back_and_ignores_cache_failures():
             ({"cache_group": "mcp:user-1"},),
         ),
         (
-            "insert_shortterm_memory",
-            "insert_shortterm_memory",
+            "create_shortterm_memory",
+            "create_shortterm_memory",
             {
                 "user_uid": "user-1",
                 "conversation_uid": "conversation-1",
@@ -1693,13 +1635,11 @@ async def test_resource_mutations_persist_before_best_effort_invalidation(
 
     async def invalidate(target):
         call_order.append(("cache", target))
-        raise RuntimeError("cache down")
+        return {"success": False, "messages": "cache down"}
 
     executor = _executor(
         data_store=SimpleNamespace(**{store_method: AsyncMock(side_effect=persist)}),
-        cache_store=SimpleNamespace(
-            invalidate_resource=AsyncMock(side_effect=invalidate)
-        ),
+        cache_store=SimpleNamespace(delete_resources=AsyncMock(side_effect=invalidate)),
     )
 
     assert (await getattr(executor, method_name)(payload))["success"] is True
@@ -1715,7 +1655,7 @@ async def test_resource_mutations_persist_before_best_effort_invalidation(
     [
         (
             "update_skill",
-            "update_skill_status",
+            "update_skill",
             {"user_uid": "user-1", "skill_id": "skill-1"},
         ),
         (
@@ -1729,8 +1669,8 @@ async def test_resource_mutations_persist_before_best_effort_invalidation(
             {"user_uid": "user-1", "mcp_id": "mcp-1"},
         ),
         (
-            "insert_shortterm_memory",
-            "insert_shortterm_memory",
+            "create_shortterm_memory",
+            "create_shortterm_memory",
             {
                 "user_uid": "user-1",
                 "conversation_uid": "conversation-1",
@@ -1744,8 +1684,8 @@ async def test_resource_mutations_persist_before_best_effort_invalidation(
             {"user_uid": "user-1", "memory_id": "memory-1"},
         ),
         (
-            "insert_longterm_memory",
-            "insert_longterm_memory",
+            "create_longterm_memory",
+            "create_longterm_memory",
             {"user_uid": "user-1"},
         ),
     ],
@@ -1756,16 +1696,18 @@ async def test_failed_resource_mutations_do_not_invalidate_cache(
     payload,
 ):
     failure = {"success": False, "messages": "database write failed"}
-    cache_store = SimpleNamespace(invalidate_resource=AsyncMock())
+    cache_store = SimpleNamespace(
+        delete_resources=AsyncMock(
+            return_value={"success": True, "messages": "success"}
+        )
+    )
     executor = _executor(
-        data_store=SimpleNamespace(
-            **{store_method: AsyncMock(return_value=failure)}
-        ),
+        data_store=SimpleNamespace(**{store_method: AsyncMock(return_value=failure)}),
         cache_store=cache_store,
     )
 
     assert await getattr(executor, method_name)(payload) == failure
-    cache_store.invalidate_resource.assert_not_awaited()
+    cache_store.delete_resources.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1773,30 +1715,26 @@ async def test_failed_resource_mutations_do_not_invalidate_cache(
     ("method_name", "store_method"),
     [
         (
-            "get_all_enabled_cron_tasks",
-            "get_all_enabled_cron_tasks",
+            "list_enabled_cron_tasks",
+            "list_enabled_cron_tasks",
         ),
-        ("get_cron_tasks", "get_cron_tasks"),
-        ("get_cron_task_by_id", "get_cron_task_by_id"),
+        ("list_cron_tasks", "list_cron_tasks"),
+        ("get_cron_task", "get_cron_task"),
     ],
 )
-async def test_cron_readers_parse_extra_config_and_recover_invalid_json(
+async def test_cron_readers_preserve_native_configs(
     method_name,
     store_method,
 ):
     records = [
         {"task_id": "dict", "extra_config": {"retry": 1}},
         {"task_id": "list", "extra_config": ["one"]},
-        {"task_id": "valid", "extra_config": '{"retry": 2}'},
-        {"task_id": "invalid", "extra_config": "invalid-json"},
+        {"task_id": "valid", "extra_config": {"retry": 2}},
+        {"task_id": "invalid", "extra_config": {}},
         {"task_id": "empty", "extra_config": None},
     ]
-    handler = AsyncMock(
-        return_value={"success": True, "messages": records}
-    )
-    executor = _executor(
-        data_store=SimpleNamespace(**{store_method: handler})
-    )
+    handler = AsyncMock(return_value={"success": True, "messages": records})
+    executor = _executor(data_store=SimpleNamespace(**{store_method: handler}))
 
     result = await getattr(executor, method_name)({})
 
@@ -1812,11 +1750,11 @@ async def test_cron_readers_parse_extra_config_and_recover_invalid_json(
     ("method_name", "store_method"),
     [
         (
-            "get_all_enabled_cron_tasks",
-            "get_all_enabled_cron_tasks",
+            "list_enabled_cron_tasks",
+            "list_enabled_cron_tasks",
         ),
-        ("get_cron_tasks", "get_cron_tasks"),
-        ("get_cron_task_by_id", "get_cron_task_by_id"),
+        ("list_cron_tasks", "list_cron_tasks"),
+        ("get_cron_task", "get_cron_task"),
     ],
 )
 async def test_cron_readers_return_store_failure_and_exception(
@@ -1825,9 +1763,7 @@ async def test_cron_readers_return_store_failure_and_exception(
 ):
     failure = {"success": False, "messages": "query failed"}
     handler = AsyncMock(return_value=failure)
-    executor = _executor(
-        data_store=SimpleNamespace(**{store_method: handler})
-    )
+    executor = _executor(data_store=SimpleNamespace(**{store_method: handler}))
 
     assert await getattr(executor, method_name)({}) == failure
 

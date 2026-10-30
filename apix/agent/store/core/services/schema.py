@@ -349,12 +349,6 @@ Index("idx_messages_conversation_node", messages.c.conversation_id, messages.c.n
 Index(
     "idx_messages_conversation_parent", messages.c.conversation_id, messages.c.parent_id
 )
-Index("idx_agent_skills_user_id", agent_skills.c.user_uid, agent_skills.c.skill_id)
-Index(
-    "idx_agent_skills_user_upload",
-    agent_skills.c.user_uid,
-    agent_skills.c.upload_at.desc(),
-)
 Index(
     "idx_agent_skills_user_active",
     agent_skills.c.user_uid,
@@ -375,14 +369,14 @@ Index(
 )
 
 __all__ = [
-    "metadata",
-    "users",
-    "conversations",
-    "messages",
     "agent_skills",
-    "shortterm_memory",
-    "longterm_memory",
-    "llm_provider",
-    "mcp_server",
+    "conversations",
     "cron_task",
+    "llm_provider",
+    "longterm_memory",
+    "mcp_server",
+    "messages",
+    "metadata",
+    "shortterm_memory",
+    "users",
 ]

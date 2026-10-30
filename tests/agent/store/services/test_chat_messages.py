@@ -8,8 +8,8 @@ from apix.agent.core.utils.message import (
     ApixToolMessage,
 )
 from apix.agent.prebuilt.adapter.context.context_adapter import AIContextAdapter
-from apix.agent.store.core.service.data.data_service import DataService
-from tests.agent.store.service.test_data_service import create_user_and_conversation
+from apix.agent.store.core.services.data import DataService
+from tests.agent.store.services.test_data_service import create_user_and_conversation
 
 
 @pytest.mark.parametrize("content", [None, "", "null", '[{"type":"text"}]', [
@@ -32,12 +32,14 @@ async def test_sqlite_content_and_protocol_fields_round_trip(tmp_path, monkeypat
         assert (await db.append_message({**payload, "message": adapter.convert_to_dict_message(tool, "generation")}))["success"]
         await db.stop()
         await db.start()
-        fetched = await db.fetch_messages_after_cursor(payload)
+        fetched = await db.list_messages(payload)
         assert fetched["success"]
         row = fetched["messages"][0]
         assert row["content"] == content
         assert row["tool_calls"] == [call]
         assert row["audio"] == {"id": "audio-1"}
+        assert row["metadata"] == message.metadata
+        assert row["extensions"] == message.extensions
         restored, _ = adapter.convert_to_apix_messages(fetched["messages"])
         assert restored[0].to_chat() == message.to_chat()
         assert restored[0].extensions == message.extensions

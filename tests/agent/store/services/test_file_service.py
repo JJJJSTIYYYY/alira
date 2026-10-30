@@ -1,12 +1,14 @@
+import asyncio
 import hashlib
 import zipfile
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
 
-from apix.agent.store.core.service.data import file_service as file_module
-from apix.agent.store.core.service.data.file_service import FileService
+from apix.agent.store.core.services import files as file_module
+from apix.agent.store.core.services.files import FileService
 
 
 def make_skill_zip(path: Path, frontmatter: str | None, *, nested=True) -> Path:
@@ -21,14 +23,14 @@ def make_skill_zip(path: Path, frontmatter: str | None, *, nested=True) -> Path:
 
 
 @pytest.mark.asyncio
-async def test_save_file_copies_sources_and_returns_workspace_paths(tmp_path):
+async def test_save_files_copies_sources_and_returns_workspace_paths(tmp_path):
     source_one = tmp_path / "first.txt"
     source_two = tmp_path / "second.bin"
     source_one.write_text("hello", encoding="utf-8")
     source_two.write_bytes(b"\x00\x01")
     workspace = tmp_path / "workspace"
 
-    result = await FileService().save_file(
+    result = await FileService().save_files(
         {
             "file_path": [str(source_one), str(source_two)],
             "workspace": str(workspace),
@@ -49,7 +51,7 @@ async def test_save_file_copies_sources_and_returns_workspace_paths(tmp_path):
         },
     ]
     assert (workspace / "user_upload" / "first.txt").read_text() == "hello"
-    assert source_one.exists(), "save_file copies rather than moves uploads"
+    assert source_one.exists(), "save_files copies rather than moves uploads"
 
 
 @pytest.mark.asyncio
@@ -61,19 +63,19 @@ async def test_save_file_copies_sources_and_returns_workspace_paths(tmp_path):
         lambda root: {"file_path": [str(root)], "workspace": str(root / "ws")},
     ],
 )
-async def test_save_file_reports_invalid_payloads(tmp_path, payload_factory):
-    result = await FileService().save_file(payload_factory(tmp_path))
+async def test_save_files_reports_invalid_payloads(tmp_path, payload_factory):
+    result = await FileService().save_files(payload_factory(tmp_path))
     assert result["success"] is False
     assert result["messages"].startswith("fail:")
 
 
 @pytest.mark.asyncio
-async def test_handle_skill_package_moves_valid_zip_and_extracts_metadata(
+async def test_import_skill_packages_moves_valid_zip_and_extracts_metadata(
     monkeypatch, tmp_path
 ):
     monkeypatch.setattr(file_module, "APIX_BASE_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(
-        "apix.agent.store.core.service.data.file_service.uuid4",
+        "apix.agent.store.core.services.files.uuid4",
         lambda: SimpleNamespace(hex="fixedid")
     )
     source = make_skill_zip(
@@ -83,7 +85,7 @@ async def test_handle_skill_package_moves_valid_zip_and_extracts_metadata(
     expected_hash = hashlib.sha256(source.read_bytes()).hexdigest()
     expected_size = source.stat().st_size
 
-    result = await FileService().handle_skill_package(
+    result = await FileService().import_skill_packages(
         {"user_uid": "user-1", "file_path": [str(source)]}
     )
 
@@ -106,7 +108,7 @@ async def test_handle_skill_package_moves_valid_zip_and_extracts_metadata(
 
 
 @pytest.mark.asyncio
-async def test_handle_skill_package_uses_default_version(monkeypatch, tmp_path):
+async def test_import_skill_packages_uses_default_version(monkeypatch, tmp_path):
     monkeypatch.setattr(file_module, "APIX_BASE_DIR", str(tmp_path))
     source = make_skill_zip(
         tmp_path / "skill.zip",
@@ -114,7 +116,7 @@ async def test_handle_skill_package_uses_default_version(monkeypatch, tmp_path):
         nested=False,
     )
 
-    result = await FileService().handle_skill_package(
+    result = await FileService().import_skill_packages(
         {"user_uid": "user-1", "file_path": [str(source)]}
     )
 
@@ -123,7 +125,7 @@ async def test_handle_skill_package_uses_default_version(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_handle_skill_package_adds_incrementing_index_on_name_conflict(
+async def test_import_skill_packages_adds_incrementing_index_on_name_conflict(
     monkeypatch, tmp_path
 ):
     monkeypatch.setattr(file_module, "APIX_BASE_DIR", str(tmp_path / "data"))
@@ -135,7 +137,7 @@ async def test_handle_skill_package_adds_incrementing_index_on_name_conflict(
     first = make_skill_zip(tmp_path / "first" / "skill.zip", frontmatter)
     second = make_skill_zip(tmp_path / "second" / "skill.zip", frontmatter)
 
-    result = await FileService().handle_skill_package(
+    result = await FileService().import_skill_packages(
         {"user_uid": "user-1", "file_path": [str(first), str(second)]}
     )
 
@@ -160,10 +162,10 @@ async def test_same_package_name_is_isolated_by_user(monkeypatch, tmp_path):
     second = make_skill_zip(tmp_path / "second" / "skill.zip", frontmatter)
     service = FileService()
 
-    first_result = await service.handle_skill_package(
+    first_result = await service.import_skill_packages(
         {"user_uid": "user-1", "file_path": [str(first)]}
     )
-    second_result = await service.handle_skill_package(
+    second_result = await service.import_skill_packages(
         {"user_uid": "user-2", "file_path": [str(second)]}
     )
 
@@ -193,7 +195,7 @@ async def test_invalid_skill_package_is_deleted(
     skills_dir = tmp_path / "user-1" / "apix_skills"
     source = make_skill_zip(tmp_path / "invalid.zip", frontmatter)
 
-    result = await FileService().handle_skill_package(
+    result = await FileService().import_skill_packages(
         {"user_uid": "user-1", "file_path": [str(source)]}
     )
 
@@ -204,17 +206,82 @@ async def test_invalid_skill_package_is_deleted(
 
 
 @pytest.mark.asyncio
-async def test_handle_skill_package_rejects_non_zip_without_moving_it(
+async def test_import_skill_packages_rejects_non_zip_without_moving_it(
     monkeypatch, tmp_path
 ):
     monkeypatch.setattr(file_module, "APIX_BASE_DIR", str(tmp_path))
     source = tmp_path / "skill.txt"
     source.write_text("not a zip", encoding="utf-8")
 
-    result = await FileService().handle_skill_package(
+    result = await FileService().import_skill_packages(
         {"user_uid": "user-1", "file_path": [str(source)]}
     )
 
     assert result["success"] is False
     assert "must be a zip file" in result["messages"]
     assert source.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "missing_field"),
+    [({"file_path": []}, "user_uid"), ({"user_uid": "user-1"}, "file_path")],
+)
+async def test_import_skill_packages_normalizes_missing_fields(payload, missing_field):
+    result = await FileService().import_skill_packages(payload)
+
+    assert result == {"success": False, "messages": f"fail: '{missing_field}'"}
+
+
+@pytest.mark.asyncio
+async def test_import_skill_packages_deletes_corrupt_zip(monkeypatch, tmp_path):
+    monkeypatch.setattr(file_module, "APIX_BASE_DIR", str(tmp_path / "data"))
+    source = tmp_path / "invalid.zip"
+    source.write_bytes(b"not a ZIP archive")
+
+    result = await FileService().import_skill_packages(
+        {"user_uid": "user-1", "file_path": [str(source)]}
+    )
+
+    assert result["success"] is False
+    assert "Invalid skill package invalid.zip" in result["messages"]
+    assert not source.exists()
+    assert list((tmp_path / "data" / "user-1" / "apix_skills").iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_skill_inspection_keeps_event_loop_available(monkeypatch, tmp_path):
+    monkeypatch.setattr(file_module, "APIX_BASE_DIR", str(tmp_path / "data"))
+    source = make_skill_zip(
+        tmp_path / "skill.zip",
+        "---\nname: demo\ndescription: Demo skill\n---\nbody\n",
+    )
+    service = FileService()
+    inspect_package = service._inspect_skill_package
+    started = Event()
+    release = Event()
+
+    def blocked_inspection(package_path):
+        started.set()
+        if not release.wait(timeout=3):
+            raise TimeoutError("The event loop did not release skill inspection")
+        return inspect_package(package_path)
+
+    monkeypatch.setattr(service, "_inspect_skill_package", blocked_inspection)
+    operation = asyncio.create_task(
+        service.import_skill_packages(
+            {"user_uid": "user-1", "file_path": [str(source)]}
+        )
+    )
+    try:
+        assert await asyncio.wait_for(
+            asyncio.to_thread(started.wait, 1), timeout=2
+        ), "Skill inspection did not start"
+        assert not operation.done(), "Inspection blocked the event loop until its timeout"
+        release.set()
+        result = await asyncio.wait_for(operation, timeout=2)
+        assert result["success"] is True
+    finally:
+        release.set()
+        if not operation.done():
+            await asyncio.wait_for(operation, timeout=2)

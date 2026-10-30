@@ -1,5 +1,4 @@
 import asyncio
-import json
 import re
 import time
 from collections.abc import AsyncIterator, Awaitable
@@ -15,7 +14,14 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from sqlalchemy.sql import Executable
 
-from apix.agent.store.core.service.data.schema import (
+from apix.agent.store.core.handlers import service_handler
+from apix.agent.store.core.serialization import (
+    decode_json_fields,
+    decode_message_row,
+    encode_json,
+    encode_optional_json,
+)
+from apix.agent.store.core.services.schema import (
     agent_skills,
     conversations,
     cron_task,
@@ -27,13 +33,6 @@ from apix.agent.store.core.service.data.schema import (
     shortterm_memory,
     users,
 )
-from apix.agent.store.core.service.utils.decorator import service_handler
-from apix.agent.store.core.service.utils.message_fields import (
-    decode_message_row,
-    encode_content,
-    encode_optional,
-)
-from apix.common.lifespan.auto_init import auto_init
 from apix.config.base_config import SQLITE_DATABASE
 
 
@@ -88,9 +87,9 @@ class DataService:
     within the service, including for an in-memory database. Storage methods
     return result dictionaries; lifecycle errors propagate to the caller.
 
-    Tables, constraints and indexes are defined in ``data/schema.py``. Row flags
-    remain integers, time strings use a ``T`` separator, and JSON columns remain
-    strings except for explicitly decoded message fields.
+    Tables, constraints and indexes are defined in ``services/schema.py``. Row
+    flags remain integers, time strings use a ``T`` separator, and public reads
+    return decoded JSON values.
     """
 
     def __init__(self, db_path: str | Path | None = None):
@@ -104,7 +103,7 @@ class DataService:
         self._engine: AsyncEngine | None = None
         self._lock = asyncio.Lock()
 
-    def _conversation_id_generator(self) -> str:
+    def _new_conversation_id(self) -> str:
         return str(uuid4())
 
     async def start(self) -> None:
@@ -198,19 +197,18 @@ class DataService:
             return result.rowcount
 
     async def _fetch_all(
-        self, statement: Executable, params: dict[str, Any] | None = None
+        self,
+        statement: Executable,
+        params: dict[str, Any] | None = None,
+        *,
+        json_fields: tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
         async with self._transaction() as connection:
             result = await _database_io(connection.execute(statement, params))
-            return [self._normalize_row(dict(row)) for row in result.mappings()]
-
-    @staticmethod
-    def _json(value: Any, default: Any) -> str:
-        if value is None:
-            value = default
-        if isinstance(value, str):
-            return value
-        return json.dumps(value, ensure_ascii=False)
+            return [
+                decode_json_fields(self._normalize_row(dict(row)), json_fields)
+                for row in result.mappings()
+            ]
 
     @staticmethod
     def _normalize_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -218,9 +216,10 @@ class DataService:
         for key, value in row.items():
             if not isinstance(value, str):
                 continue
-            if key.endswith("_at") or key in {"exec_time", "timestamp"}:
-                if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", value):
-                    row[key] = value.replace(" ", "T", 1)
+            if (key.endswith("_at") or key in {"exec_time", "timestamp"}) and re.match(
+                r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", value
+            ):
+                row[key] = value.replace(" ", "T", 1)
         return row
 
     # --------------------------------------------------
@@ -228,7 +227,7 @@ class DataService:
     # --------------------------------------------------
 
     @service_handler(failure_factory=_identity_failure)
-    async def create_a_user(self, payload: dict) -> dict:
+    async def create_user(self, payload: dict) -> dict:
         """Insert a user account; store the supplied password unchanged.
 
         Args:
@@ -269,7 +268,7 @@ class DataService:
             )
         )
         if len(rows) != 1:
-            raise Exception("User do not exist or wrong password.")
+            raise ValueError("User do not exist or wrong password.")
         return {
             "success": True,
             "messages": {"msg": "success", "uid": rows[0]["user_uid"]},
@@ -298,9 +297,9 @@ class DataService:
             )
         )
         if exist and not rows:
-            raise Exception("User do not exist.")
+            raise ValueError("User do not exist.")
         if not exist and rows:
-            raise Exception("User has already exist.")
+            raise ValueError("User has already exist.")
         return {"success": True, "messages": "success"}
 
     # --------------------------------------------------
@@ -308,7 +307,7 @@ class DataService:
     # --------------------------------------------------
 
     @service_handler
-    async def fetch_conversation_list(self, payload: dict) -> dict:
+    async def list_conversations(self, payload: dict) -> dict:
         """List a user's conversations, pinned first and then most recently active.
 
         Args:
@@ -344,7 +343,7 @@ class DataService:
         return {"success": True, "messages": rows}
 
     @service_handler
-    async def get_conversation_meta_by_id(self, payload: dict) -> dict:
+    async def get_conversation(self, payload: dict) -> dict:
         """Get metadata for one conversation that is not marked deleted.
 
         Args:
@@ -391,7 +390,7 @@ class DataService:
             Success: ``{"success": True, "messages": {"conversation_uid": str}}``.
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
-        conversation_uid = self._conversation_id_generator()
+        conversation_uid = self._new_conversation_id()
         await self._execute(
             insert(conversations).values(
                 user_uid=payload["user_uid"],
@@ -465,9 +464,9 @@ class DataService:
                 ``function_call`` default to ``None``. Content can be any
                 JSON-serializable value; tool calls/annotations must be arrays
                 and audio/function_call objects when present.
-                ``metadata`` and ``extensions`` default to empty objects, including
-                for ``None``; strings are used as JSON text and other values are
-                JSON-encoded. The schema enforces JSON validity.
+                ``metadata`` and ``extensions`` must be objects and default to
+                empty objects, including for ``None``. JSON values are encoded
+                by the service, without accepting pre-encoded JSON text.
 
         Returns:
             Success: ``{"success": True, "messages": {"msg_cursor": int, "timestamp": str}}``.
@@ -482,6 +481,9 @@ class DataService:
         message = payload["message"]
         if not message:
             raise ValueError("Messages list is empty")
+        for field in ("metadata", "extensions"):
+            if message.get(field) is not None and not isinstance(message[field], dict):
+                raise TypeError(f"Message {field} must be an object")
         role = message["role"]
         async with self._transaction() as connection:
             # Allocate the cursor with the first write. SQLite serializes this
@@ -520,16 +522,18 @@ class DataService:
                         parent_id=message.get("parent_id", ""),
                         role=role,
                         name=message.get("name"),
-                        content=encode_content(message.get("content")),
-                        tool_calls=encode_optional(message.get("tool_calls")),
+                        content=encode_json(message.get("content")),
+                        tool_calls=encode_optional_json(message.get("tool_calls")),
                         tool_call_id=message.get("tool_call_id"),
                         refusal=message.get("refusal"),
                         reasoning_content=message.get("reasoning_content"),
-                        audio=encode_optional(message.get("audio")),
-                        annotations=encode_optional(message.get("annotations")),
-                        function_call=encode_optional(message.get("function_call")),
-                        metadata=self._json(message.get("metadata"), {}),
-                        extensions=self._json(message.get("extensions"), {}),
+                        audio=encode_optional_json(message.get("audio")),
+                        annotations=encode_optional_json(message.get("annotations")),
+                        function_call=encode_optional_json(
+                            message.get("function_call")
+                        ),
+                        metadata=encode_json(message.get("metadata"), default={}),
+                        extensions=encode_json(message.get("extensions"), default={}),
                     )
                     .returning(messages.c.timestamp)
                 )
@@ -585,7 +589,7 @@ class DataService:
         return {"success": True, "messages": deleted}
 
     @service_handler
-    async def fetch_messages_after_cursor(self, payload: dict) -> dict:
+    async def list_messages(self, payload: dict) -> dict:
         """Fetch messages at or after a cursor, including soft-deleted messages.
 
         Args:
@@ -603,8 +607,8 @@ class DataService:
                 ``extensions``, ``timestamp``, ``generation_id``, ``node_id``,
                 ``parent_id`` and integer ``is_deleted``. Content, tool calls,
                 audio, annotations and function_call are JSON-decoded; metadata
-                and extensions remain stored JSON text (or ``None`` for NULL
-                columns). Timestamps are strings.
+                and extensions are objects, defaulting to empty objects.
+                Timestamps are strings.
                 ``next_cursor`` is the last row's cursor plus one, or the clamped
                 input cursor if no rows match.
             Failure: ``{"success": False, "messages": "fail: <error>"}``, with
@@ -649,7 +653,7 @@ class DataService:
         }
 
     @service_handler
-    async def search_messages_by_keyword(self, payload: dict) -> dict:
+    async def search_messages(self, payload: dict) -> dict:
         """Search undeleted user/assistant messages in undeleted conversations.
 
         Args:
@@ -705,7 +709,7 @@ class DataService:
     # --------------------------------------------------
 
     @service_handler
-    async def insert_skill_info(self, payload: dict) -> dict:
+    async def create_skills(self, payload: dict) -> dict:
         """Insert skill metadata for a user.
 
         Args:
@@ -739,7 +743,7 @@ class DataService:
         return {"success": True, "messages": "success"}
 
     @service_handler
-    async def update_skill_status(self, payload: dict) -> dict:
+    async def update_skill(self, payload: dict) -> dict:
         """Change activation or soft-deletion status of an undeleted skill.
 
         Args:
@@ -773,7 +777,7 @@ class DataService:
         return {"success": True, "messages": "success"}
 
     @service_handler
-    async def fetch_available_skills(self, payload: dict) -> dict:
+    async def list_skills(self, payload: dict) -> dict:
         """List undeleted skills, including inactive skills, newest upload first.
 
         Args:
@@ -808,7 +812,7 @@ class DataService:
         return {"success": True, "messages": rows}
 
     @service_handler
-    async def fetch_target_skill(self, payload: dict) -> dict:
+    async def get_skill(self, payload: dict) -> dict:
         """Get one undeleted skill owned by a user.
 
         Args:
@@ -849,7 +853,7 @@ class DataService:
     # --------------------------------------------------
 
     @service_handler
-    async def fetch_shortterm_memory(self, payload: dict) -> dict:
+    async def list_shortterm_memories(self, payload: dict) -> dict:
         """Get only the latest undeleted short-term memory for a conversation.
 
         Args:
@@ -878,7 +882,7 @@ class DataService:
         return {"success": True, "messages": rows}
 
     @service_handler
-    async def insert_shortterm_memory(self, payload: dict) -> dict:
+    async def create_shortterm_memory(self, payload: dict) -> dict:
         """Insert one short-term memory with the current Unix microsecond timestamp.
 
         Args:
@@ -902,7 +906,7 @@ class DataService:
         return {"success": True, "messages": "success"}
 
     @service_handler
-    async def delete_shortterm_memory(self, payload: dict) -> dict:
+    async def delete_shortterm_memories(self, payload: dict) -> dict:
         """Soft-delete matching short-term memories in a user's conversation.
 
         Args:
@@ -933,7 +937,7 @@ class DataService:
     # --------------------------------------------------
 
     @service_handler
-    async def fetch_longterm_memory(self, payload: dict) -> dict:
+    async def list_longterm_memories(self, payload: dict) -> dict:
         """List a user's undeleted long-term memories, newest memory date first.
 
         Args:
@@ -962,7 +966,7 @@ class DataService:
         return {"success": True, "messages": rows}
 
     @service_handler
-    async def insert_longterm_memory(self, payload: dict) -> dict:
+    async def create_longterm_memory(self, payload: dict) -> dict:
         """Insert one long-term memory for an existing user.
 
         Args:
@@ -996,7 +1000,7 @@ class DataService:
             payload: Required ``memory_id`` and ``user_uid``. Optional ``title``,
                 ``date``, ``content``, ``source`` and ``is_deleted``; absent or
                 ``None`` values leave fields unchanged. Date/source constraints
-                match ``insert_longterm_memory``. Deletion records ``deleted_at``.
+                match ``create_longterm_memory``. Deletion records ``deleted_at``.
 
         Returns:
             Success: ``{"success": True, "messages": "success"}``, even if no
@@ -1058,14 +1062,14 @@ class DataService:
                 provider_name=payload["provider_name"],
                 type=(payload.get("type", "openai") or "openai").lower(),
                 endpoint=payload["endpoint"],
-                model_list=json.dumps(payload["model_list"]),
+                model_list=encode_json(payload["model_list"]),
                 description=payload.get("description"),
             )
         )
         return {"success": True, "messages": {"provider_id": provider_id}}
 
     @service_handler
-    async def get_llm_providers(self, payload: dict) -> dict:
+    async def list_llm_providers(self, payload: dict) -> dict:
         """List a user's undeleted LLM providers, newest creation first.
 
         Args:
@@ -1074,7 +1078,7 @@ class DataService:
         Returns:
             Success: ``{"success": True, "messages": rows}``, possibly empty.
                 Rows have ``provider_id``, ``provider_name``, ``type``, ``endpoint``,
-                ``model_list`` (JSON text), nullable ``description`` and string
+                decoded ``model_list``, nullable ``description`` and string
                 ``created_at``.
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
@@ -1092,12 +1096,13 @@ class DataService:
                 llm_provider.c.user_uid == payload["user_uid"],
                 llm_provider.c.is_deleted == 0,
             )
-            .order_by(llm_provider.c.created_at.desc())
+            .order_by(llm_provider.c.created_at.desc()),
+            json_fields=("model_list",),
         )
         return {"success": True, "messages": rows}
 
     @service_handler
-    async def get_llm_provider_by_id(self, payload: dict) -> dict:
+    async def get_llm_provider(self, payload: dict) -> dict:
         """Get one undeleted LLM provider by ID, without a user filter.
 
         Args:
@@ -1105,7 +1110,7 @@ class DataService:
 
         Returns:
             Success: ``{"success": True, "messages": rows}``, with zero or one row
-                shaped as in ``get_llm_providers``; ``model_list`` is JSON text.
+                shaped as in ``list_llm_providers``; ``model_list`` is decoded.
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         rows = await self._fetch_all(
@@ -1122,7 +1127,8 @@ class DataService:
                 llm_provider.c.provider_id == payload["provider_id"],
                 llm_provider.c.is_deleted == 0,
             )
-            .limit(1)
+            .limit(1),
+            json_fields=("model_list",),
         )
         return {"success": True, "messages": rows}
 
@@ -1135,7 +1141,7 @@ class DataService:
                 ``provider_name``, ``type``, ``endpoint``, ``model_list``,
                 ``description`` and ``is_deleted``; absent or ``None`` values
                 leave fields unchanged. String ``type`` is lowercased. A list
-                ``model_list`` is JSON-encoded; JSON text is used as supplied.
+                ``model_list`` is encoded as a native JSON value.
 
         Returns:
             Success: ``{"success": True, "messages": "success"}``, even if no
@@ -1145,9 +1151,7 @@ class DataService:
         provider_type = payload.get("type")
         if isinstance(provider_type, str):
             provider_type = provider_type.lower()
-        model_list = payload.get("model_list")
-        if isinstance(model_list, list):
-            model_list = json.dumps(model_list)
+        model_list = encode_optional_json(payload.get("model_list"))
         await self._execute(
             update(llm_provider)
             .where(
@@ -1202,14 +1206,14 @@ class DataService:
                 mcp_name=payload["mcp_name"],
                 transport=payload["transport"],
                 endpoint=payload["endpoint"],
-                config=json.dumps(payload.get("config", {})),
+                config=encode_json(payload.get("config", {})),
                 description=payload.get("description"),
             )
         )
         return {"success": True, "messages": {"mcp_id": mcp_id}}
 
     @service_handler
-    async def get_mcp_servers(self, payload: dict) -> dict:
+    async def list_mcp_servers(self, payload: dict) -> dict:
         """List a user's undeleted MCP servers, newest creation first.
 
         Args:
@@ -1218,7 +1222,7 @@ class DataService:
         Returns:
             Success: ``{"success": True, "messages": rows}``, possibly empty.
                 Rows have ``mcp_id``, ``mcp_name``, ``transport``, nullable
-                ``endpoint``, JSON-text ``config``, nullable ``description``,
+                ``endpoint``, decoded ``config``, nullable ``description``,
                 integer ``enabled`` and ``tool_count``, and string ``created_at``.
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
@@ -1238,12 +1242,13 @@ class DataService:
                 mcp_server.c.user_uid == payload["user_uid"],
                 mcp_server.c.is_deleted == 0,
             )
-            .order_by(mcp_server.c.created_at.desc())
+            .order_by(mcp_server.c.created_at.desc()),
+            json_fields=("config",),
         )
         return {"success": True, "messages": rows}
 
     @service_handler
-    async def get_enabled_mcp_servers(self, payload: dict) -> dict:
+    async def list_enabled_mcp_servers(self, payload: dict) -> dict:
         """List a user's enabled, undeleted MCP servers, oldest creation first.
 
         Args:
@@ -1252,7 +1257,7 @@ class DataService:
         Returns:
             Success: ``{"success": True, "messages": rows}``, possibly empty.
                 Rows have ``mcp_id``, ``mcp_name``, ``transport``, nullable
-                ``endpoint`` and JSON-text ``config``.
+                ``endpoint`` and decoded ``config``.
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         rows = await self._fetch_all(
@@ -1268,7 +1273,8 @@ class DataService:
                 mcp_server.c.enabled == 1,
                 mcp_server.c.is_deleted == 0,
             )
-            .order_by(mcp_server.c.created_at.asc())
+            .order_by(mcp_server.c.created_at.asc()),
+            json_fields=("config",),
         )
         return {"success": True, "messages": rows}
 
@@ -1280,17 +1286,15 @@ class DataService:
             payload: Required ``mcp_id`` and ``user_uid``. Optional ``mcp_name``,
                 ``transport``, ``endpoint``, ``config``, ``description``, ``enabled``,
                 ``tool_count`` and ``is_deleted``; absent or ``None`` values leave
-                fields unchanged. Dict/list configs are JSON-encoded; JSON text
-                is used as supplied. Transport retains its schema constraints.
+                fields unchanged. Config is encoded as a native JSON value.
+                Transport retains its schema constraints.
 
         Returns:
             Success: ``{"success": True, "messages": "success"}``, even if no
                 undeleted server matches. Deleted servers cannot be restored.
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
-        config = payload.get("config")
-        if isinstance(config, (dict, list)):
-            config = json.dumps(config)
+        config = encode_optional_json(payload.get("config"))
         await self._execute(
             update(mcp_server)
             .where(
@@ -1336,7 +1340,7 @@ class DataService:
                 ``month``, ``year`` and ``cron``. ``prompt`` and ``execute`` default
                 to ``None``; ``description`` defaults to ``""`` when absent.
                 ``extra_config`` defaults to an empty object when absent or
-                ``None``; JSON text is used as supplied and other values encoded.
+                ``None``; otherwise it is encoded as a native JSON value.
                 ``exec_time`` is stored as supplied without date-time validation.
 
         Returns:
@@ -1356,14 +1360,14 @@ class DataService:
                 execute=payload.get("execute"),
                 exec_time=payload.get("exec_time"),
                 repeat=payload.get("repeat") or "once",
-                extra_config=self._json(payload.get("extra_config"), {}),
+                extra_config=encode_json(payload.get("extra_config"), default={}),
                 description=payload.get("description", ""),
             )
         )
         return {"success": True, "messages": {"task_id": task_id}}
 
     @service_handler
-    async def get_all_enabled_cron_tasks(self, payload: dict) -> dict:
+    async def list_enabled_cron_tasks(self, payload: dict) -> dict:
         """List all users' enabled, undeleted tasks by execution time ascending.
 
         Args:
@@ -1373,7 +1377,7 @@ class DataService:
             Success: ``{"success": True, "messages": rows}``, possibly empty.
                 Rows have ``task_id``, ``user_uid``, ``conversation_uid``,
                 ``platform``, ``name``, ``prompt``, ``execute``, ``exec_time``,
-                ``repeat``, JSON-text ``extra_config``, nullable ``description``,
+                ``repeat``, decoded ``extra_config``, nullable ``description``,
                 ``created_at`` and ``updated_at``. Time columns are strings.
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
@@ -1394,12 +1398,13 @@ class DataService:
                 cron_task.c.updated_at,
             )
             .where(cron_task.c.enabled == 1, cron_task.c.is_deleted == 0)
-            .order_by(cron_task.c.exec_time.asc())
+            .order_by(cron_task.c.exec_time.asc()),
+            json_fields=("extra_config",),
         )
         return {"success": True, "messages": rows}
 
     @service_handler
-    async def get_cron_tasks(self, payload: dict) -> dict:
+    async def list_cron_tasks(self, payload: dict) -> dict:
         """List a user's undeleted tasks by execution time ascending.
 
         Args:
@@ -1408,7 +1413,7 @@ class DataService:
         Returns:
             Success: ``{"success": True, "messages": rows}``, possibly empty.
                 Rows have ``task_id``, ``conversation_uid``, ``platform``, ``name``,
-                ``prompt``, ``execute``, ``exec_time``, ``repeat``, JSON-text
+                ``prompt``, ``execute``, ``exec_time``, ``repeat``, decoded
                 ``extra_config``, nullable ``description``, integer ``enabled``,
                 ``created_at`` and ``updated_at``. Time columns are strings.
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
@@ -1432,12 +1437,13 @@ class DataService:
             .where(
                 cron_task.c.user_uid == payload["user_uid"], cron_task.c.is_deleted == 0
             )
-            .order_by(cron_task.c.exec_time.asc())
+            .order_by(cron_task.c.exec_time.asc()),
+            json_fields=("extra_config",),
         )
         return {"success": True, "messages": rows}
 
     @service_handler
-    async def get_cron_task_by_id(self, payload: dict) -> dict:
+    async def get_cron_task(self, payload: dict) -> dict:
         """Get one undeleted task by ID, without a user filter.
 
         Args:
@@ -1445,7 +1451,7 @@ class DataService:
 
         Returns:
             Success: ``{"success": True, "messages": rows}``, with zero or one
-                row shaped as in ``get_cron_tasks`` plus ``user_uid``.
+                row shaped as in ``list_cron_tasks`` plus ``user_uid``.
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         rows = await self._fetch_all(
@@ -1468,7 +1474,8 @@ class DataService:
             .where(
                 cron_task.c.task_id == payload["task_id"], cron_task.c.is_deleted == 0
             )
-            .limit(1)
+            .limit(1),
+            json_fields=("extra_config",),
         )
         return {"success": True, "messages": rows}
 
@@ -1481,7 +1488,7 @@ class DataService:
                 ``platform``, ``task_name``, ``prompt``, ``execute``, ``exec_time``,
                 ``repeat``, ``extra_config``, ``description``, ``enabled`` and
                 ``is_deleted``; absent or ``None`` values leave fields unchanged.
-                Dict/list configs are JSON-encoded; JSON text is used as supplied.
+                Config is encoded as a native JSON value.
                 The repeat/foreign-key constraints still apply. No user filter
                 or date-time validation is applied.
 
@@ -1491,9 +1498,7 @@ class DataService:
                 deleted tasks cannot be restored by this method.
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
-        extra_config = payload.get("extra_config")
-        if isinstance(extra_config, (dict, list)):
-            extra_config = json.dumps(extra_config)
+        extra_config = encode_optional_json(payload.get("extra_config"))
         await self._execute(
             update(cron_task)
             .where(
@@ -1523,7 +1528,3 @@ class DataService:
             )
         )
         return {"success": True, "messages": "success"}
-
-
-data_service = DataService()
-auto_init.register(data_service)

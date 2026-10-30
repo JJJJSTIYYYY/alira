@@ -1,5 +1,4 @@
 from __future__ import annotations
-import json
 
 import pytest
 
@@ -148,7 +147,7 @@ def test_convert_persisted_messages_handles_todo_context_abort_and_json():
                 "role": "assistant",
                 "name": "Alice",
                 "content": "answer<conversation_abort>",
-                "metadata": '{"provider":"test"}',
+                "metadata": {"provider": "test"},
                 "reasoning_content": "why<conversation_abort>",
                 "tool_calls": [],
             },
@@ -239,7 +238,7 @@ def test_convert_persisted_messages_strict_mode_fills_missing_tool_output():
     assert messages[1].tool_call_id == "missing"
 
 
-def test_convert_to_dict_message_filter_and_decode_helpers():
+def test_convert_to_dict_message_filter():
     adapter = AIContextAdapter()
     message = ApixAiMessage(
         message_uid="message-1",
@@ -257,10 +256,6 @@ def test_convert_to_dict_message_filter_and_decode_helpers():
         "reasoning_content": "why",
         "tool_calls": [],
     }
-    assert adapter._decode_json_object('{"a":1}') == {"a": 1}
-    assert adapter._decode_json_object("[]") == {}
-    assert adapter._decode_json_object("invalid") == {}
-    assert adapter._decode_json_object({"a": 1}) == {"a": 1}
     with pytest.raises(TypeError, match="ApixAiMessage or ApixToolMessage"):
         adapter.convert_to_dict_message(
             ApixUserMessage(content="no"),

@@ -14,7 +14,7 @@ async def get_custom_provider_meta(
     from apix.agent.store import query_store
 
     result = await query_store(
-        action="get_llm_provider_by_id", payload={"provider_id": provider_id}
+        action="get_llm_provider", payload={"provider_id": provider_id}
     )
     meta = result.get("messages", [])
     if not meta:

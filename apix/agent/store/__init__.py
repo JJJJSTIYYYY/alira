@@ -1,4 +1,3 @@
-from apix.agent.store.core.data_server_manager import query_store
+from apix.agent.store.core.manager import StoreManager, query_store
 
-
-__all__ = ["query_store"]
+__all__ = ["StoreManager", "query_store"]

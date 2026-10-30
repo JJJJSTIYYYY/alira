@@ -161,7 +161,7 @@ class MCPToolManager(ToolManager):
     async def get_mcp_meta(self, user_uid: str) -> list[McpMetaSchema]:
         try:
             result = await query_store(
-                action="get_enabled_mcp_servers",
+                action="list_enabled_mcp_servers",
                 payload={"user_uid": user_uid},
             )
             return result.get("messages", [])

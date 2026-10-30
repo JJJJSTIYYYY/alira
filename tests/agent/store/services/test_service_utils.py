@@ -3,19 +3,19 @@ from uuid import UUID
 
 import pytest
 
-from apix.agent.store.core.service.cache.cache_service import CacheService
-from apix.agent.store.core.service.data.data_service import DataService
-from apix.agent.store.core.service.utils import decorator as service_utils
-from apix.agent.store.core.service.utils.decorator import service_handler
+from apix.agent.store.core.services.cache import CacheService
+from apix.agent.store.core.services.data import DataService
+from apix.agent.store.core import handlers as service_utils
+from apix.agent.store.core.handlers import service_handler
 
 
 def test_cache_key_builders(tmp_path):
     service = CacheService(tmp_path / "cache.json")
 
-    assert service._build_memo_key(
+    assert service._build_conversation_key(
         {"user_uid": "u-1", "conversation_uid": "c-1"}
     ) == "memo:u-1:c-1"
-    assert service._build_memo_key(
+    assert service._build_conversation_key(
         {"user_uid": "u-1", "conversation_uid": "c-1"}, prefix="chain"
     ) == "chain:u-1:c-1"
     assert service._build_resource_key(
@@ -37,7 +37,7 @@ def test_cache_key_builders(tmp_path):
 )
 def test_cache_key_builder_requires_nonempty_identifiers(tmp_path, payload):
     with pytest.raises(KeyError, match="user_uid and conversation_uid required"):
-        CacheService(tmp_path / "cache.json")._build_memo_key(payload)
+        CacheService(tmp_path / "cache.json")._build_conversation_key(payload)
 
 
 @pytest.mark.parametrize(
@@ -65,7 +65,7 @@ def test_resource_key_builder_requires_nonempty_parts(
 def test_data_service_generates_uuid4_strings(tmp_path):
     service = DataService(tmp_path / "data.sqlite3")
 
-    identifiers = [service._conversation_id_generator() for _ in range(100)]
+    identifiers = [service._new_conversation_id() for _ in range(100)]
 
     assert len(set(identifiers)) == len(identifiers)
     for identifier in identifiers:

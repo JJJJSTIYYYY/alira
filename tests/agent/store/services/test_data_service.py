@@ -1,5 +1,4 @@
 import asyncio
-import json
 import sqlite3
 import threading
 from contextlib import closing
@@ -7,7 +6,7 @@ from contextlib import closing
 import pytest
 from sqlalchemy import text
 
-from apix.agent.store.core.service.data.data_service import DataService
+from apix.agent.store.core.services.data import DataService
 
 
 @pytest.fixture
@@ -23,11 +22,11 @@ async def db(tmp_path):
 async def create_user_and_conversation(
     db: DataService, monkeypatch, *, user_uid="user-1", conversation_uid="conv-1"
 ):
-    created = await db.create_a_user(
+    created = await db.create_user(
         {"user_uid": user_uid, "username": f"name-{user_uid}", "password": "secret"}
     )
     assert created["success"] is True
-    monkeypatch.setattr(db, "_conversation_id_generator", lambda: conversation_uid)
+    monkeypatch.setattr(db, "_new_conversation_id", lambda: conversation_uid)
     conversation = await db.create_conversation(
         {
             "user_uid": user_uid,
@@ -36,7 +35,10 @@ async def create_user_and_conversation(
             "workspace": "/workspace/demo",
         }
     )
-    assert conversation == {"success": True, "messages": {"conversation_uid": conversation_uid}}
+    assert conversation == {
+        "success": True,
+        "messages": {"conversation_uid": conversation_uid},
+    }
 
 
 @pytest.mark.asyncio
@@ -108,13 +110,13 @@ async def test_lifecycle_helpers_and_transaction_rollback(tmp_path):
                     },
                 )
                 raise RuntimeError("force rollback")
-        assert await service._fetch_all(
-            text("SELECT * FROM users WHERE user_uid = :user_uid"),
-            {"user_uid": "rolled-back"},
-        ) == []
-        assert service._json(None, {}) == "{}"
-        assert service._json(["a"], []) == '["a"]'
-        assert service._json('{"already":"json"}', {}) == '{"already":"json"}'
+        assert (
+            await service._fetch_all(
+                text("SELECT * FROM users WHERE user_uid = :user_uid"),
+                {"user_uid": "rolled-back"},
+            )
+            == []
+        )
         assert service._normalize_row(
             {
                 "created_at": "2026-01-02 03:04:05",
@@ -142,7 +144,7 @@ async def test_repeated_start_and_stop_preserve_expected_storage(tmp_path, db_na
     user = {"user_uid": "user-1", "username": "alice", "password": "secret"}
     try:
         await asyncio.gather(service.start(), service.start())
-        assert (await service.create_a_user(user))["success"]
+        assert (await service.create_user(user))["success"]
         await service.start()
         assert (await service.verify_user(user))["success"]
 
@@ -151,7 +153,7 @@ async def test_repeated_start_and_stop_preserve_expected_storage(tmp_path, db_na
         restored = await service.verify_user(user)
         if db_name == ":memory:":
             assert restored["success"] is False
-            assert (await service.create_a_user(user))["success"]
+            assert (await service.create_user(user))["success"]
         else:
             assert restored["messages"]["uid"] == "user-1"
 
@@ -164,11 +166,15 @@ async def test_repeated_start_and_stop_preserve_expected_storage(tmp_path, db_na
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wal_enabled", [False, True])
-async def test_multiple_services_can_initialize_the_same_database(tmp_path, wal_enabled):
+async def test_multiple_services_can_initialize_the_same_database(
+    tmp_path, wal_enabled
+):
     path = tmp_path / "shared.sqlite3"
     if wal_enabled:
         with closing(sqlite3.connect(path)) as connection:
-            assert connection.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"
+            assert (
+                connection.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"
+            )
     services = [DataService(path) for _ in range(3)]
     try:
         results = await asyncio.wait_for(
@@ -179,11 +185,15 @@ async def test_multiple_services_can_initialize_the_same_database(tmp_path, wal_
         )
         assert results == [None, None, None], results
         for index, service in enumerate(services):
-            assert (await service.create_a_user({
-                "user_uid": f"user-{index}",
-                "username": f"user-{index}",
-                "password": "secret",
-            }))["success"]
+            assert (
+                await service.create_user(
+                    {
+                        "user_uid": f"user-{index}",
+                        "username": f"user-{index}",
+                        "password": "secret",
+                    }
+                )
+            )["success"]
         assert await services[0]._fetch_all(
             text("SELECT user_uid FROM users ORDER BY user_uid")
         ) == [{"user_uid": f"user-{index}"} for index in range(3)]
@@ -224,16 +234,21 @@ async def test_cancelled_transaction_rolls_back_and_allows_stop_and_restart(tmp_
 
         await asyncio.wait_for(service.stop(), timeout=2)
         await asyncio.wait_for(service.start(), timeout=2)
-        assert await service._fetch_all(
-            text("SELECT user_uid FROM users WHERE user_uid = :user_uid"),
-            {"user_uid": "cancelled"},
-        ) == []
-        assert (await service.create_a_user(
-            {"user_uid": "cancelled", "username": "cancelled", "password": "secret"}
-        ))["success"]
-        assert (await service.verify_user(
-            {"username": "cancelled", "password": "secret"}
-        ))["messages"]["uid"] == "cancelled"
+        assert (
+            await service._fetch_all(
+                text("SELECT user_uid FROM users WHERE user_uid = :user_uid"),
+                {"user_uid": "cancelled"},
+            )
+            == []
+        )
+        assert (
+            await service.create_user(
+                {"user_uid": "cancelled", "username": "cancelled", "password": "secret"}
+            )
+        )["success"]
+        assert (
+            await service.verify_user({"username": "cancelled", "password": "secret"})
+        )["messages"]["uid"] == "cancelled"
     finally:
         release.set()
         if task is not None and not task.done():
@@ -260,17 +275,21 @@ async def test_cancelling_active_sql_keeps_the_in_memory_database(cancel_count):
 
     try:
         await service.start()
-        assert (await service.create_a_user(user))["success"]
+        assert (await service.create_user(user))["success"]
         async with service._transaction() as connection:
             await connection.run_sync(
                 lambda sync_connection: sync_connection.connection.create_function(
                     "slow_sql", 0, slow_sql
                 )
             )
-        task = asyncio.create_task(service._execute(text(
-            "INSERT INTO users (user_uid, username, password) "
-            "VALUES ('cancelled', slow_sql(), 'secret')"
-        )))
+        task = asyncio.create_task(
+            service._execute(
+                text(
+                    "INSERT INTO users (user_uid, username, password) "
+                    "VALUES ('cancelled', slow_sql(), 'secret')"
+                )
+            )
+        )
         await asyncio.wait_for(entered.wait(), timeout=2)
         for _ in range(cancel_count):
             task.cancel()
@@ -280,9 +299,11 @@ async def test_cancelling_active_sql_keeps_the_in_memory_database(cancel_count):
             await asyncio.wait_for(task, timeout=2)
 
         assert (await service.verify_user(user))["messages"]["uid"] == "existing"
-        assert (await service.create_a_user({
-            "user_uid": "new", "username": "new", "password": "secret"
-        }))["success"]
+        assert (
+            await service.create_user(
+                {"user_uid": "new", "username": "new", "password": "secret"}
+            )
+        )["success"]
         assert await service._fetch_all(
             text("SELECT user_uid FROM users ORDER BY user_uid")
         ) == [{"user_uid": "existing"}, {"user_uid": "new"}]
@@ -308,30 +329,34 @@ async def test_concurrent_appends_allocate_unique_contiguous_cursors(
             await service.start()
         await create_user_and_conversation(services[0], monkeypatch)
         results = await asyncio.wait_for(
-            asyncio.gather(*(
-                services[index % service_count].append_message({
-                    **payload,
-                    "message": {
-                        "message_uid": f"message-{index}",
-                        "node_id": f"node-{index}",
-                        "role": "assistant",
-                        "content": f"concurrent-{index}",
-                    },
-                })
-                for index in range(count)
-            )),
+            asyncio.gather(
+                *(
+                    services[index % service_count].append_message(
+                        {
+                            **payload,
+                            "message": {
+                                "message_uid": f"message-{index}",
+                                "node_id": f"node-{index}",
+                                "role": "assistant",
+                                "content": f"concurrent-{index}",
+                            },
+                        }
+                    )
+                    for index in range(count)
+                )
+            ),
             timeout=10,
         )
         assert all(result["success"] for result in results), results
         assert sorted(result["messages"]["msg_cursor"] for result in results) == list(
             range(1, count + 1)
         )
-        fetched = await services[0].fetch_messages_after_cursor(payload)
+        fetched = await services[0].list_messages(payload)
         assert [row["msg_cursor"] for row in fetched["messages"]] == list(
             range(1, count + 1)
         )
         assert len({row["message_uid"] for row in fetched["messages"]}) == count
-        meta = await services[0].get_conversation_meta_by_id(payload)
+        meta = await services[0].get_conversation(payload)
         assert meta["messages"][0]["latest_cursor"] == count
     finally:
         await asyncio.gather(*(service.stop() for service in services))
@@ -349,28 +374,34 @@ async def test_failed_message_insert_does_not_advance_conversation_cursor(
     }
     assert (await db.append_message(payload))["messages"]["msg_cursor"] == 1
     assert (await db.append_message(payload))["success"] is False
-    meta = await db.get_conversation_meta_by_id(payload)
+    meta = await db.get_conversation(payload)
     assert meta["messages"][0]["latest_cursor"] == 1
     assert meta["messages"][0]["has_new_message"] == 0
 
     payload["message"] = {
-        "message_uid": "message-2", "role": "assistant", "content": "second"
+        "message_uid": "message-2",
+        "role": "assistant",
+        "content": "second",
     }
     assert (await db.append_message(payload))["messages"]["msg_cursor"] == 2
-    fetched = await db.fetch_messages_after_cursor(payload)
+    fetched = await db.list_messages(payload)
     assert [row["message_uid"] for row in fetched["messages"]] == [
-        "message-1", "message-2"
+        "message-1",
+        "message-2",
     ]
 
 
 @pytest.mark.asyncio
 async def test_users_conversations_and_messages(db, monkeypatch):
-    assert await db.ensure_user_exists(
-        {"user_uid": "user-1", "username": "alice"}
-    ) == {"success": False, "messages": "fail: User do not exist."}
-    assert (await db.create_a_user(
-        {"user_uid": "user-1", "username": "alice", "password": "secret"}
-    ))["success"]
+    assert await db.ensure_user_exists({"user_uid": "user-1", "username": "alice"}) == {
+        "success": False,
+        "messages": "fail: User do not exist.",
+    }
+    assert (
+        await db.create_user(
+            {"user_uid": "user-1", "username": "alice", "password": "secret"}
+        )
+    )["success"]
     assert await db.verify_user({"username": "alice", "password": "secret"}) == {
         "success": True,
         "messages": {"msg": "success", "uid": "user-1"},
@@ -378,17 +409,21 @@ async def test_users_conversations_and_messages(db, monkeypatch):
     assert (await db.verify_user({"username": "alice", "password": "wrong"}))[
         "success"
     ] is False
-    assert (await db.ensure_user_exists(
-        {"user_uid": "user-1", "username": "alice"}
-    ))["success"]
-    assert (await db.ensure_user_exists(
-        {"user_uid": "new", "username": "alice"}, exist=False
-    ))["success"] is False
-    assert (await db.create_a_user(
-        {"user_uid": "duplicate", "username": "alice", "password": "secret"}
-    ))["success"] is False
+    assert (await db.ensure_user_exists({"user_uid": "user-1", "username": "alice"}))[
+        "success"
+    ]
+    assert (
+        await db.ensure_user_exists(
+            {"user_uid": "new", "username": "alice"}, exist=False
+        )
+    )["success"] is False
+    assert (
+        await db.create_user(
+            {"user_uid": "duplicate", "username": "alice", "password": "secret"}
+        )
+    )["success"] is False
 
-    monkeypatch.setattr(db, "_conversation_id_generator", lambda: "conv-1")
+    monkeypatch.setattr(db, "_new_conversation_id", lambda: "conv-1")
     assert await db.create_conversation(
         {
             "user_uid": "user-1",
@@ -397,9 +432,7 @@ async def test_users_conversations_and_messages(db, monkeypatch):
             "is_cron": True,
         }
     ) == {"success": True, "messages": {"conversation_uid": "conv-1"}}
-    conversations = (await db.fetch_conversation_list({"user_uid": "user-1"}))[
-        "messages"
-    ]
+    conversations = (await db.list_conversations({"user_uid": "user-1"}))["messages"]
     assert conversations[0]["title"] == "New Conversation..."
     assert conversations[0]["work_space"] == "/tmp/work"
     assert conversations[0]["is_cron"] == 1
@@ -414,9 +447,7 @@ async def test_users_conversations_and_messages(db, monkeypatch):
             "is_pinned": True,
         }
     ) == {"success": True, "messages": "success"}
-    meta = (await db.get_conversation_meta_by_id(
-        {"conversation_uid": "conv-1"}
-    ))["messages"][0]
+    meta = (await db.get_conversation({"conversation_uid": "conv-1"}))["messages"][0]
     assert (meta["title"], meta["work_space"], meta["is_pinned"]) == (
         "Renamed",
         "/tmp/new",
@@ -468,7 +499,7 @@ async def test_users_conversations_and_messages(db, monkeypatch):
         "has_new_message": 1,
     }
 
-    fetched = await db.fetch_messages_after_cursor(
+    fetched = await db.list_messages(
         {
             "user_uid": "user-1",
             "conversation_uid": "conv-1",
@@ -480,21 +511,22 @@ async def test_users_conversations_and_messages(db, monkeypatch):
     assert fetched["next_cursor"] == 2
     assert fetched["messages"][0]["message_uid"] == "message-1"
     assert fetched["messages"][0]["name"] == "alice"
-    assert json.loads(fetched["messages"][0]["metadata"]) == {}
-    assert json.loads(fetched["messages"][0]["extensions"]) == {
-        "uploaded_files": ["brief.pdf"]
-    }
-    assert (await db.fetch_messages_after_cursor(
-        {"user_uid": "user-1", "conversation_uid": "conv-1", "cursor": 99}
-    ))["next_cursor"] == 99
+    assert fetched["messages"][0]["metadata"] == {}
+    assert fetched["messages"][0]["extensions"] == {"uploaded_files": ["brief.pdf"]}
+    assert (
+        await db.list_messages(
+            {"user_uid": "user-1", "conversation_uid": "conv-1", "cursor": 99}
+        )
+    )["next_cursor"] == 99
 
-    matches = await db.search_messages_by_keyword(
+    matches = await db.search_messages(
         {"user_uid": "user-1", "keyword": "hello_sqlite"}
     )
     assert [row["content"] for row in matches["messages"]] == ["hello sqlite"]
-    assert await db.search_messages_by_keyword(
-        {"user_uid": "user-1", "keyword": "% _ \\"}
-    ) == {"success": True, "messages": []}
+    assert await db.search_messages({"user_uid": "user-1", "keyword": "% _ \\"}) == {
+        "success": True,
+        "messages": [],
+    }
 
     deleted = await db.delete_messages(
         {
@@ -507,9 +539,9 @@ async def test_users_conversations_and_messages(db, monkeypatch):
         "success": True,
         "messages": [{"message_uid": "message-1"}],
     }
-    assert (await db.search_messages_by_keyword(
-        {"user_uid": "user-1", "keyword": "sqlite"}
-    ))["messages"] == []
+    assert (await db.search_messages({"user_uid": "user-1", "keyword": "sqlite"}))[
+        "messages"
+    ] == []
 
     for result in (
         await db.append_message(
@@ -544,34 +576,32 @@ async def test_skills_and_shortterm_memory(db, monkeypatch):
             "package_size": 456,
         },
     ]
-    assert (await db.insert_skill_info(
-        {"user_uid": "user-1", "skills": skills}
-    ))["success"]
-    assert len((await db.fetch_available_skills(
-        {"user_uid": "user-1", "limit": 1}
-    ))["messages"]) == 1
-    target = (await db.fetch_target_skill(
-        {"user_uid": "user-1", "skill_id": "skill-1"}
-    ))["messages"][0]
+    assert (await db.create_skills({"user_uid": "user-1", "skills": skills}))["success"]
+    assert (
+        len((await db.list_skills({"user_uid": "user-1", "limit": 1}))["messages"]) == 1
+    )
+    target = (await db.get_skill({"user_uid": "user-1", "skill_id": "skill-1"}))[
+        "messages"
+    ][0]
     assert target["skill_version"] == "2.0"
-    assert await db.update_skill_status(
+    assert await db.update_skill(
         {
             "user_uid": "user-1",
             "skill_id": "skill-1",
             "is_active": True,
         }
     ) == {"success": True, "messages": "success"}
-    assert (await db.fetch_target_skill(
-        {"user_uid": "user-1", "skill_id": "skill-1"}
-    ))["messages"][0]["is_active"] == 1
-    await db.update_skill_status(
+    assert (await db.get_skill({"user_uid": "user-1", "skill_id": "skill-1"}))[
+        "messages"
+    ][0]["is_active"] == 1
+    await db.update_skill(
         {"user_uid": "user-1", "skill_id": "skill-1", "deleted": True}
     )
-    assert (await db.fetch_target_skill(
-        {"user_uid": "user-1", "skill_id": "skill-1"}
-    ))["messages"] == []
+    assert (await db.get_skill({"user_uid": "user-1", "skill_id": "skill-1"}))[
+        "messages"
+    ] == []
 
-    assert await db.insert_shortterm_memory(
+    assert await db.create_shortterm_memory(
         {
             "memory_id": "memory-1",
             "user_uid": "user-1",
@@ -579,36 +609,44 @@ async def test_skills_and_shortterm_memory(db, monkeypatch):
             "content": "remember this",
         }
     ) == {"success": True, "messages": "success"}
-    memory = (await db.fetch_shortterm_memory(
-        {"user_uid": "user-1", "conversation_uid": "conv-1"}
-    ))["messages"][0]
+    memory = (
+        await db.list_shortterm_memories(
+            {"user_uid": "user-1", "conversation_uid": "conv-1"}
+        )
+    )["messages"][0]
     assert memory["memory_id"] == "memory-1"
-    await db.delete_shortterm_memory(
+    await db.delete_shortterm_memories(
         {
             "memory_ids": ["memory-1"],
             "user_uid": "user-1",
             "conversation_uid": "conv-1",
         }
     )
-    assert (await db.fetch_shortterm_memory(
-        {"user_uid": "user-1", "conversation_uid": "conv-1"}
-    ))["messages"] == []
-    assert (await db.delete_shortterm_memory(
-        {"memory_ids": [], "user_uid": "user-1", "conversation_uid": "conv-1"}
-    ))["success"]
+    assert (
+        await db.list_shortterm_memories(
+            {"user_uid": "user-1", "conversation_uid": "conv-1"}
+        )
+    )["messages"] == []
+    assert (
+        await db.delete_shortterm_memories(
+            {"memory_ids": [], "user_uid": "user-1", "conversation_uid": "conv-1"}
+        )
+    )["success"]
 
 
 @pytest.mark.asyncio
 async def test_longterm_memory_crud_and_constraints(db):
-    assert (await db.create_a_user(
-        {
-            "user_uid": "user-1",
-            "username": "alice",
-            "password": "secret",
-        }
-    ))["success"]
+    assert (
+        await db.create_user(
+            {
+                "user_uid": "user-1",
+                "username": "alice",
+                "password": "secret",
+            }
+        )
+    )["success"]
 
-    assert await db.insert_longterm_memory(
+    assert await db.create_longterm_memory(
         {
             "memory_id": "memory-1",
             "user_uid": "user-1",
@@ -621,18 +659,20 @@ async def test_longterm_memory_crud_and_constraints(db):
         "success": True,
         "messages": {"memory_id": "memory-1"},
     }
-    assert (await db.insert_longterm_memory(
-        {
-            "memory_id": "memory-2",
-            "user_uid": "user-1",
-            "title": "Second memory",
-            "date": "2026-07-30",
-            "content": "Workspace preference",
-            "source": "workspace",
-        }
-    ))["success"]
+    assert (
+        await db.create_longterm_memory(
+            {
+                "memory_id": "memory-2",
+                "user_uid": "user-1",
+                "title": "Second memory",
+                "date": "2026-07-30",
+                "content": "Workspace preference",
+                "source": "workspace",
+            }
+        )
+    )["success"]
 
-    fetched = await db.fetch_longterm_memory({"user_uid": "user-1"})
+    fetched = await db.list_longterm_memories({"user_uid": "user-1"})
     assert fetched == {
         "success": True,
         "messages": [
@@ -663,9 +703,7 @@ async def test_longterm_memory_crud_and_constraints(db):
             "source": "workspace",
         }
     ) == {"success": True, "messages": "success"}
-    updated = (await db.fetch_longterm_memory(
-        {"user_uid": "user-1"}
-    ))["messages"][0]
+    updated = (await db.list_longterm_memories({"user_uid": "user-1"}))["messages"][0]
     assert updated == {
         "memory_id": "memory-1",
         "title": "Updated memory",
@@ -681,9 +719,7 @@ async def test_longterm_memory_crud_and_constraints(db):
             "is_deleted": True,
         }
     ) == {"success": True, "messages": "success"}
-    assert (await db.fetch_longterm_memory(
-        {"user_uid": "user-1"}
-    ))["messages"] == [
+    assert (await db.list_longterm_memories({"user_uid": "user-1"}))["messages"] == [
         {
             "memory_id": "memory-2",
             "title": "Second memory",
@@ -692,37 +728,104 @@ async def test_longterm_memory_crud_and_constraints(db):
             "source": "workspace",
         }
     ]
-    deleted_row = (await db._fetch_all(
-        text("""
+    deleted_row = (
+        await db._fetch_all(
+            text("""
         SELECT is_deleted, deleted_at
         FROM longterm_memory
         WHERE memory_id = :memory_id
         """),
-        {"memory_id": "memory-1"},
-    ))[0]
+            {"memory_id": "memory-1"},
+        )
+    )[0]
     assert deleted_row["is_deleted"] == 1
     assert "T" in deleted_row["deleted_at"]
 
-    assert not (await db.insert_longterm_memory(
-        {
-            "memory_id": "invalid-source",
-            "user_uid": "user-1",
-            "title": "Invalid",
-            "date": "2025-06-07",
-            "content": "Invalid",
-            "source": "external",
-        }
-    ))["success"]
-    assert not (await db.insert_longterm_memory(
-        {
-            "memory_id": "invalid-date",
-            "user_uid": "user-1",
-            "title": "Invalid",
-            "date": "not-a-date",
-            "content": "Invalid",
-            "source": "conversation",
-        }
-    ))["success"]
+    assert not (
+        await db.create_longterm_memory(
+            {
+                "memory_id": "invalid-source",
+                "user_uid": "user-1",
+                "title": "Invalid",
+                "date": "2025-06-07",
+                "content": "Invalid",
+                "source": "external",
+            }
+        )
+    )["success"]
+    assert not (
+        await db.create_longterm_memory(
+            {
+                "memory_id": "invalid-date",
+                "user_uid": "user-1",
+                "title": "Invalid",
+                "date": "not-a-date",
+                "content": "Invalid",
+                "source": "conversation",
+            }
+        )
+    )["success"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "create_method,read_method,payload,json_field",
+    [
+        (
+            "create_llm_provider",
+            "list_llm_providers",
+            {
+                "provider_id": "provider-1",
+                "provider_name": "Primary",
+                "endpoint": "https://example.test/v1",
+                "model_list": ["null", "[]"],
+            },
+            "model_list",
+        ),
+        (
+            "create_mcp_server",
+            "list_mcp_servers",
+            {
+                "mcp_id": "mcp-1",
+                "mcp_name": "Tools",
+                "transport": "stdio",
+                "endpoint": None,
+                "config": {"command": "demo", "env": {"DEFAULT": "null"}},
+            },
+            "config",
+        ),
+        (
+            "create_cron_task",
+            "list_cron_tasks",
+            {
+                "task_id": "task-1",
+                "conversation_uid": "conv-1",
+                "task_name": "Daily check",
+                "exec_time": "2026-07-22 09:30:00",
+                "extra_config": {"weekdays": [1, 3], "label": "[]"},
+            },
+            "extra_config",
+        ),
+    ],
+)
+async def test_json_reads_survive_restart_and_do_not_share_state(
+    db, monkeypatch, create_method, read_method, payload, json_field
+):
+    await create_user_and_conversation(db, monkeypatch)
+    created = await getattr(db, create_method)({"user_uid": "user-1", **payload})
+    assert created["success"]
+
+    result = await getattr(db, read_method)({"user_uid": "user-1"})
+    assert result["success"]
+    value = result["messages"][0][json_field]
+    assert value == payload[json_field]
+    value.clear()
+
+    await db.stop()
+    await db.start()
+    restored = await getattr(db, read_method)({"user_uid": "user-1"})
+    assert restored["success"]
+    assert restored["messages"][0][json_field] == payload[json_field]
 
 
 @pytest.mark.asyncio
@@ -740,12 +843,12 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
             "description": "initial",
         }
     ) == {"success": True, "messages": {"provider_id": "provider-1"}}
-    provider = (await db.get_llm_provider_by_id(
-        {"provider_id": "provider-1"}
-    ))["messages"][0]
+    provider = (await db.get_llm_provider({"provider_id": "provider-1"}))["messages"][0]
     assert provider["type"] == "openai"
-    assert json.loads(provider["model_list"]) == ["model-a"]
-    assert len((await db.get_llm_providers({"user_uid": "user-1"}))["messages"]) == 1
+    assert provider["model_list"] == ["model-a"]
+    assert (await db.list_llm_providers({"user_uid": "user-1"}))["messages"] == [
+        provider
+    ]
     assert await db.update_llm_provider(
         {
             "provider_id": "provider-1",
@@ -755,20 +858,21 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
             "model_list": ["claude"],
         }
     ) == {"success": True, "messages": "success"}
-    provider = (await db.get_llm_provider_by_id(
-        {"provider_id": "provider-1"}
-    ))["messages"][0]
+    provider = (await db.get_llm_provider({"provider_id": "provider-1"}))["messages"][0]
     assert provider["provider_name"] == "Updated"
     assert provider["type"] == "anthropic"
-    assert (await db.create_llm_provider(
-        {
-            "provider_id": "provider-1",
-            "user_uid": "user-1",
-            "provider_name": "duplicate",
-            "endpoint": "x",
-            "model_list": [],
-        }
-    ))["success"] is False
+    assert provider["model_list"] == ["claude"]
+    assert (
+        await db.create_llm_provider(
+            {
+                "provider_id": "provider-1",
+                "user_uid": "user-1",
+                "provider_name": "duplicate",
+                "endpoint": "x",
+                "model_list": [],
+            }
+        )
+    )["success"] is False
 
     assert await db.create_mcp_server(
         {
@@ -781,11 +885,13 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
             "description": "tool server",
         }
     ) == {"success": True, "messages": {"mcp_id": "mcp-1"}}
-    mcp = (await db.get_mcp_servers({"user_uid": "user-1"}))["messages"][0]
-    assert json.loads(mcp["config"]) == {"command": "demo"}
-    assert len((await db.get_enabled_mcp_servers(
-        {"user_uid": "user-1"}
-    ))["messages"]) == 1
+    mcp = (await db.list_mcp_servers({"user_uid": "user-1"}))["messages"][0]
+    assert mcp["config"] == {"command": "demo"}
+    enabled_mcp = (await db.list_enabled_mcp_servers({"user_uid": "user-1"}))[
+        "messages"
+    ]
+    assert len(enabled_mcp) == 1
+    assert enabled_mcp[0]["config"] == {"command": "demo"}
     await db.update_mcp_server(
         {
             "mcp_id": "mcp-1",
@@ -796,11 +902,10 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
             "tool_count": 7,
         }
     )
-    assert (await db.get_enabled_mcp_servers(
-        {"user_uid": "user-1"}
-    ))["messages"] == []
-    mcp = (await db.get_mcp_servers({"user_uid": "user-1"}))["messages"][0]
+    assert (await db.list_enabled_mcp_servers({"user_uid": "user-1"}))["messages"] == []
+    mcp = (await db.list_mcp_servers({"user_uid": "user-1"}))["messages"][0]
     assert (mcp["mcp_name"], mcp["tool_count"]) == ("Updated tools", 7)
+    assert mcp["config"] == {"command": "new"}
 
     assert await db.create_cron_task(
         {
@@ -815,14 +920,18 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
             "extra_config": {"timezone": "Asia/Tokyo"},
         }
     ) == {"success": True, "messages": {"task_id": "task-1"}}
-    task = (await db.get_cron_task_by_id({"task_id": "task-1"}))[
-        "messages"
-    ][0]
+    task = (await db.get_cron_task({"task_id": "task-1"}))["messages"][0]
     assert task["platform"] == "default"
     assert task["exec_time"] == "2026-07-22T09:30:00"
-    assert json.loads(task["extra_config"]) == {"timezone": "Asia/Tokyo"}
-    assert len((await db.get_cron_tasks({"user_uid": "user-1"}))["messages"]) == 1
-    assert len((await db.get_all_enabled_cron_tasks({}))["messages"]) == 1
+    assert task["extra_config"] == {"timezone": "Asia/Tokyo"}
+    tasks = (await db.list_cron_tasks({"user_uid": "user-1"}))["messages"]
+    enabled_tasks = (await db.list_enabled_cron_tasks({}))["messages"]
+    assert len(tasks) == len(enabled_tasks) == 1
+    assert (
+        tasks[0]["extra_config"]
+        == enabled_tasks[0]["extra_config"]
+        == task["extra_config"]
+    )
     assert await db.update_cron_task(
         {
             "task_id": "task-1",
@@ -832,19 +941,16 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
             "enabled": False,
         }
     ) == {"success": True, "messages": "success"}
-    task = (await db.get_cron_task_by_id({"task_id": "task-1"}))[
-        "messages"
-    ][0]
+    task = (await db.get_cron_task({"task_id": "task-1"}))["messages"][0]
     assert (task["name"], task["repeat"], task["enabled"]) == (
         "Weekly check",
         "week",
         0,
     )
-    assert (await db.get_all_enabled_cron_tasks({}))["messages"] == []
+    assert task["extra_config"] == {"weekday": 1}
+    assert (await db.list_enabled_cron_tasks({}))["messages"] == []
     await db.update_cron_task({"task_id": "task-1", "is_deleted": True})
-    assert (await db.get_cron_task_by_id({"task_id": "task-1"}))[
-        "messages"
-    ] == []
+    assert (await db.get_cron_task({"task_id": "task-1"}))["messages"] == []
 
     await db.update_llm_provider(
         {"provider_id": "provider-1", "user_uid": "user-1", "is_deleted": True}
@@ -852,5 +958,85 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
     await db.update_mcp_server(
         {"mcp_id": "mcp-1", "user_uid": "user-1", "is_deleted": True}
     )
-    assert (await db.get_llm_providers({"user_uid": "user-1"}))["messages"] == []
-    assert (await db.get_mcp_servers({"user_uid": "user-1"}))["messages"] == []
+    assert (await db.list_llm_providers({"user_uid": "user-1"}))["messages"] == []
+    assert (await db.list_mcp_servers({"user_uid": "user-1"}))["messages"] == []
+
+
+@pytest.mark.parametrize("resource", ["provider", "mcp", "cron"])
+@pytest.mark.parametrize(
+    "value", ["null", '{"literal":[1,2]}', {"nested": ["null", "[]"]}]
+)
+async def test_json_values_keep_their_type_across_create_and_update(
+    db, monkeypatch, resource, value
+):
+    await create_user_and_conversation(db, monkeypatch)
+    operations = {
+        "provider": (
+            db.create_llm_provider,
+            db.update_llm_provider,
+            db.get_llm_provider,
+            "model_list",
+            {
+                "provider_id": "json-provider",
+                "user_uid": "user-1",
+                "provider_name": "JSON",
+                "endpoint": "https://example.test",
+            },
+        ),
+        "mcp": (
+            db.create_mcp_server,
+            db.update_mcp_server,
+            db.list_mcp_servers,
+            "config",
+            {
+                "mcp_id": "json-mcp",
+                "user_uid": "user-1",
+                "mcp_name": "JSON",
+                "transport": "stdio",
+                "endpoint": None,
+            },
+        ),
+        "cron": (
+            db.create_cron_task,
+            db.update_cron_task,
+            db.get_cron_task,
+            "extra_config",
+            {
+                "task_id": "json-cron",
+                "user_uid": "user-1",
+                "conversation_uid": "conv-1",
+                "task_name": "JSON",
+                "exec_time": "2026-01-01T00:00:00",
+            },
+        ),
+    }
+    create, update, read, field, payload = operations[resource]
+    assert (await create({**payload, field: value}))["success"]
+    assert (await read(payload))["messages"][0][field] == value
+    assert (await update({**payload, field: value}))["success"]
+    assert (await read(payload))["messages"][0][field] == value
+    assert (await update({**payload, field: None}))["success"]
+    assert (await read(payload))["messages"][0][field] == value
+
+
+@pytest.mark.parametrize("field", ["metadata", "extensions"])
+async def test_message_objects_reject_encoded_text_before_allocating_a_cursor(
+    db, monkeypatch, field
+):
+    await create_user_and_conversation(db, monkeypatch)
+    payload = {"user_uid": "user-1", "conversation_uid": "conv-1"}
+    result = await db.append_message(
+        {
+            **payload,
+            "message": {
+                "message_uid": "invalid-object",
+                "role": "user",
+                field: '{"encoded":true}',
+            },
+        }
+    )
+    assert not result["success"]
+    assert result["messages"] == f"fail: Message {field} must be an object"
+    assert (await db.list_messages(payload))["messages"] == []
+    conversation = (await db.get_conversation(payload))["messages"][0]
+    assert conversation["latest_cursor"] == 0

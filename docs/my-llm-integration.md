@@ -119,8 +119,10 @@ SDK 错误及库的 `StreamError`、`IncompleteStreamError` 等异常直接向�
 
 数据库服务使用 SQLAlchemy Core + aiosqlite，SQLite 文件位置由
 `DATA_STORE.sqlite.database` 配置。`DataService.start()` 创建异步引擎并通过
-`data/schema.py` 中的表定义创建缺失表；`stop()` 等待当前事务结束后释放连接，支持重启。
-应用中的服务实例继续由 `auto_init` 管理生命周期。
+`core/services/schema.py` 中的表定义创建缺失表；`stop()` 等待当前事务结束后释放连接，支持重启。
+应用只将默认 `StoreManager` 注册到 `auto_init`。管理器在专用线程内创建独立
+事件循环，并拥有缓存、数据库、文件服务、执行器及查询 worker。启动、查询、
+消息树处理、JSON 编解码、缓存复制与持久化都在该线程内执行。
 
 每次存储操作使用独立事务。消息游标通过原子更新分配，与消息写入一起提交或回滚，
 多个服务实例访问同一数据库时也不会重复分配游标。外键约束、WAL 和 30 秒忙等待
@@ -128,5 +130,34 @@ SDK 错误及库的 `StreamError`、`IncompleteStreamError` 等异常直接向�
 避免取消导致内存数据库的连接失效。
 
 `messages` 表存储 Chat 协议字段，不接受 `developer` 角色。JSON 列为带校验的
-TEXT，`content` 和工具调用等协议字段在读取时恢复原值；`metadata`、`extensions`
-保留 JSON 文本，并支持消息游标、树分支和软删除。
+TEXT，读取时恢复 `content`、工具调用、`metadata`、`extensions` 等原生值。
+Provider 的 `model_list`、MCP 的 `config` 和 cron 的 `extra_config` 也由数据服务
+统一编解码，调用方传原生 JSON 值；字符串按字符串保存，更新时的 `None`
+表示不修改。执行器和缓存直接使用解码后的值。消息支持游标、树分支和软删除。
+
+存储代码集中在 `apix/agent/store/core`：`manager.py` 提供跨线程异步接口并管理线程，
+`runtime.py` 在线程内启停服务并调度 worker；`executor.py` 编排服务调用和缓存读写。
+`services` 下的 `data.py`、`cache.py`、
+`files.py` 分别负责 SQLite、缓存和文件。通用错误协议与 JSON 辅助集中在
+`handlers.py`、`serialization.py`。操作名与执行器方法同名，使用
+`create_*`、`list_*`、`get_*`、`update_*`、`delete_*` 等动词。
+
+包对外导出 `query_store` 和 `StoreManager`。原有 `await query_store(action, payload)`
+调用方式不变，失败结果仍转为 `RuntimeError`。独立实例通过路径配置创建，
+无需从调用方传入内部服务或事件循环：
+
+```python
+from apix.agent.store import StoreManager
+
+store = StoreManager(db_path="store.sqlite3", cache_path="cache.json", worker_count=2)
+try:
+    result = await store.query("list_conversations", {"user_uid": "user-1"})
+finally:
+    await store.stop()
+```
+
+首个查询自动启动线程，也可提前 `await store.start()`。`stop()` 拒绝新查询、
+取消待处理任务、关闭数据库并持久化缓存，最后等待线程退出；同一实例随后可以重启。
+查询执行期间调用方应保持 `payload` 不变。取消查询会放弃结果，已经开始的写入仍可能完成；
+取消某个启停等待者不会取消共享的启动或清理过程。线程隔离改善主事件循环的响应性，
+Python 计算仍共享 GIL，存储操作本身的计算量不变。

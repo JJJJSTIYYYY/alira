@@ -18,6 +18,15 @@ MessageRole = Literal["system", "user", "assistant", "tool"]
 ContentPart: TypeAlias = dict[str, Any]
 MessageContent: TypeAlias = str | list[ContentPart] | None
 
+CHAT_OPTIONAL_FIELDS = (
+    "tool_calls",
+    "refusal",
+    "reasoning_content",
+    "audio",
+    "annotations",
+    "function_call",
+)
+
 
 @dataclass(slots=True, kw_only=True)
 class ApixMessageBase:

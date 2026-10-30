@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from apix.agent.store.core.service.cache import cache_service as cache_module
-from apix.agent.store.core.service.cache.cache_service import CacheService
+from apix.agent.store.core.services import cache as cache_module
+from apix.agent.store.core.services.cache import CacheService
 
 
 @pytest.fixture
@@ -24,13 +24,13 @@ async def test_message_cache_workflow_is_copy_safe(tmp_path, payload):
         }
     ]
 
-    assert await service.backfill_messages({**payload, "messages": original}) == {
+    assert await service.set_messages({**payload, "messages": original}) == {
         "success": True,
         "messages": "success",
     }
     original[0]["content"] = "mutated outside cache"
 
-    result = await service.get_recent_messages(payload)
+    result = await service.get_messages(payload)
     assert result == {
         "success": True,
         "messages": [
@@ -58,17 +58,17 @@ async def test_message_cache_workflow_is_copy_safe(tmp_path, payload):
             },
         }
     )
-    result = await service.get_recent_messages(payload)
+    result = await service.get_messages(payload)
     assert [message["content"] for message in result["messages"]] == [
         "hello",
         "world",
     ]
 
-    assert await service.expire_immediately(payload) == {
+    assert await service.delete_messages(payload) == {
         "success": True,
         "messages": "success",
     }
-    assert await service.get_recent_messages(payload) == {
+    assert await service.get_messages(payload) == {
         "success": True,
         "messages": [],
         "cache_hit": False,
@@ -88,13 +88,13 @@ async def test_append_is_a_noop_on_cache_miss_and_empty_backfill_clears(
     )[
         "success"
     ]
-    assert not (await service.get_recent_messages(payload))["cache_hit"]
+    assert not (await service.get_messages(payload))["cache_hit"]
 
-    await service.backfill_messages(
+    await service.set_messages(
         {**payload, "messages": [{"message_uid": "message-1"}]}
     )
-    await service.backfill_messages({**payload, "messages": []})
-    assert not (await service.get_recent_messages(payload))["cache_hit"]
+    await service.set_messages({**payload, "messages": []})
+    assert not (await service.get_messages(payload))["cache_hit"]
 
 
 @pytest.mark.asyncio
@@ -103,14 +103,14 @@ async def test_ttl_expiry_is_applied_without_sleep(monkeypatch, tmp_path, payloa
     monkeypatch.setattr(cache_module.time, "time", lambda: clock[0])
     service = CacheService(tmp_path / "cache.json")
 
-    await service.backfill_messages(
+    await service.set_messages(
         {**payload, "messages": [{"message_uid": "message-1"}]}
     )
-    await service.set_expire(payload, ttl_seconds=10)
+    await service.set_messages_ttl(payload, ttl_seconds=10)
     clock[0] = 1009.9
-    assert (await service.get_recent_messages(payload))["cache_hit"]
+    assert (await service.get_messages(payload))["cache_hit"]
     clock[0] = 1010.0
-    assert not (await service.get_recent_messages(payload))["cache_hit"]
+    assert not (await service.get_messages(payload))["cache_hit"]
     assert service._cache == {}
 
 
@@ -118,25 +118,25 @@ async def test_ttl_expiry_is_applied_without_sleep(monkeypatch, tmp_path, payloa
 async def test_branch_chain_create_update_and_read(tmp_path, payload):
     service = CacheService(tmp_path / "cache.json")
 
-    assert await service.cache_current_messages_branch_chain(
+    assert await service.set_branch_chain(
         {**payload, "node_id_chain": ["root", "old"]}
     ) == {"success": True, "messages": "success"}
-    assert await service.get_current_messages_branch_chain(payload) == {
+    assert await service.get_branch_chain(payload) == {
         "success": True,
         "messages": ["root", "old"],
         "cache_hit": True,
     }
-    assert await service.update_current_messages_branch_chain_cache(
+    assert await service.update_branch_chain(
         {**payload, "parent_id": "root", "node_id": "new"}
     ) == {"success": True, "messages": "success"}
-    assert (await service.get_current_messages_branch_chain(payload))["messages"] == [
+    assert (await service.get_branch_chain(payload))["messages"] == [
         "root",
         "new",
     ]
-    assert await service.update_current_messages_branch_chain_cache(
+    assert await service.update_branch_chain(
         {**payload, "parent_id": "root", "node_id": "new"}
     ) == {"success": True, "messages": "already up to date"}
-    assert await service.update_current_messages_branch_chain_cache(
+    assert await service.update_branch_chain(
         {**payload, "parent_id": "missing", "node_id": "other"}
     ) == {"success": True, "messages": "parent_id not found in cache"}
 
@@ -145,10 +145,10 @@ async def test_branch_chain_create_update_and_read(tmp_path, payload):
 async def test_branch_chain_update_handles_cache_miss(tmp_path, payload):
     service = CacheService(tmp_path / "cache.json")
 
-    assert await service.update_current_messages_branch_chain_cache(
+    assert await service.update_branch_chain(
         {**payload, "parent_id": "root", "node_id": "new"}
     ) == {"success": True, "messages": "cache not found"}
-    assert await service.get_current_messages_branch_chain(payload) == {
+    assert await service.get_branch_chain(payload) == {
         "success": True,
         "messages": [],
         "cache_hit": False,
@@ -177,7 +177,7 @@ async def test_resource_cache_preserves_empty_hits_and_supports_invalidation(
     }
 
     for item in (first, second, other_user):
-        assert (await service.backfill_resource(item))["success"]
+        assert (await service.set_resource(item))["success"]
 
     empty_hit = await service.get_resource(first)
     assert empty_hit == {
@@ -192,7 +192,7 @@ async def test_resource_cache_preserves_empty_hits_and_supports_invalidation(
         {"skill_id": "skill-1"}
     ]
 
-    await service.invalidate_resource(
+    await service.delete_resources(
         {
             "cache_group": "skills:user-1",
             "cache_key": "item:skill-1",
@@ -201,7 +201,7 @@ async def test_resource_cache_preserves_empty_hits_and_supports_invalidation(
     assert not (await service.get_resource(second))["cache_hit"]
     assert (await service.get_resource(first))["cache_hit"]
 
-    await service.invalidate_resource({"cache_group": "skills:user-1"})
+    await service.delete_resources({"cache_group": "skills:user-1"})
     assert not (await service.get_resource(first))["cache_hit"]
     assert (await service.get_resource(other_user))["cache_hit"]
 
@@ -211,7 +211,7 @@ async def test_resource_cache_validation_errors_are_failures(tmp_path):
     service = CacheService(tmp_path / "cache.json")
 
     assert not (
-        await service.backfill_resource(
+        await service.set_resource(
             {
                 "cache_group": "providers:list",
                 "cache_key": "user-1",
@@ -220,7 +220,7 @@ async def test_resource_cache_validation_errors_are_failures(tmp_path):
         )
     )["success"]
     assert not (await service.get_resource({}))["success"]
-    assert not (await service.invalidate_resource({}))["success"]
+    assert not (await service.delete_resources({}))["success"]
 
 
 @pytest.mark.asyncio
@@ -231,23 +231,23 @@ async def test_persistence_restores_only_valid_unexpired_items(
     monkeypatch.setattr(cache_module.time, "time", lambda: clock[0])
     path = tmp_path / "nested" / "cache.json"
     first = CacheService(path)
-    await first.backfill_messages(
+    await first.set_messages(
         {**payload, "messages": [{"message_uid": "message-1"}]}
     )
-    await first.cache_current_messages_branch_chain(
+    await first.set_branch_chain(
         {**payload, "node_id_chain": ["root"]}
     )
-    first._cache["expired"] = {"value": "old", "expires_at": 1999.0}
+    first._cache["resource:expired:key"] = {"value": ["old"], "expires_at": 1999.0}
     await first.stop()
 
     stored = json.loads(path.read_text(encoding="utf-8"))
-    assert "expired" not in stored
+    assert "resource:expired:key" not in stored
     restored = CacheService(path)
     await restored.start()
-    assert (await restored.get_recent_messages(payload))["messages"] == [
+    assert (await restored.get_messages(payload))["messages"] == [
         {"message_uid": "message-1"}
     ]
-    assert (await restored.get_current_messages_branch_chain(payload))[
+    assert (await restored.get_branch_chain(payload))[
         "messages"
     ] == ["root"]
 
@@ -265,16 +265,128 @@ async def test_invalid_persistence_is_ignored(tmp_path, content):
 
 
 @pytest.mark.asyncio
+async def test_start_is_idempotent_and_preserves_live_values(tmp_path, payload):
+    path = tmp_path / "cache.json"
+    path.write_text(
+        json.dumps(
+            {
+                "memo:user-1:conversation-1": {
+                    "value": [{"content": "saved"}],
+                    "expires_at": 10**20,
+                },
+                "resource:saved:key": {"value": [], "expires_at": 10**20},
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = CacheService(path)
+    await service.set_messages({**payload, "messages": [{"content": "live"}]})
+
+    await service.start()
+    assert (await service.get_messages(payload))["messages"] == [{"content": "live"}]
+    assert (await service.get_resource(
+        {"cache_group": "saved", "cache_key": "key"}
+    ))["cache_hit"]
+
+    await service.delete_resources({"cache_group": "saved"})
+    await service.start()
+    assert not (await service.get_resource(
+        {"cache_group": "saved", "cache_key": "key"}
+    ))["cache_hit"]
+    assert (await service.get_messages(payload))["messages"] == [{"content": "live"}]
+
+
+@pytest.mark.asyncio
+async def test_corrupt_persistence_does_not_clear_live_values(tmp_path, payload):
+    path = tmp_path / "cache.json"
+    path.write_text("not JSON", encoding="utf-8")
+    service = CacheService(path)
+    await service.set_messages({**payload, "messages": [{"content": "live"}]})
+
+    await service.start()
+
+    assert (await service.get_messages(payload))["messages"] == [{"content": "live"}]
+
+
+@pytest.mark.asyncio
+async def test_persistence_rejects_invalid_shapes_but_keeps_generic_resource_lists(
+    tmp_path,
+):
+    path = tmp_path / "cache.json"
+    future = 10**20
+    path.write_text(
+        json.dumps(
+            {
+                "memo:u:bad-type": {"value": {}, "expires_at": future},
+                "memo:u:bad-item": {"value": ["not an object"], "expires_at": future},
+                "chain:u:bad-item": {"value": [{}], "expires_at": future},
+                "resource:g:bad-type": {"value": {}, "expires_at": future},
+                "resource:g:bad-ttl": {"value": [], "expires_at": "later"},
+                "resource:g:infinite-ttl": {"value": [], "expires_at": float("inf")},
+                "unknown:key": {"value": [], "expires_at": future},
+                "resource:g:valid": {"value": [1, None, {"a": []}], "expires_at": future},
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = CacheService(path)
+
+    await service.start()
+
+    assert set(service._cache) == {"resource:g:valid"}
+    assert await service.get_resource({"cache_group": "g", "cache_key": "valid"}) == {
+        "success": True,
+        "messages": [1, None, {"a": []}],
+        "cache_hit": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_same_instance_can_restore_after_stop(tmp_path, payload):
+    service = CacheService(tmp_path / "cache.json")
+    await service.start()
+    await service.set_messages({**payload, "messages": [{"content": "saved"}]})
+    await service.stop()
+    await service.delete_messages(payload)
+
+    await service.start()
+
+    assert (await service.get_messages(payload))["messages"] == [{"content": "saved"}]
+
+
+@pytest.mark.asyncio
+async def test_empty_branch_chain_remains_a_copy_safe_hit(tmp_path, payload):
+    service = CacheService(tmp_path / "cache.json")
+    chain = ["root"]
+    await service.set_branch_chain({**payload, "node_id_chain": chain})
+    chain.append("external")
+    result = await service.get_branch_chain(payload)
+    result["messages"].append("result")
+    assert (await service.get_branch_chain(payload))["messages"] == ["root"]
+
+    await service.set_branch_chain({**payload, "node_id_chain": []})
+    assert await service.get_branch_chain(payload) == {
+        "success": True,
+        "messages": [],
+        "cache_hit": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_validation_errors_are_returned_as_failures(tmp_path, payload):
     service = CacheService(tmp_path / "cache.json")
 
     for result in (
-        await service.backfill_messages({**payload, "messages": "not-a-list"}),
-        await service.cache_current_messages_branch_chain(
+        await service.set_messages({**payload, "messages": "not-a-list"}),
+        await service.set_messages({**payload, "messages": ["not-an-object"]}),
+        await service.append_message({**payload, "message": []}),
+        await service.set_branch_chain(
             {**payload, "node_id_chain": "not-a-list"}
         ),
-        await service.get_recent_messages({"user_uid": "user-1"}),
-        await service.update_current_messages_branch_chain_cache(payload),
+        await service.set_branch_chain({**payload, "node_id_chain": [{}]}),
+        await service.update_branch_chain({**payload, "node_id": [], "parent_id": "-"}),
+        await service.get_messages({"user_uid": "user-1"}),
+        await service.update_branch_chain(payload),
     ):
         assert result["success"] is False
         assert result["messages"].startswith("fail:")
@@ -284,13 +396,11 @@ def test_item_validation_and_purge_helpers(monkeypatch, tmp_path):
     monkeypatch.setattr(cache_module.time, "time", lambda: 50.0)
     service = CacheService(tmp_path / "cache.json")
     service._cache = {
-        "valid": {"value": 1, "expires_at": 51.0},
-        "expired": {"value": 2, "expires_at": 49.0},
-        "malformed": {"value": 3},
+        "resource:g:valid": {"value": [1], "expires_at": 51.0},
+        "resource:g:expired": {"value": [2], "expires_at": 49.0},
+        "resource:g:malformed": {"value": [3]},
     }
 
     service._purge_expired()
 
-    assert service._cache == {"valid": {"value": 1, "expires_at": 51.0}}
-    assert CacheService._is_valid_item(service._cache["valid"], 50.0)
-    assert not CacheService._is_valid_item([], 50.0)
+    assert service._cache == {"resource:g:valid": {"value": [1], "expires_at": 51.0}}

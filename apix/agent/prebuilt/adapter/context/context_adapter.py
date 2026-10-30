@@ -1,13 +1,18 @@
 import copy
-import json
 from typing import Any
 from xml.sax.saxutils import escape
 
-from apix.agent.core.utils.message import ApixSystemMessage, ApixUserMessage, ApixToolMessage, ApixAiMessage, AnyMessage
+from apix.agent.core.utils.context import Todo
 from apix.agent.core.utils.funcs import convert_generation_id_to_message_node_id
-from apix.agent.core.utils.context import LongtermMemory, ShorttermMemory, Skill, Todo
+from apix.agent.core.utils.message import (
+    CHAT_OPTIONAL_FIELDS,
+    AnyMessage,
+    ApixAiMessage,
+    ApixSystemMessage,
+    ApixToolMessage,
+    ApixUserMessage,
+)
 from apix.common.utils.logger import logger
-from apix.agent.store.core.service.utils.message_fields import CHAT_OPTIONAL_FIELDS, decode_message_row
 
 
 class AIContextAdapter:
@@ -239,11 +244,11 @@ class AIContextAdapter:
         todo: list[Todo] = None
 
         for row in dict_messages:
-            msg_dict = decode_message_row(copy.deepcopy(row))
+            msg_dict = copy.deepcopy(row)
             role = msg_dict.get("role")
             content = msg_dict.get("content")
-            metadata = self._decode_json_object(msg_dict.get("metadata"))
-            extensions = self._decode_json_object(msg_dict.get("extensions"))
+            metadata = msg_dict.get("metadata") or {}
+            extensions = msg_dict.get("extensions") or {}
             name = msg_dict.get("name")
             kwargs = {"metadata": metadata, "extensions": extensions}
             if msg_dict.get("message_uid"):
@@ -347,19 +352,6 @@ class AIContextAdapter:
             parent_id=parent_id,
         )
         return result
-
-    @staticmethod
-    def _decode_json_object(value: Any) -> dict[str, Any]:
-        if isinstance(value, dict):
-            return value
-        if not value or not isinstance(value, str):
-            return {}
-        try:
-            decoded = json.loads(value)
-        except (TypeError, ValueError):
-            return {}
-        return decoded if isinstance(decoded, dict) else {}
-    
 
     def drop_tool_messages(
         self,

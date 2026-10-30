@@ -146,7 +146,7 @@ class AIStoreAdapter:
             "content": content
         }
 
-        await query_store(action="insert_shortterm_memory", payload=payload)
+        await query_store(action="create_shortterm_memory", payload=payload)
         
         
     async def get_messages_from_store(
@@ -175,7 +175,7 @@ class AIStoreAdapter:
             "limit": preserved_context_window
         }
 
-        result = await query_store(action="get_messages", payload=payload)
+        result = await query_store(action="list_messages", payload=payload)
 
         messages = result.get("messages", [])
         chain = result.get("current_chain", [])
@@ -205,7 +205,7 @@ class AIStoreAdapter:
                 "conversation_uid": conversation_uid,
             }
 
-            result = await query_store(action="fetch_shortterm_memory", payload=payload)
+            result = await query_store(action="list_shortterm_memories", payload=payload)
             return result.get("messages", [])
             
         except Exception as e:
@@ -233,7 +233,7 @@ class AIStoreAdapter:
                 "workspace": workspace
             }
 
-            result = await query_store(action="fetch_longterm_memory", payload=payload)
+            result = await query_store(action="list_longterm_memories", payload=payload)
             return result.get("messages", [])
             
         except Exception as e:
@@ -257,7 +257,7 @@ class AIStoreAdapter:
                 "user_uid": user_uid,
                 "limit": 999
             }
-            result = await query_store(action="fetch_skills", payload=payload)
+            result = await query_store(action="list_skills", payload=payload)
             skills = result.get("messages", []) or []
             visible_skills = []
             for skill in skills:
