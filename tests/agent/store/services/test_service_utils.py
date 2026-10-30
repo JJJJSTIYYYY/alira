@@ -3,10 +3,10 @@ from uuid import UUID
 
 import pytest
 
-from apix.agent.store.core.services.cache import CacheService
-from apix.agent.store.core.services.data import DataService
-from apix.agent.store.core import handlers as service_utils
-from apix.agent.store.core.handlers import service_handler
+from alira.agent.store.core.services.cache import CacheService
+from alira.agent.store.core.services.data import DataService
+from alira.agent.store.core import handlers as service_utils
+from alira.agent.store.core.handlers import service_handler
 
 
 def test_cache_key_builders(tmp_path):

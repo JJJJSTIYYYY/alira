@@ -1,6 +1,6 @@
 # 模型调用与消息存储
 
-Apix 使用 `my-llm-py[all]==1.2.0` 的 `MyLLM`、`ProviderProfile` 和 `ModelProfile`。
+Alira 使用 `my-llm-py[all]==1.2.0` 的 `MyLLM`、`ProviderProfile` 和 `ModelProfile`。
 所有上游协议都显式使用 `stdio_protocol="openai_chat"`，消息和工具声明采用
 [OpenAI Chat Completions 格式](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)。
 协议转换、SDK 客户端、流累积和终止校验由 my-llm-py 负责。
@@ -9,23 +9,23 @@ Apix 使用 `my-llm-py[all]==1.2.0` 的 `MyLLM`、`ProviderProfile` 和 `ModelPr
 
 ```python
 import os
-from apix.agent.core.bot import ApixBot
-from apix.agent.core.utils.message import ApixAiMessage, ApixUserMessage
-from apix.agent.core.tool import tool
+from alira.agent.core.bot import AliraBot
+from alira.agent.core.utils.message import AliraAiMessage, AliraUserMessage
+from alira.agent.core.tool import tool
 
 @tool
 def weather(city: str) -> str:
     """查询城市天气。"""
     return f"sunny in {city}"
 
-bot = ApixBot(
+bot = AliraBot(
     provider="deepseek",
     model="deepseek-flash",
     api_key=os.environ["DEEPSEEK_API_KEY"],
 ).bind_tools([weather])
 
 async def ask():
-    history = [ApixUserMessage(content="你好")]
+    history = [AliraUserMessage(content="你好")]
     answer = await bot.invoke(history, max_tokens=1024)
     history.append(answer)
     return answer.content
@@ -37,7 +37,7 @@ async def ask_stream():
             for choice in event.get("choices", []):
                 print(choice["delta"].get("content", ""), end="")
     # stream.result 是库累积完成的 Chat assistant 字典；无需另建累积器。
-    return ApixAiMessage.from_chat(stream.result)
+    return AliraAiMessage.from_chat(stream.result)
 ```
 
 供应商与模型使用字符串选择预设；列表、逐字段官方依据和自定义注册方式见
@@ -49,7 +49,7 @@ Profile 的模型 ID、上下文窗口和模型目录使用 `Attribute(default_v
 `Parameter(path=..., default_value=..., supports=True)`。
 `name` / `source` 由 Profile 字段自动绑定，不能作为构造参数传入；
 参数支持状态由 `Parameter.supports` 表达。`Attribute` 的数据通过 `.default_value` 读取，
-`ApixBot(provider=..., model=...)` 仍接受字符串，`bot.model` 仍返回模型 ID。
+`AliraBot(provider=..., model=...)` 仍接受字符串，`bot.model` 仍返回模型 ID。
 依赖启用 `[all]`，为五种上游协议安装官方 SDK。
 DeepSeek 在 ProviderProfile、Kimi K2.x 在 ModelProfile 的 `max_tokens` Parameter
 中指定 `$.max_tokens`，K3 沿用 Chat 默认的 `$.max_completion_tokens`。
@@ -77,15 +77,15 @@ async def main():
 关闭可以重复调用；关闭后的 bot 不能再次发起请求。
 
 `tool_choice` 等厂商参数使用对应上游协议的 `extra_body` 或 profile 配置。
-工具调用由 Apix 的 `ToolNode` 发布事件并收集结果，常驻管理器负责实际执行（见[工具管理器](tool-managers.md)）：
+工具调用由 Alira 的 `ToolNode` 发布事件并收集结果，常驻管理器负责实际执行（见[工具管理器](tool-managers.md)）：
 
 ```python
-from apix.agent.core.tool import ToolNode
+from alira.agent.core.tool import ToolNode
 
 tool_node = ToolNode(weather)
 
 async def tool_round():
-    history = [ApixUserMessage(content="查询上海天气")]
+    history = [AliraUserMessage(content="查询上海天气")]
     answer = await bot.invoke(history)
     history.append(answer)
     if answer.tool_calls:
@@ -96,14 +96,14 @@ async def tool_round():
 ```
 
 当前 Ollama SDK 不能完整表达部分工具 JSON Schema 约束；my-llm-py 会抛出
-`UnsupportedCapabilityError`。Apix 保留这个异常，不静默删除约束。
+`UnsupportedCapabilityError`。Alira 保留这个异常，不静默删除约束。
 SDK 错误及库的 `StreamError`、`IncompleteStreamError` 等异常直接向调用者传播。
 完成原因和 usage 位于 Chat 流事件中；需要存储时由调用方记录到 `metadata`。
 
 ## 消息
 
-`ApixUserMessage`、`ApixSystemMessage`、`ApixAiMessage`、
-`ApixToolMessage` 保留业务属性访问方式。`to_chat()` 返回发送给模型的字段，
+`AliraUserMessage`、`AliraSystemMessage`、`AliraAiMessage`、
+`AliraToolMessage` 保留业务属性访问方式。`to_chat()` 返回发送给模型的字段，
 `to_dict()` 还包含 `message_uid`、`metadata` 和 `extensions`，返回值均独立复制。
 工具消息的 `name` 保留在应用/存储中，不作为 Chat tool 消息字段发送。
 
@@ -135,7 +135,7 @@ Provider 的 `model_list`、MCP 的 `config` 和 cron 的 `extra_config` 也由�
 统一编解码，调用方传原生 JSON 值；字符串按字符串保存，更新时的 `None`
 表示不修改。执行器和缓存直接使用解码后的值。消息支持游标、树分支和软删除。
 
-存储代码集中在 `apix/agent/store/core`：`manager.py` 提供跨线程异步接口并管理线程，
+存储代码集中在 `alira/agent/store/core`：`manager.py` 提供跨线程异步接口并管理线程，
 `runtime.py` 在线程内启停服务并调度 worker；`executor.py` 编排服务调用和缓存读写。
 `services` 下的 `data.py`、`cache.py`、
 `files.py` 分别负责 SQLite、缓存和文件。通用错误协议与 JSON 辅助集中在
@@ -147,7 +147,7 @@ Provider 的 `model_list`、MCP 的 `config` 和 cron 的 `extra_config` 也由�
 无需从调用方传入内部服务或事件循环：
 
 ```python
-from apix.agent.store import StoreManager
+from alira.agent.store import StoreManager
 
 store = StoreManager(db_path="store.sqlite3", cache_path="cache.json", worker_count=2)
 try:

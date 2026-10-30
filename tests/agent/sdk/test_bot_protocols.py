@@ -1,4 +1,4 @@
-"""Actual SDK transport tests through the library; no Apix codec or client injection."""
+"""Actual SDK transport tests through the library; no Alira codec or client injection."""
 
 import json
 
@@ -17,8 +17,8 @@ from my_llm import (
 from ollama import AsyncClient as AsyncOllama
 from openai import AsyncOpenAI
 
-from apix.agent.core.tool import ToolNode
-from apix.agent.core.utils.message import ApixAiMessage, ApixUserMessage
+from alira.agent.core.tool import ToolNode
+from alira.agent.core.utils.message import AliraAiMessage, AliraUserMessage
 from tests.agent.sdk.test_bot import make_profile_bot, weather
 
 GenAIClient = genai.Client
@@ -211,7 +211,7 @@ async def test_sdk_protocols_keep_chat_input_and_output(
         ),
         api_key="test",
     )
-    messages = [ApixUserMessage(content="hi")]
+    messages = [AliraUserMessage(content="hi")]
     if streaming:
         stream = await bot.stream(
             messages, tools=[] if protocol == "ollama" else [weather]
@@ -219,7 +219,7 @@ async def test_sdk_protocols_keep_chat_input_and_output(
         async with stream:
             events = [event async for event in stream]
         assert all("choices" in event for event in events)
-        result = ApixAiMessage.from_chat(stream.result)
+        result = AliraAiMessage.from_chat(stream.result)
     else:
         result = await bot.invoke(
             messages, tools=[] if protocol == "ollama" else [weather]
@@ -290,7 +290,7 @@ async def test_sdk_tool_round_trip_is_standard_and_executable(monkeypatch):
             supports_function_calling=Config(default_value=True),
         ),
     ).bind_tools([weather])
-    prompt = ApixUserMessage(content="weather?")
+    prompt = AliraUserMessage(content="weather?")
     first = await bot.invoke([prompt])
     output = await ToolNode(weather).execute({"messages": [first]})
     tool_result = output.update["messages"][0]

@@ -1,4 +1,4 @@
-"""Apix application responsibilities around the library's standard Chat API."""
+"""Alira application responsibilities around the library's standard Chat API."""
 
 from copy import deepcopy
 from dataclasses import replace
@@ -8,12 +8,12 @@ from uuid import uuid4
 import pytest
 from my_llm import Attribute, Config, ModelProfile, Parameter, ProviderProfile
 
-from apix.agent.core.bot import ApixBot, BaseProvider, CustomProvider
-from apix.agent.core.tool import ToolNode, tool
-from apix.agent.core.utils.message import (
-    ApixAiMessage,
-    ApixSystemMessage,
-    ApixUserMessage,
+from alira.agent.core.bot import AliraBot, BaseProvider, CustomProvider
+from alira.agent.core.tool import ToolNode, tool
+from alira.agent.core.utils.message import (
+    AliraAiMessage,
+    AliraSystemMessage,
+    AliraUserMessage,
 )
 
 
@@ -32,7 +32,7 @@ def make_profile_bot(*, provider, model, **kwargs):
         )
     )
     try:
-        return ApixBot(provider=name, model=model.model.default_value, **kwargs)
+        return AliraBot(provider=name, model=model.model.default_value, **kwargs)
     finally:
         BaseProvider.unregister(name)
 
@@ -98,8 +98,8 @@ async def test_invoke_orders_context_and_delegates_standard_messages_and_options
     generate = AsyncMock(return_value=deepcopy(response))
     monkeypatch.setattr(bot.llm, "generate", generate)
     result = await bot.invoke(
-        [ApixUserMessage(content="weather", extensions={"active_file": "notes"})],
-        [ApixSystemMessage(content="global")],
+        [AliraUserMessage(content="weather", extensions={"active_file": "notes"})],
+        [AliraSystemMessage(content="global")],
         reasoning=True,
         max_tokens=40,
     )
@@ -109,7 +109,7 @@ async def test_invoke_orders_context_and_delegates_standard_messages_and_options
     assert sent["messages"][2] == {"role": "user", "content": "weather"}
     assert sent["tools"] == [weather.get_schema()]
     assert sent["reasoning"] is True and sent["max_tokens"] == 40
-    assert isinstance(result, ApixAiMessage)
+    assert isinstance(result, AliraAiMessage)
     assert result.tool_calls == [call]
     assert result.reasoning_content == "why"
     assert result.extensions == {}

@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from apix.agent.store.utils.message_node_helper import MessageNodeHelper
+from alira.agent.store.utils.message_node_helper import MessageNodeHelper
 
 
 def _row(

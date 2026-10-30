@@ -8,8 +8,8 @@ import pytest_asyncio
 from apixis.core.event import aget_event_loop, aget_event_pipe, factory
 from apixis.core.graph import NodeGraph
 
-from apix.agent.core.tool.utils.manager import ToolManager
-from apix.common.lifespan import auto_init
+from alira.agent.core.tool.utils.manager import ToolManager
+from alira.common.lifespan import auto_init
 
 
 @pytest_asyncio.fixture(autouse=True, loop_scope="session")

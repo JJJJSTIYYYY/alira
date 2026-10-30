@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from apix.agent.store.core.services import files as file_module
-from apix.agent.store.core.services.files import FileService
+from alira.agent.store.core.services import files as file_module
+from alira.agent.store.core.services.files import FileService
 
 
 def make_skill_zip(path: Path, frontmatter: str | None, *, nested=True) -> Path:
@@ -73,9 +73,9 @@ async def test_save_files_reports_invalid_payloads(tmp_path, payload_factory):
 async def test_import_skill_packages_moves_valid_zip_and_extracts_metadata(
     monkeypatch, tmp_path
 ):
-    monkeypatch.setattr(file_module, "APIX_BASE_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(file_module, "ALIRA_BASE_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(
-        "apix.agent.store.core.services.files.uuid4",
+        "alira.agent.store.core.services.files.uuid4",
         lambda: SimpleNamespace(hex="fixedid")
     )
     source = make_skill_zip(
@@ -98,7 +98,7 @@ async def test_import_skill_packages_moves_valid_zip_and_extracts_metadata(
         "skill_description": "Demo skill",
         "skill_version": "2.1.0",
         "package_path": str(
-            tmp_path / "data" / "user-1" / "apix_skills" / "skill.zip"
+            tmp_path / "data" / "user-1" / "alira_skills" / "skill.zip"
         ),
         "package_size": expected_size,
         "package_sha256": expected_hash,
@@ -109,7 +109,7 @@ async def test_import_skill_packages_moves_valid_zip_and_extracts_metadata(
 
 @pytest.mark.asyncio
 async def test_import_skill_packages_uses_default_version(monkeypatch, tmp_path):
-    monkeypatch.setattr(file_module, "APIX_BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(file_module, "ALIRA_BASE_DIR", str(tmp_path))
     source = make_skill_zip(
         tmp_path / "skill.zip",
         "---\nname: demo\ndescription: Demo skill\n---\nbody\n",
@@ -128,8 +128,8 @@ async def test_import_skill_packages_uses_default_version(monkeypatch, tmp_path)
 async def test_import_skill_packages_adds_incrementing_index_on_name_conflict(
     monkeypatch, tmp_path
 ):
-    monkeypatch.setattr(file_module, "APIX_BASE_DIR", str(tmp_path / "data"))
-    skills_dir = tmp_path / "data" / "user-1" / "apix_skills"
+    monkeypatch.setattr(file_module, "ALIRA_BASE_DIR", str(tmp_path / "data"))
+    skills_dir = tmp_path / "data" / "user-1" / "alira_skills"
     skills_dir.mkdir(parents=True)
     existing = skills_dir / "skill.zip"
     existing.write_bytes(b"existing package must not be overwritten")
@@ -156,7 +156,7 @@ async def test_import_skill_packages_adds_incrementing_index_on_name_conflict(
 
 @pytest.mark.asyncio
 async def test_same_package_name_is_isolated_by_user(monkeypatch, tmp_path):
-    monkeypatch.setattr(file_module, "APIX_BASE_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(file_module, "ALIRA_BASE_DIR", str(tmp_path / "data"))
     frontmatter = "---\nname: demo\ndescription: Demo skill\n---\nbody\n"
     first = make_skill_zip(tmp_path / "first" / "skill.zip", frontmatter)
     second = make_skill_zip(tmp_path / "second" / "skill.zip", frontmatter)
@@ -170,10 +170,10 @@ async def test_same_package_name_is_isolated_by_user(monkeypatch, tmp_path):
     )
 
     assert Path(first_result["messages"][0]["package_path"]) == (
-        tmp_path / "data" / "user-1" / "apix_skills" / "skill.zip"
+        tmp_path / "data" / "user-1" / "alira_skills" / "skill.zip"
     )
     assert Path(second_result["messages"][0]["package_path"]) == (
-        tmp_path / "data" / "user-2" / "apix_skills" / "skill.zip"
+        tmp_path / "data" / "user-2" / "alira_skills" / "skill.zip"
     )
 
 
@@ -191,8 +191,8 @@ async def test_same_package_name_is_isolated_by_user(monkeypatch, tmp_path):
 async def test_invalid_skill_package_is_deleted(
     monkeypatch, tmp_path, frontmatter, error_text
 ):
-    monkeypatch.setattr(file_module, "APIX_BASE_DIR", str(tmp_path))
-    skills_dir = tmp_path / "user-1" / "apix_skills"
+    monkeypatch.setattr(file_module, "ALIRA_BASE_DIR", str(tmp_path))
+    skills_dir = tmp_path / "user-1" / "alira_skills"
     source = make_skill_zip(tmp_path / "invalid.zip", frontmatter)
 
     result = await FileService().import_skill_packages(
@@ -209,7 +209,7 @@ async def test_invalid_skill_package_is_deleted(
 async def test_import_skill_packages_rejects_non_zip_without_moving_it(
     monkeypatch, tmp_path
 ):
-    monkeypatch.setattr(file_module, "APIX_BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(file_module, "ALIRA_BASE_DIR", str(tmp_path))
     source = tmp_path / "skill.txt"
     source.write_text("not a zip", encoding="utf-8")
 
@@ -235,7 +235,7 @@ async def test_import_skill_packages_normalizes_missing_fields(payload, missing_
 
 @pytest.mark.asyncio
 async def test_import_skill_packages_deletes_corrupt_zip(monkeypatch, tmp_path):
-    monkeypatch.setattr(file_module, "APIX_BASE_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(file_module, "ALIRA_BASE_DIR", str(tmp_path / "data"))
     source = tmp_path / "invalid.zip"
     source.write_bytes(b"not a ZIP archive")
 
@@ -246,12 +246,12 @@ async def test_import_skill_packages_deletes_corrupt_zip(monkeypatch, tmp_path):
     assert result["success"] is False
     assert "Invalid skill package invalid.zip" in result["messages"]
     assert not source.exists()
-    assert list((tmp_path / "data" / "user-1" / "apix_skills").iterdir()) == []
+    assert list((tmp_path / "data" / "user-1" / "alira_skills").iterdir()) == []
 
 
 @pytest.mark.asyncio
 async def test_skill_inspection_keeps_event_loop_available(monkeypatch, tmp_path):
-    monkeypatch.setattr(file_module, "APIX_BASE_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(file_module, "ALIRA_BASE_DIR", str(tmp_path / "data"))
     source = make_skill_zip(
         tmp_path / "skill.zip",
         "---\nname: demo\ndescription: Demo skill\n---\nbody\n",

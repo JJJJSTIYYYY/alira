@@ -12,7 +12,7 @@ from my_llm import (
     UnsupportedCapabilityError,
 )
 
-from apix.agent.core.bot import BaseProvider
+from alira.agent.core.bot import BaseProvider
 from tests.agent.sdk.test_bot import make_profile_bot
 from tests.agent.sdk.test_bot_protocols import install_sdk
 

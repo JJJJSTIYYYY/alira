@@ -16,7 +16,7 @@
 目录结构：
 
 ```text
-apix/agent/core/tool/
+alira/agent/core/tool/
 ├── base.py                 # BaseTool 与共享调用契约
 ├── tool_node.py            # 图节点编排
 ├── function/               # 函数工具、注入上下文、FunctionToolManager
@@ -24,7 +24,7 @@ apix/agent/core/tool/
 └── utils/                  # 常驻服务、类型化请求、结果事件与取消协议
 ```
 
-旧的 `tool/tool.py` 和 `tool/tool_context.py` 已迁入 `function/`。公共导入继续使用 `apix.agent.core.tool`，MCP 类型从 `apix.agent.core.tool.mcp` 导入。
+旧的 `tool/tool.py` 和 `tool/tool_context.py` 已迁入 `function/`。公共导入继续使用 `alira.agent.core.tool`，MCP 类型从 `alira.agent.core.tool.mcp` 导入。
 
 ## 一次调用如何流转
 
@@ -35,7 +35,7 @@ apix/agent/core/tool/
 3. 函数管理器创建执行任务。MCP 管理器校验身份和工具目录，将请求路由到对应 Runtime 的调用事件。
 4. Runtime 的持续订阅把请求放入收件队列；长期任务消费队列，为每次调用创建受它管理的并发子任务。
 5. 工具返回后，请求上下文保存结果、异常和耗时，执行者发布独立的结果事件。
-6. ToolNode 按模型调用顺序生成 `ApixToolMessage`，返回一个 Command。
+6. ToolNode 按模型调用顺序生成 `AliraToolMessage`，返回一个 Command。
 
 请求事件的 `point="processed"` 只说明请求已交给执行者。调用完成由独立结果事件表示，调用方不会在远端工具返回前提前结束。结果按请求 ID 关联，即使模型复用 ToolCall ID，也不会串用结果。
 
@@ -44,7 +44,7 @@ apix/agent/core/tool/
 ## 函数工具
 
 ```python
-from apix.agent.core.tool import FunctionToolManager, ToolNode, tool
+from alira.agent.core.tool import FunctionToolManager, ToolNode, tool
 
 @tool
 async def weather(city: str) -> str:
@@ -61,8 +61,8 @@ tools = ToolNode(functions, bind_llm_node="model")
 ## MCP 工具
 
 ```python
-from apix.agent.core.tool import FunctionToolManager, ToolNode
-from apix.agent.core.tool.mcp import MCPToolManager
+from alira.agent.core.tool import FunctionToolManager, ToolNode
+from alira.agent.core.tool.mcp import MCPToolManager
 
 identity = {"id": "user-1", "platform": "web", "conversation_uid": "chat-1"}
 functions = FunctionToolManager([weather])
@@ -77,7 +77,7 @@ tools = ToolNode([functions, mcp], identity=identity, bind_llm_node="model")
 
 也可以将 `await mcp.get_mcp_tools(meta, identity)` 返回的部分工具直接交给 ToolNode。模型绑定接受 ToolNode 或 BaseTool 列表；MCPTool 不继承函数工具 Tool。
 
-客户端按 `(id, platform, conversation_uid)` 隔离，同一身份下再按 `mcp_id` 复用。发现接口要求完整 ApixIdentity；执行时检查 `state["target"]` 与发现身份一致，校验通过后才访问连接。
+客户端按 `(id, platform, conversation_uid)` 隔离，同一身份下再按 `mcp_id` 复用。发现接口要求完整 AliraIdentity；执行时检查 `state["target"]` 与发现身份一致，校验通过后才访问连接。
 
 旧的 `config.lifecycle`、`agent_invoke` 和 `tool_calls` 资源作用域已移除。连接在工具批次和图调用结束后保持打开，通过以下入口显式回收：
 

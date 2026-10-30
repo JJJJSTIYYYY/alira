@@ -7,9 +7,9 @@
 ## 使用与管理
 
 ```python
-from apix.agent.core.bot import ApixBot, BaseProvider
+from alira.agent.core.bot import AliraBot, BaseProvider
 
-bot = ApixBot(provider="moonshot", model="kimi-k2.6", api_key="YOUR_API_KEY")
+bot = AliraBot(provider="moonshot", model="kimi-k2.6", api_key="YOUR_API_KEY")
 
 async def ask():
     async with bot:
@@ -48,7 +48,7 @@ Profile 自动绑定，不能手动传入；请求参数的 source 为 input，�
 `get_profile()` 返回包含模型目录的原生配置副本，不解析环境变量或应用调用时的凭据覆盖。
 模型增删复用原生 `ProviderProfile.add_models()` / `delete_model()`，配置合并、能力验证、
 请求构造、工具关联、SDK 客户端与流状态仍由 MyLLM 负责。
-Provider 只负责配置目录和创建 MyLLM；ApixBot 直接调用 `MyLLM.generate()`。
+Provider 只负责配置目录和创建 MyLLM；AliraBot 直接调用 `MyLLM.generate()`。
 token 字段通过原生 `max_tokens=Parameter(...)` 声明，推理参数按 profile 验证和映射。
 
 ### 通用 effort 与上游档位
@@ -171,7 +171,7 @@ Gemini 的 thinking_config 和 max_output_tokens 由 MyLLM 原生 Gemini Decoder
 
 ## 应用约定与兼容边界
 
-- 本地 provider 名称是 Apix 的注册键，不是新的厂商参数。
+- 本地 provider 名称是 Alira 的注册键，不是新的厂商参数。
 - 显式 api_key 优先于 profile 的 Parameter.default_value，再读取对应厂商环境变量；覆盖凭据时保留 Parameter 的认证路径。`api_key=omit` 禁用自动凭据读取，显式传入密钥时使用协议默认路径。Ollama 默认使用 Authorization 头，调用方需提供完整的 Bearer 前缀。内置 provider 缺少凭据时报错，避免兼容 OpenAI SDK 意外读取另一家厂商的 OPENAI_API_KEY。
 - `usage_mode=Config(default_value="native", ...)`、能力标记、Parameter 路径和 omit 的语义来自 [my-llm-py 1.2.0 配置指南](https://github.com/JJJJSTIYYYY/my-llm/blob/main/docs/reference/configuration.md)。它们在本地配置，实际请求仍使用上表的官方原生字段。
 - `max_tokens` Parameter 的 path 从 SDK 参数字典根部开始；`$.max_tokens` 直接传 SDK 参数，`$.extra_body.max_tokens` 经 extra_body 传入。路径由库解释，项目不维护转换层。不传调用参数时，仅在原生目标字段缺失时补 profile 默认预算；显式正整数覆盖目标值，`max_tokens=None` 写入实际空值，`max_tokens=omit` 删除本次目标键。Profile 的 `max_tokens=None` 继承整份 Parameter，`max_tokens=omit` 禁用自动写入并保留手动原生字段。输入参数不被修改。
@@ -191,7 +191,7 @@ CustomProvider 不猜测远端模型能力；由调用方提供有文档依据�
 
 ```python
 from my_llm import Attribute, Config, ModelProfile, Parameter, ProviderProfile, omit
-from apix.agent.core.bot import ApixBot, BaseProvider, CustomProvider
+from alira.agent.core.bot import AliraBot, BaseProvider, CustomProvider
 
 custom = CustomProvider(
     name="my-service",
@@ -209,7 +209,7 @@ custom = CustomProvider(
     ),
 )
 BaseProvider.register(custom)
-bot = ApixBot(provider="my-service", model="your-model")
+bot = AliraBot(provider="my-service", model="your-model")
 ```
 
 更改已有配置时，先获取隔离副本，使用库的模型目录方法，再显式替换注册项：

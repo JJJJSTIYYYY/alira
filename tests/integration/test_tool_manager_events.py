@@ -17,8 +17,8 @@ from apixis.core.event import (
 )
 from apixis.core.graph import AutoMerge, GraphManager
 
-from apix.agent.core.tool import FunctionToolManager, ToolNode
-from apix.agent.core.utils.message import ApixAiMessage
+from alira.agent.core.tool import FunctionToolManager, ToolNode
+from alira.agent.core.utils.message import AliraAiMessage
 
 pytestmark = pytest.mark.parametrize(
     "event_runtime_capacity",
@@ -46,7 +46,7 @@ def event_runtime_capacity(request, monkeypatch):
 def _state(name: str, *, value: str = "ok", call_id: str = "call") -> dict:
     return {
         "messages": [
-            ApixAiMessage(
+            AliraAiMessage(
                 tool_calls=[
                     {
                         "id": call_id,

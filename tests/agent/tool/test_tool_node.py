@@ -24,20 +24,20 @@ import pytest
 from apixis.core.graph import Command, GraphManager
 from pydantic import BaseModel
 
-from apix.agent.core.tool import (
+from alira.agent.core.tool import (
     AutoInjection,
     Tool,
     ToolInjectionContext,
     ToolNode,
     tool,
 )
-from apix.agent.core.utils.exception import InvalidToolArgsError
-from apix.agent.core.utils.message import (
-    ApixAiMessage,
-    ApixToolMessage,
+from alira.agent.core.utils.exception import InvalidToolArgsError
+from alira.agent.core.utils.message import (
+    AliraAiMessage,
+    AliraToolMessage,
 )
 
-tool_module = importlib.import_module("apix.agent.core.tool.function.tool")
+tool_module = importlib.import_module("alira.agent.core.tool.function.tool")
 
 
 class TextUnit(Enum):
@@ -100,17 +100,17 @@ def _tool_call(
 def _state_with_calls(*calls: dict) -> dict:
     return {
         "messages": [
-            ApixAiMessage(tool_calls=list(calls)),
+            AliraAiMessage(tool_calls=list(calls)),
         ]
     }
 
 
-def _message_from(command: Command) -> ApixToolMessage:
+def _message_from(command: Command) -> AliraToolMessage:
     messages = command.update["messages"]
     assert isinstance(messages, list)
     assert len(messages) == 1
     message = messages[0]
-    assert isinstance(message, ApixToolMessage)
+    assert isinstance(message, AliraToolMessage)
     return message
 
 
@@ -307,7 +307,7 @@ async def test_string_result_creates_tool_message_with_runtime_metadata():
 @pytest.mark.asyncio
 async def test_tool_message_result_is_stringified_without_mutation():
     """Returned message objects are plain values, with no special treatment."""
-    returned_message = ApixToolMessage(
+    returned_message = AliraToolMessage(
         content="finished",
         name="stale-name",
         metadata={"stale": True},
@@ -315,7 +315,7 @@ async def test_tool_message_result_is_stringified_without_mutation():
     )
     expected = str(returned_message)
 
-    def message() -> ApixToolMessage:
+    def message() -> AliraToolMessage:
         return returned_message
 
     command = await ToolNode(message).execute(
@@ -402,8 +402,8 @@ async def test_invalid_command_shape_is_stringified():
     [
         {},
         {"messages": []},
-        {"messages": [ApixToolMessage(content="old", tool_call_id="old")]},
-        {"messages": [ApixAiMessage()]},
+        {"messages": [AliraToolMessage(content="old", tool_call_id="old")]},
+        {"messages": [AliraAiMessage()]},
     ],
 )
 async def test_tool_node_without_pending_calls_returns_empty_command_list(
@@ -891,7 +891,7 @@ async def test_tool_output_uses_configured_messages_key():
     command = await node.execute(
         {
             "history": [
-                ApixAiMessage(
+                AliraAiMessage(
                     tool_calls=[
                         _tool_call("<lambda>", "call-history"),
                     ]
@@ -902,7 +902,7 @@ async def test_tool_output_uses_configured_messages_key():
     assert set(command.update) == {"history"}
     assert command.goto == "model"
     message = command.update["history"][0]
-    assert isinstance(message, ApixToolMessage)
+    assert isinstance(message, AliraToolMessage)
     assert message.content == "finished"
     assert message.tool_call_id == "call-history"
 
@@ -915,7 +915,7 @@ async def test_tool_node_execute_rejects_invalid_state_and_messages():
     with pytest.raises(ValueError, match="must be a message list"):
         await node.execute({"messages": "invalid"})
     with pytest.raises(ValueError, match="missing required fields"):
-        await node.execute({"messages": [ApixAiMessage(tool_calls=[{}])]})
+        await node.execute({"messages": [AliraAiMessage(tool_calls=[{}])]})
 
 
 @pytest.mark.asyncio
@@ -999,10 +999,10 @@ async def test_every_tool_result_is_stringified(value):
 
 
 def test_public_function_and_mcp_tools_share_the_base_contract():
-    from apix.agent.core.tool import BaseTool
-    from apix.agent.core.tool.function import Tool as function_tool
-    from apix.agent.core.tool.function import tool as decorator
-    from apix.agent.core.tool.mcp import MCPTool
+    from alira.agent.core.tool import BaseTool
+    from alira.agent.core.tool.function import Tool as function_tool
+    from alira.agent.core.tool.function import tool as decorator
+    from alira.agent.core.tool.mcp import MCPTool
 
     assert Tool is tool_module.Tool is function_tool
     assert tool is tool_module.tool is decorator

@@ -6,12 +6,12 @@ from contextlib import closing
 import pytest
 from sqlalchemy import text
 
-from apix.agent.store.core.services.data import DataService
+from alira.agent.store.core.services.data import DataService
 
 
 @pytest.fixture
 async def db(tmp_path):
-    service = DataService(tmp_path / "nested" / "apix.sqlite3")
+    service = DataService(tmp_path / "nested" / "alira.sqlite3")
     await service.start()
     try:
         yield service

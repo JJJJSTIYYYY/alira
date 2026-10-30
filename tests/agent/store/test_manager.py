@@ -8,15 +8,15 @@ from uuid import UUID
 import pytest
 from sqlalchemy import text
 
-import apix.agent.store as store_package
-from apix.agent.store import StoreManager, query_store
-from apix.agent.store.core import manager as manager_module
-from apix.agent.store.core import runtime as runtime_module
-from apix.agent.store.core.executor import StoreExecutor
-from apix.agent.store.core.services.cache import CacheService
-from apix.agent.store.core.services.data import DataService
-from apix.agent.store.utils.message_node_helper import MessageNodeHelper
-from apix.common.lifespan.auto_init import auto_init
+import alira.agent.store as store_package
+from alira.agent.store import StoreManager, query_store
+from alira.agent.store.core import manager as manager_module
+from alira.agent.store.core import runtime as runtime_module
+from alira.agent.store.core.executor import StoreExecutor
+from alira.agent.store.core.services.cache import CacheService
+from alira.agent.store.core.services.data import DataService
+from alira.agent.store.utils.message_node_helper import MessageNodeHelper
+from alira.common.lifespan.auto_init import auto_init
 
 
 async def wait_for_thread(event):

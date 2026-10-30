@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import pytest
 
-from apix.agent.prebuilt.adapter.context.context_adapter import AIContextAdapter
-from apix.agent.core.utils.message import (
-    ApixAiMessage,
-    ApixSystemMessage,
-    ApixToolMessage,
-    ApixUserMessage,
+from alira.agent.prebuilt.adapter.context.context_adapter import AIContextAdapter
+from alira.agent.core.utils.message import (
+    AliraAiMessage,
+    AliraSystemMessage,
+    AliraToolMessage,
+    AliraUserMessage,
 )
 
 
-def tool_message(call_id: str, content: str = "result") -> ApixToolMessage:
-    return ApixToolMessage(
+def tool_message(call_id: str, content: str = "result") -> AliraToolMessage:
+    return AliraToolMessage(
         content=content,
         name="tool",
         tool_call_id=call_id,
@@ -75,7 +75,7 @@ def test_build_user_context_uses_fallbacks_and_ignores_invalid_sections():
 
 def testensure_tool_messages_reorders_deduplicates_and_fills_missing():
     adapter = AIContextAdapter()
-    assistant = ApixAiMessage(
+    assistant = AliraAiMessage(
         tool_calls=[
             {"id": "a", "type": "function", "function": {"name": "first", "arguments": '{}'}},
             {"id": "b", "type": "function", "function": {"name": "second", "arguments": '{}'}},
@@ -84,7 +84,7 @@ def testensure_tool_messages_reorders_deduplicates_and_fills_missing():
     first_b = tool_message("b", "B")
     duplicate_b = tool_message("b", "duplicate")
     unmatched = tool_message("other", "other")
-    following = ApixUserMessage(content="next")
+    following = AliraUserMessage(content="next")
     messages = [assistant, first_b, duplicate_b, unmatched, following]
     identity = id(messages)
 
@@ -102,8 +102,8 @@ def testensure_tool_messages_reorders_deduplicates_and_fills_missing():
 def test_ensure_tool_message_handles_empty_and_non_tool_call_messages():
     adapter = AIContextAdapter()
     messages = [
-        ApixUserMessage(content="question"),
-        ApixAiMessage(content="answer"),
+        AliraUserMessage(content="question"),
+        AliraAiMessage(content="answer"),
     ]
 
     adapter.ensure_tool_message([])
@@ -126,13 +126,13 @@ def test_ensure_tool_message_handles_empty_and_non_tool_call_messages():
 def testensure_tool_messages_rejects_ambiguous_calls(tool_calls):
     with pytest.raises(ValueError):
         AIContextAdapter().ensure_tool_message(
-            [ApixAiMessage(tool_calls=tool_calls)]
+            [AliraAiMessage(tool_calls=tool_calls)]
         )
 
 
 def test_convert_persisted_messages_handles_todo_context_abort_and_json():
     adapter = AIContextAdapter()
-    messages, todo = adapter.convert_to_apix_messages(
+    messages, todo = adapter.convert_to_alira_messages(
         [
             {
                 "role": "info",
@@ -169,7 +169,7 @@ def test_convert_persisted_messages_handles_todo_context_abort_and_json():
 
 def test_convert_persisted_messages_covers_all_roles_defaults_and_skips():
     adapter = AIContextAdapter()
-    messages, todo = adapter.convert_to_apix_messages(
+    messages, todo = adapter.convert_to_alira_messages(
         [
             {"role": "user", "content": ""},
             {
@@ -222,7 +222,7 @@ def test_convert_persisted_messages_covers_all_roles_defaults_and_skips():
 
 
 def test_convert_persisted_messages_strict_mode_fills_missing_tool_output():
-    messages, _ = AIContextAdapter().convert_to_apix_messages(
+    messages, _ = AIContextAdapter().convert_to_alira_messages(
         [
             {
                 "role": "assistant",
@@ -234,13 +234,13 @@ def test_convert_persisted_messages_strict_mode_fills_missing_tool_output():
     )
 
     assert len(messages) == 2
-    assert isinstance(messages[1], ApixToolMessage)
+    assert isinstance(messages[1], AliraToolMessage)
     assert messages[1].tool_call_id == "missing"
 
 
 def test_convert_to_dict_message_filter():
     adapter = AIContextAdapter()
-    message = ApixAiMessage(
+    message = AliraAiMessage(
         message_uid="message-1",
         content="answer",
         reasoning_content="why",
@@ -256,16 +256,16 @@ def test_convert_to_dict_message_filter():
         "reasoning_content": "why",
         "tool_calls": [],
     }
-    with pytest.raises(TypeError, match="ApixAiMessage or ApixToolMessage"):
+    with pytest.raises(TypeError, match="AliraAiMessage or AliraToolMessage"):
         adapter.convert_to_dict_message(
-            ApixUserMessage(content="no"),
+            AliraUserMessage(content="no"),
             "generation",
         )
 
 
 def test_convert_tool_message_to_full_dict_uses_independent_payloads():
     adapter = AIContextAdapter()
-    message = ApixToolMessage(
+    message = AliraToolMessage(
         message_uid="tool-id",
         name="search",
         content="result",
@@ -286,7 +286,7 @@ def test_convert_tool_message_to_full_dict_uses_independent_payloads():
         "role": "tool",
         "name": "search",
         "content": "result",
-        "node_id": "eneration-id-apix",
+        "node_id": "eneration-id-alira",
         "parent_id": "parent-id",
         "metadata": {"duration": 1},
         "extensions": {"custom": {"value": 1}},
@@ -298,7 +298,7 @@ def test_convert_tool_message_to_full_dict_uses_independent_payloads():
     assert message.extensions["custom"] == {"value": 1}
 
     filtered = adapter.convert_to_dict_message(
-        ApixToolMessage(content="", tool_call_id="call-2"),
+        AliraToolMessage(content="", tool_call_id="call-2"),
         "generation-id",
         filter=True,
     )
@@ -312,7 +312,7 @@ def test_convert_tool_message_to_full_dict_uses_independent_payloads():
 def test_drop_tool_messages_supports_complete_and_streamed_write_todos_calls():
     adapter = AIContextAdapter()
     before = tool_message("before")
-    writer = ApixAiMessage(
+    writer = AliraAiMessage(
         tool_calls=[
             {"id": "todo", "type": "function", "function": {"name": "write_todos", "arguments": '{}'}}
         ]
@@ -339,7 +339,7 @@ def test_drop_tool_messages_supports_complete_and_streamed_write_todos_calls():
 
 def test_drop_tool_messages_preserves_empty_input_tail_and_non_tool_messages():
     adapter = AIContextAdapter()
-    user = ApixUserMessage(content="question")
+    user = AliraUserMessage(content="question")
     old_tool = tool_message("old")
     recent_tool = tool_message("recent")
 
@@ -358,14 +358,14 @@ def test_drop_tool_messages_preserves_empty_input_tail_and_non_tool_messages():
 def test_split_messages_keeps_ai_tool_chain_together():
     adapter = AIContextAdapter()
     messages = [
-        ApixUserMessage(content="old"),
-        ApixAiMessage(
+        AliraUserMessage(content="old"),
+        AliraAiMessage(
             tool_calls=[
                 {"id": "a", "type": "function", "function": {"name": "tool", "arguments": '{}'}}
             ]
         ),
         tool_message("a"),
-        ApixUserMessage(content="new"),
+        AliraUserMessage(content="new"),
     ]
 
     summarized, recent = adapter.split_messages(messages, keep_recent=2)
@@ -378,9 +378,9 @@ def test_split_messages_keeps_ai_tool_chain_together():
 
 def test_split_messages_auto_mode_uses_latest_user_or_keeps_everything():
     adapter = AIContextAdapter()
-    first = ApixAiMessage(content="old")
-    user = ApixUserMessage(content="latest")
-    answer = ApixAiMessage(content="answer")
+    first = AliraAiMessage(content="old")
+    user = AliraUserMessage(content="latest")
+    answer = AliraAiMessage(content="answer")
 
     assert adapter.split_messages([first, user, answer]) == (
         [first],
@@ -394,7 +394,7 @@ def test_split_messages_auto_mode_uses_latest_user_or_keeps_everything():
 
 def test_split_messages_handles_complete_and_orphan_tool_blocks():
     adapter = AIContextAdapter()
-    assistant = ApixAiMessage(
+    assistant = AliraAiMessage(
         tool_calls=[
             {"id": "a", "type": "function", "function": {"name": "tool", "arguments": '{}'}},
             {"id": "b", "type": "function", "function": {"name": "tool", "arguments": '{}'}},
@@ -402,7 +402,7 @@ def test_split_messages_handles_complete_and_orphan_tool_blocks():
     )
     first_tool = tool_message("a")
     second_tool = tool_message("b")
-    tail = ApixUserMessage(content="tail")
+    tail = AliraUserMessage(content="tail")
 
     summarized, recent = adapter.split_messages(
         [assistant, first_tool, second_tool, tail],
@@ -418,7 +418,7 @@ def test_split_messages_handles_complete_and_orphan_tool_blocks():
     assert summarized == []
     assert recent == [assistant, first_tool, second_tool, tail]
 
-    orphan_prefix = ApixUserMessage(content="prefix")
+    orphan_prefix = AliraUserMessage(content="prefix")
     summarized, recent = adapter.split_messages(
         [orphan_prefix, first_tool, second_tool, tail],
         keep_recent=2,
@@ -427,19 +427,19 @@ def test_split_messages_handles_complete_and_orphan_tool_blocks():
     assert recent == [tail]
 
 
-def test_filter_apix_messages_handles_chunks_and_ignores_empty_ai_messages():
+def test_filter_alira_messages_handles_chunks_and_ignores_empty_ai_messages():
     adapter = AIContextAdapter()
-    system = ApixSystemMessage(content="system")
-    chunk = ApixAiMessage(
+    system = AliraSystemMessage(content="system")
+    chunk = AliraAiMessage(
         message_uid="chunk-id",
         reasoning_content="why",
         content="answer",
     )
-    systems, messages, index = adapter.filter_apix_messages(
+    systems, messages, index = adapter.filter_alira_messages(
         [
             system,
-            ApixUserMessage(content="question", name="user"),
-            ApixAiMessage(content=None, reasoning_content=None),
+            AliraUserMessage(content="question", name="user"),
+            AliraAiMessage(content=None, reasoning_content=None),
             chunk,
             tool_message("ignored"),
         ]
@@ -452,15 +452,15 @@ def test_filter_apix_messages_handles_chunks_and_ignores_empty_ai_messages():
     assert index == "chunk-id"
 
 
-def test_filter_apix_messages_can_drop_reasoning_and_keep_ai_content():
-    assistant = ApixAiMessage(
+def test_filter_alira_messages_can_drop_reasoning_and_keep_ai_content():
+    assistant = AliraAiMessage(
         message_uid="assistant-id",
         content="answer",
         reasoning_content="private reasoning",
         name="Alice",
     )
 
-    systems, messages, index = AIContextAdapter().filter_apix_messages(
+    systems, messages, index = AIContextAdapter().filter_alira_messages(
         [assistant],
         keep_reasoning=False,
     )

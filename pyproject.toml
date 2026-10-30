@@ -1,7 +1,7 @@
 [project]
-name = "apix"
+name = "alira"
 version = "0.1.0"
-description = "Add your description here"
+description = "Alira AI agent platform and runtime"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -18,6 +18,10 @@ dependencies = [
     "pydantic>=2.12",
     "my-llm-py[all]==1.2.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/JJJJSTIYYYY/alira"
+Issues = "https://github.com/JJJJSTIYYYY/alira/issues"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

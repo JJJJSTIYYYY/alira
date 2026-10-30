@@ -6,9 +6,9 @@ import zipfile
 
 import pytest
 
-from apix.agent.store.core import executor as execute_module
-from apix.agent.store.core.executor import StoreExecutor
-from apix.agent.store.core.services.cache import CacheService
+from alira.agent.store.core import executor as execute_module
+from alira.agent.store.core.executor import StoreExecutor
+from alira.agent.store.core.services.cache import CacheService
 
 
 def make_executor(*, data_store, file_store):
@@ -90,7 +90,7 @@ async def test_create_skills_persists_metadata_and_returns_visible_fields(monkey
         "skill_name": "demo",
         "skill_description": "Demo skill",
         "skill_version": "1.2.3",
-        "package_path": "/data/user-1/apix_skills/demo.zip",
+        "package_path": "/data/user-1/alira_skills/demo.zip",
         "package_size": 128,
         "package_sha256": "abc123",
     }

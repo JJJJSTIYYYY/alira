@@ -7,16 +7,16 @@ from typing import Annotated, Any, TypedDict
 
 import pytest
 
-from apix.agent.core.tool import (
+from alira.agent.core.tool import (
     AutoInjection,
     ToolInjectionContext,
     ToolNode,
     tool,
 )
-from apix.agent.core.utils.message import (
-    ApixAiMessage,
-    ApixToolMessage,
-    ApixUserMessage,
+from alira.agent.core.utils.message import (
+    AliraAiMessage,
+    AliraToolMessage,
+    AliraUserMessage,
 )
 from apixis.core.event import (
     get_event_registry,
@@ -33,7 +33,7 @@ from apixis.core.graph import (
     KeepRef,
 )
 from apixis.core.graph import get_graph_dispatch_name
-from apix.agent.core.graph import AgentGraphCreator
+from alira.agent.core.graph import AgentGraphCreator
 
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -94,15 +94,15 @@ class ScriptedBot:
         self.tool_schemas = tool_node.get_schemas()
         return self
 
-    async def invoke(self, messages: list[Any]) -> ApixAiMessage:
+    async def invoke(self, messages: list[Any]) -> AliraAiMessage:
         self.requests.append(list(messages))
         await asyncio.sleep(0)
 
         tool_messages = [
-            message for message in messages if isinstance(message, ApixToolMessage)
+            message for message in messages if isinstance(message, AliraToolMessage)
         ]
         if not tool_messages:
-            return ApixAiMessage(
+            return AliraAiMessage(
                 name="Alice",
                 content="",
 
@@ -114,7 +114,7 @@ class ScriptedBot:
             )
 
         outputs = {message.name: message.content for message in tool_messages}
-        return ApixAiMessage(
+        return AliraAiMessage(
             name="Alice",
             content=(
                 f"{outputs['lookup_weather']}; "
@@ -191,7 +191,7 @@ async def test_full_agent_model_tool_model_loop_with_shared_runtime_state():
             if message.message_uid not in store.message_uids
         ]
         latest = state["messages"][-1]
-        if isinstance(latest, ApixAiMessage):
+        if isinstance(latest, AliraAiMessage):
             next_node = tool_node.name if latest.tool_calls else None
         else:
             next_node = "prepare_context"
@@ -201,7 +201,7 @@ async def test_full_agent_model_tool_model_loop_with_shared_runtime_state():
             "lifecycle": [f"persist:{latest.role}:{len(pending_messages)}"],
         }
         for message in pending_messages:
-            if isinstance(message, ApixToolMessage) and message.name == "add":
+            if isinstance(message, AliraToolMessage) and message.name == "add":
                 update["calculation"] = int(message.content)
                 update["audit"] = ["calculated:19+23"]
         return Command(update=update, goto=next_node)
@@ -217,7 +217,7 @@ async def test_full_agent_model_tool_model_loop_with_shared_runtime_state():
 
     memory = AgentMemory()
     message_store = InMemoryMessageStore()
-    user_message = ApixUserMessage(content="Tokyo weather and 19 + 23?")
+    user_message = AliraUserMessage(content="Tokyo weather and 19 + 23?")
     initial_state = {
         "messages": [user_message],
         "audit": [],
@@ -243,8 +243,8 @@ async def test_full_agent_model_tool_model_loop_with_shared_runtime_state():
     assert set(completion_order[:2]) == {"add", "remember"}
     assert len(bot.requests) == 2
     assert [len(request) for request in bot.requests] == [1, 5]
-    assert isinstance(bot.requests[0][0], ApixUserMessage)
-    assert all(isinstance(message, ApixToolMessage) for message in bot.requests[1][-3:])
+    assert isinstance(bot.requests[0][0], AliraUserMessage)
+    assert all(isinstance(message, AliraToolMessage) for message in bot.requests[1][-3:])
     assert result["model_calls"] == 2
     assert result["context_preparations"] == 2
     assert result["calculation"] == 42
@@ -280,8 +280,8 @@ async def test_full_agent_model_tool_model_loop_with_shared_runtime_state():
 
     messages = result["messages"]
     assert messages[0] is not user_message
-    assert isinstance(messages[0], ApixUserMessage)
-    assert isinstance(messages[1], ApixAiMessage)
+    assert isinstance(messages[0], AliraUserMessage)
+    assert isinstance(messages[1], AliraAiMessage)
     assert [message.name for message in messages[2:5]] == [
         "lookup_weather",
         "add",
@@ -293,7 +293,7 @@ async def test_full_agent_model_tool_model_loop_with_shared_runtime_state():
         "call-memory",
     ]
     assert all(message.metadata["duration"] >= 0 for message in messages[2:5])
-    assert isinstance(messages[-1], ApixAiMessage)
+    assert isinstance(messages[-1], AliraAiMessage)
     assert messages[-1].tool_calls == []
     assert messages[-1].content == ("weather:Tokyo:sunny; sum=42; memory=stored")
 

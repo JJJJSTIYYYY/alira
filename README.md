@@ -1,10 +1,8 @@
 <div align="center">
 
-<img src="./docs/image/tittle-bar.png"  width="310" height="300" style="border-radius: 12px; display: block; margin: 0 auto;">
+# Alira
 
-# APIX — NEXT 3.0
-
-中文文档 | [English](./README_en.md)
+[GitHub 仓库](https://github.com/JJJJSTIYYYY/alira)
 
 ![Python](https://img.shields.io/badge/Python-3.12+-3776AB?style=flat&logo=python)
 ![Electron](https://img.shields.io/badge/Electron-37-47848F?style=flat&logo=electron)
@@ -21,54 +19,55 @@
 
 ## 🎯 这是什么？
 
-APIX 是一个可拓展的**全栈的 AI Agent 协作平台**。它是一套完整的 Agent 底座与运行时——支持多智能体并行协作、沙箱代码执行、知识库检索以及高自由度的插件系统。
+Alira 是一个可拓展的**全栈的 AI Agent 协作平台**。它是一套完整的 Agent 底座与运行时——支持多智能体并行协作、沙箱代码执行、知识库检索以及高自由度的插件系统。
 
 ## 🌟 有什么新内容？
 
-- [x] 相比于 APIX 2.x，APIX NEXT提供了全自研的Agent底座。**[-> Apixis](https://github.com/JJJJSTIYYYY/Apixis.git)**
+- [x] Alira 的事件与图执行底座由独立项目提供。**[-> Apixis](https://github.com/JJJJSTIYYYY/Apixis.git)**
 - [x] 存储层使用内存缓存，持久化数据通过 SQLAlchemy + aiosqlite 存入 SQLite。
 - [ ] 更简化的部署流程，使用 内存 + Sqlite 即可实现pip一键安装。
 - [ ] CLI Agent支持，无需使用 Electron 客户端，即可完成你的工作。
 - [x] 自研 Agent 底座，更小的外部依赖以及更可控的版本迭代。
 - [x] 自由的插件拓展点，你可以在 Agent 运行时的任何节点，自由的订阅事件以实现各种高自由度的插件，全凭你的想象！
-- [ ] **APIX NEXT预计加入分布式Agent集群，敬请期待！！！**
+- [ ] **Alira预计加入分布式Agent集群，敬请期待！！！**
 
-- 在APIX 3.0中，向量库与向量检索工具不再作为内置模块提供，而通过插件的形式引入。
+- 在Alira 3.0中，向量库与向量检索工具不再作为内置模块提供，而通过插件的形式引入。
 - 沙箱预计沿用2.x的docker沙箱机制，但不再作为强制依赖。
 
 ## 后端开发
 
-在仓库根目录执行：
+克隆仓库后，在仓库根目录执行：
 
 ```bash
+git clone git@github.com:JJJJSTIYYYY/alira.git
+cd alira
 uv sync --locked
 uv run pytest
-uv run python -m apix.server
+uv run python -m alira.server
 ```
 
 项目目录：
 
 ```text
-APIX_NEXT/
+alira/
 ├── pyproject.toml    # uv 项目与测试配置
 ├── uv.lock          # 依赖锁文件
 ├── .python-version  # Python 版本
-├── apix/            # 应用代码
+├── alira/            # 应用代码
 ├── tests/           # 测试
 └── docs/            # 文档
 ```
 
-本地 `config.yaml` 放在仓库根目录，运行数据默认保存在 `.apix_data/`；
-两者均不纳入版本控制。`uv sync` 在根目录创建 `.venv/`。
+本地 `config.yaml` 放在仓库根目录，运行数据默认保存在 `.alira_data/`；
+两者均不纳入版本控制。已有 `config.yaml` 中的数据路径继续生效。`uv sync` 在根目录创建 `.venv/`。
 
-事件与图调度通过 PyPI 依赖 `apixis` 提供；Apix 保留 Agent SDK、工具、存储与服务层。
+事件与图调度通过 PyPI 依赖 `apixis` 提供；Alira 保留 Agent SDK、工具、存储与服务层。
 
 ## 📚 使用文档
 
 - [总览](./docs/README.md)
-- [Apixis 接入与迁移指南](./docs/apixis-integration.md)
 - [Apixis 事件与图接口](https://github.com/JJJJSTIYYYY/Apixis/tree/master/docs)
-- Apix Core 已迁移到新的仓库 **[Apixis(apache协议开源)](https://github.com/JJJJSTIYYYY/Apixis.git)**
+- 事件与图执行底座：[Apixis（Apache 协议开源）](https://github.com/JJJJSTIYYYY/Apixis.git)
 
 ---
 

@@ -5,27 +5,27 @@ import os
 import pytest
 from my_llm import Attribute, Config, Parameter
 
-from apix.agent.core.bot import (
-    ApixBot,
+from alira.agent.core.bot import (
+    AliraBot,
     BaseProvider,
     CustomProvider,
     ModelProfile,
     ProviderProfile,
 )
-from apix.agent.core.utils.message import ApixUserMessage
+from alira.agent.core.utils.message import AliraUserMessage
 
 pytestmark = pytest.mark.skipif(
     not all(
         os.environ.get(name)
-        for name in ("APIX_LIVE_PROTOCOL", "APIX_LIVE_MODEL", "APIX_LIVE_API_KEY")
+        for name in ("ALIRA_LIVE_PROTOCOL", "ALIRA_LIVE_MODEL", "ALIRA_LIVE_API_KEY")
     ),
-    reason="Set APIX_LIVE_PROTOCOL, APIX_LIVE_MODEL and APIX_LIVE_API_KEY to enable paid tests",
+    reason="Set ALIRA_LIVE_PROTOCOL, ALIRA_LIVE_MODEL and ALIRA_LIVE_API_KEY to enable paid tests",
 )
 
 
 @pytest.mark.parametrize("streaming", [False, True])
 async def test_live_chat(streaming):
-    protocol = os.environ["APIX_LIVE_PROTOCOL"]
+    protocol = os.environ["ALIRA_LIVE_PROTOCOL"]
     token_paths = {
         "openai_chat": "$.max_completion_tokens",
         "openai_responses": "$.max_output_tokens",
@@ -33,11 +33,11 @@ async def test_live_chat(streaming):
         "gemini": "$.config.max_output_tokens",
         "ollama": "$.options.num_predict",
     }
-    endpoint = os.environ.get("APIX_LIVE_ENDPOINT")
+    endpoint = os.environ.get("ALIRA_LIVE_ENDPOINT")
     BaseProvider.register(
         CustomProvider(
             name="live-test",
-            api_key_env="APIX_LIVE_API_KEY",
+            api_key_env="ALIRA_LIVE_API_KEY",
             profile=ProviderProfile(
                 protocol=Config(default_value=protocol),
                 base_url=Config(default_value=endpoint) if endpoint else None,
@@ -45,7 +45,7 @@ async def test_live_chat(streaming):
                     default_value=[
                         ModelProfile(
                             model=Attribute(
-                                default_value=os.environ["APIX_LIVE_MODEL"]
+                                default_value=os.environ["ALIRA_LIVE_MODEL"]
                             ),
                             max_tokens=Parameter(
                                 path=token_paths[protocol],
@@ -58,9 +58,9 @@ async def test_live_chat(streaming):
         ),
         replace_existing=True,
     )
-    bot = ApixBot(provider="live-test", model=os.environ["APIX_LIVE_MODEL"])
+    bot = AliraBot(provider="live-test", model=os.environ["ALIRA_LIVE_MODEL"])
     async with bot:
-        history = [ApixUserMessage(content="Reply with exactly: OK")]
+        history = [AliraUserMessage(content="Reply with exactly: OK")]
         if streaming:
             stream = await bot.stream(history)
             async with stream:

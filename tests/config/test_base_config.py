@@ -1,4 +1,4 @@
-"""Tests for Apix-specific configuration and shared configuration ownership."""
+"""Tests for Alira-specific configuration and shared configuration ownership."""
 
 import os
 import runpy
@@ -6,27 +6,27 @@ import runpy
 import pytest
 from apixis.core.config import base as shared_config
 
-from apix.config import base_config
+from alira.config import base_config
 
 
 def test_business_settings_use_apixis_configuration():
     assert base_config._get_config is shared_config._get_config
-    assert base_config.APIX_BASE_DIR == shared_config._get_config(
-        "SERVER.base_dir", "./.apix/"
+    assert base_config.ALIRA_BASE_DIR == shared_config._get_config(
+        "SERVER.base_dir", "./.alira_data/"
     )
     assert base_config.SQLITE_DATABASE == shared_config._get_config(
         "DATA_STORE.sqlite.database",
-        os.path.join(base_config.APIX_BASE_DIR, "sqlite", "apix.sqlite3"),
+        os.path.join(base_config.ALIRA_BASE_DIR, "sqlite", "alira.sqlite3"),
     )
 
 
-@pytest.mark.parametrize("base_dir", [None, "/tmp/apix-data"])
+@pytest.mark.parametrize("base_dir", [None, "/tmp/alira-data"])
 def test_application_owns_storage_root_configuration(monkeypatch, base_dir):
     monkeypatch.setattr(shared_config, "_config", {"SERVER": {"base_dir": base_dir}})
     settings = runpy.run_path(base_config.__file__)
-    assert settings["APIX_BASE_DIR"] == (base_dir or "./.apix/")
+    assert settings["ALIRA_BASE_DIR"] == (base_dir or "./.alira_data/")
     assert settings["SQLITE_DATABASE"] == os.path.join(
-        settings["APIX_BASE_DIR"], "sqlite", "apix.sqlite3"
+        settings["ALIRA_BASE_DIR"], "sqlite", "alira.sqlite3"
     )
 
 
@@ -43,7 +43,7 @@ def test_storage_settings_ignore_removed_backends(
             "EVENT_CHANNEL": {"type": "kafka"},
             "DATA_STORE": {
                 "type": data_store,
-                "sqlite": {"database": "/tmp/custom-apix.sqlite3"},
+                "sqlite": {"database": "/tmp/custom-alira.sqlite3"},
                 "mysql": {
                     "base_url": "unused",
                     "port": 3307,
@@ -64,7 +64,7 @@ def test_storage_settings_ignore_removed_backends(
         },
     )
     settings = runpy.run_path(base_config.__file__)
-    assert settings["SQLITE_DATABASE"] == "/tmp/custom-apix.sqlite3"
+    assert settings["SQLITE_DATABASE"] == "/tmp/custom-alira.sqlite3"
     assert settings["HOT_CACHE_DEFAULT_EXPIRE_SECONDS"] == 17
     assert settings["STATIC_CACHE_DEFAULT_EXPIRE_SECONDS"] == 29
     assert settings["CACHE_CLEAN_INTERVAL"] == 41

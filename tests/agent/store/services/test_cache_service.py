@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from apix.agent.store.core.services import cache as cache_module
-from apix.agent.store.core.services.cache import CacheService
+from alira.agent.store.core.services import cache as cache_module
+from alira.agent.store.core.services.cache import CacheService
 
 
 @pytest.fixture

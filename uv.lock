@@ -80,7 +80,7 @@ wheels = [
 ]
 
 [[package]]
-name = "apix"
+name = "alira"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

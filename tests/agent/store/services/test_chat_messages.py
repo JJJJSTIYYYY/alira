@@ -2,13 +2,13 @@
 
 import pytest
 
-from apix.agent.core.utils.message import (
-    ApixAiMessage,
-    ApixSystemMessage,
-    ApixToolMessage,
+from alira.agent.core.utils.message import (
+    AliraAiMessage,
+    AliraSystemMessage,
+    AliraToolMessage,
 )
-from apix.agent.prebuilt.adapter.context.context_adapter import AIContextAdapter
-from apix.agent.store.core.services.data import DataService
+from alira.agent.prebuilt.adapter.context.context_adapter import AIContextAdapter
+from alira.agent.store.core.services.data import DataService
 from tests.agent.store.services.test_data_service import create_user_and_conversation
 
 
@@ -20,7 +20,7 @@ async def test_sqlite_content_and_protocol_fields_round_trip(tmp_path, monkeypat
     try:
         await create_user_and_conversation(db, monkeypatch)
         call = {"id": "c1", "type": "function", "function": {"name": "weather", "arguments": '{"city":"上海"}'}}
-        message = ApixAiMessage(content=content, tool_calls=[call], refusal="refusal",
+        message = AliraAiMessage(content=content, tool_calls=[call], refusal="refusal",
                                 reasoning_content="why", audio={"id": "audio-1"}, annotations=[],
                                 metadata={"usage": {"total_tokens": 3}},
                                 extensions={"uploaded_files": ["brief.pdf"], "custom": {"x": 1}})
@@ -28,7 +28,7 @@ async def test_sqlite_content_and_protocol_fields_round_trip(tmp_path, monkeypat
         stored = adapter.convert_to_dict_message(message, "generation")
         payload = {"user_uid": "user-1", "conversation_uid": "conv-1", "message": stored}
         assert (await db.append_message(payload))["success"]
-        tool = ApixToolMessage(content="", tool_call_id="c1", extensions={"active_file": "notes.md"})
+        tool = AliraToolMessage(content="", tool_call_id="c1", extensions={"active_file": "notes.md"})
         assert (await db.append_message({**payload, "message": adapter.convert_to_dict_message(tool, "generation")}))["success"]
         await db.stop()
         await db.start()
@@ -40,7 +40,7 @@ async def test_sqlite_content_and_protocol_fields_round_trip(tmp_path, monkeypat
         assert row["audio"] == {"id": "audio-1"}
         assert row["metadata"] == message.metadata
         assert row["extensions"] == message.extensions
-        restored, _ = adapter.convert_to_apix_messages(fetched["messages"])
+        restored, _ = adapter.convert_to_alira_messages(fetched["messages"])
         assert restored[0].to_chat() == message.to_chat()
         assert restored[0].extensions == message.extensions
         assert restored[0].metadata == message.metadata
@@ -51,11 +51,11 @@ async def test_sqlite_content_and_protocol_fields_round_trip(tmp_path, monkeypat
 
 async def test_context_preserves_multimodal_user_and_developer():
     parts = [{"type": "image_url", "image_url": {"url": "https://example.test/a.png"}}]
-    messages, _ = AIContextAdapter().convert_to_apix_messages([
+    messages, _ = AIContextAdapter().convert_to_alira_messages([
         {"role": "system", "content": "rules"},
         {"role": "user", "content": parts, "extensions": {"active_file": "notes.md"}},
     ])
-    assert isinstance(messages[0], ApixSystemMessage)
+    assert isinstance(messages[0], AliraSystemMessage)
     assert messages[1].content[-1] == parts[0]
     assert "<active_file>" in messages[1].content[0]["text"]
     assert parts == [{"type": "image_url", "image_url": {"url": "https://example.test/a.png"}}]

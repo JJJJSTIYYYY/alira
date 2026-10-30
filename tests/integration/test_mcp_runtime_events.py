@@ -13,8 +13,8 @@ from apixis.core.event import (
     wait_for_event,
 )
 
-from apix.agent.core.tool.mcp import MCPRuntimeStop, MCPToolManager, MCPToolRuntime
-from apix.agent.core.tool.utils.request import send_request
+from alira.agent.core.tool.mcp import MCPRuntimeStop, MCPToolManager, MCPToolRuntime
+from alira.agent.core.tool.utils.request import send_request
 
 META = {
     "mcp_id": "server",
@@ -326,19 +326,19 @@ async def test_application_shutdown_keeps_event_core_alive_until_runtimes_close(
 ):
     from unittest.mock import AsyncMock
 
-    from apix.server import create_app
+    from alira.server import create_app
 
     manager, client = resident
     pipe = factory.get_event_pipe()
-    monkeypatch.setattr("apix.server.auto_load_router", lambda app: None)
-    monkeypatch.setattr("apix.server.auto_init.start", AsyncMock())
+    monkeypatch.setattr("alira.server.auto_load_router", lambda app: None)
+    monkeypatch.setattr("alira.server.auto_init.start", AsyncMock())
 
     async def stop_services():
         assert pipe.is_running
         await manager.stop()
         assert pipe.is_running and client.closed
 
-    monkeypatch.setattr("apix.server.auto_init.stop", stop_services)
+    monkeypatch.setattr("alira.server.auto_init.stop", stop_services)
     app = create_app()
     async with app.router.lifespan_context(app):
         assert await manager.call_tool(IDENTITY, "server", "echo") == "ok"

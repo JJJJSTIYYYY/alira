@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from apix.agent.prebuilt.adapter.store import store_adapter as store_module
-from apix.agent.prebuilt.adapter.store.store_adapter import AIStoreAdapter
+from alira.agent.prebuilt.adapter.store import store_adapter as store_module
+from alira.agent.prebuilt.adapter.store.store_adapter import AIStoreAdapter
 
 
 @pytest.fixture
@@ -145,9 +145,9 @@ async def test_memory_fetches_return_messages_and_absorb_backend_errors(
     assert await adapter.get_shortterm_from_store(identity) == []
     assert await adapter.get_longterm_from_store(
         identity,
-        workspace="apix",
+        workspace="alira",
     ) == [{"memory_id": "long"}]
-    assert query.await_args_list[2].kwargs["payload"]["workspace"] == "apix"
+    assert query.await_args_list[2].kwargs["payload"]["workspace"] == "alira"
     assert await adapter.get_longterm_from_store(identity) == []
 
 

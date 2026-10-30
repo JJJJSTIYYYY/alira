@@ -1,24 +1,24 @@
 import asyncio
 from unittest.mock import AsyncMock
 
-from apix.agent.prebuilt.adapter.store import store_adapter as store_adapter_module
-from apix.agent.prebuilt.adapter.context.context_adapter import AIContextAdapter
-from apix.agent.prebuilt.adapter.store.store_adapter import AIStoreAdapter
-from apix.agent.core.utils.funcs import (
+from alira.agent.prebuilt.adapter.store import store_adapter as store_adapter_module
+from alira.agent.prebuilt.adapter.context.context_adapter import AIContextAdapter
+from alira.agent.prebuilt.adapter.store.store_adapter import AIStoreAdapter
+from alira.agent.core.utils.funcs import (
     convert_generation_id_to_message_node_id,
 )
-from apix.agent.core.utils.message import ApixAiMessage, ApixToolMessage
+from alira.agent.core.utils.message import AliraAiMessage, AliraToolMessage
 
 
 def test_message_object_keeps_only_application_owned_fields():
-    message = ApixAiMessage(
+    message = AliraAiMessage(
         message_uid="message-1",
         name="assistant",
         content="answer",
         metadata={"model": "gpt-test", "usage": {"input_tokens": 2}},
         reasoning_content="because",
         tool_calls=[{"id": "call-1", "type": "function", "function": {
-            "name": "search", "arguments": '{"query":"apix"}'}}],
+            "name": "search", "arguments": '{"query":"alira"}'}}],
         extensions={"uploaded_files": ["brief.pdf"]},
     )
 
@@ -30,7 +30,7 @@ def test_message_object_keeps_only_application_owned_fields():
 
 
 def test_extension_properties_update_the_underlying_dictionary():
-    message = ApixToolMessage(
+    message = AliraToolMessage(
         message_uid="message-2",
         name="search",
         content="result",
@@ -55,7 +55,7 @@ def test_extension_properties_update_the_underlying_dictionary():
 def test_message_storage_conversion_uses_the_new_schema():
     adapter = AIContextAdapter()
     generation_id = "12345678-1234-1234-1234-123456789abc"
-    message = ApixAiMessage(
+    message = AliraAiMessage(
         message_uid="message-3",
         name="assistant",
         content="answer",
@@ -89,7 +89,7 @@ def test_message_storage_conversion_uses_the_new_schema():
 
 def test_database_row_conversion_ignores_database_generated_timestamp():
     adapter = AIContextAdapter()
-    messages, todo = adapter.convert_to_apix_messages(
+    messages, todo = adapter.convert_to_alira_messages(
         [
             {
                 "message_uid": "message-4",
@@ -117,7 +117,7 @@ def test_store_adapter_sends_the_canonical_message_payload():
     original_query_store = store_adapter_module.query_store
     store_adapter_module.query_store = query_store
     try:
-        message = ApixAiMessage(
+        message = AliraAiMessage(
             message_uid="message-5",
             content="answer",
             reasoning_content="because",

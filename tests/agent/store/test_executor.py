@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from apix.agent.store.core import executor as execute_module
-from apix.agent.store.core.executor import StoreExecutor
-from apix.agent.store.core.services.cache import CacheService
+from alira.agent.store.core import executor as execute_module
+from alira.agent.store.core.executor import StoreExecutor
+from alira.agent.store.core.services.cache import CacheService
 
 
 def _executor(

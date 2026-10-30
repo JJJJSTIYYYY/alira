@@ -53,6 +53,8 @@ logs/
 # Runtime / Data
 .apix
 .apix_data
+.alira
+.alira_data
 .ruff_cache
 config.yaml
 tmp/

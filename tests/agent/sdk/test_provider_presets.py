@@ -16,7 +16,7 @@ from my_llm import (
     omit,
 )
 
-from apix.agent.core.bot import ApixBot, BaseProvider, CustomProvider
+from alira.agent.core.bot import AliraBot, BaseProvider, CustomProvider
 from tests.agent.sdk.test_bot import weather
 from tests.agent.sdk.test_bot_protocols import install_sdk, wire
 
@@ -53,7 +53,7 @@ async def test_generated_thinking_controls_take_precedence_over_native_body(
 
     install_sdk(monkeypatch, "openai_chat", handler)
     native = {"thinking": {"type": "disabled"}}
-    async with ApixBot(provider=provider, model=model, api_key="test") as bot:
+    async with AliraBot(provider=provider, model=model, api_key="test") as bot:
         await bot.invoke(
             [{"role": "user", "content": "hi"}], reasoning=reasoning, extra_body=native
         )
@@ -77,7 +77,7 @@ def test_builtin_effort_mappings_have_an_ordered_contiguous_prefix(provider, mod
 
 
 def test_required_provider_classes_and_exact_string_selection():
-    from apix.agent.core.bot import provider as package
+    from alira.agent.core.bot import provider as package
 
     names = {
         "BaseProvider",
@@ -99,7 +99,7 @@ def test_required_provider_classes_and_exact_string_selection():
         "google",
         "custom",
     } <= set(BaseProvider.list_providers())
-    bot = ApixBot(provider=" OpenAI ", model="gpt-5.4", api_key="test")
+    bot = AliraBot(provider=" OpenAI ", model="gpt-5.4", api_key="test")
     assert bot.provider.name == "openai" and bot.model == "gpt-5.4"
     assert bot.llm.stdio_protocol == "openai_chat"
     for provider, model in (
@@ -112,24 +112,24 @@ def test_required_provider_classes_and_exact_string_selection():
         ("openai", ModelProfile(model=Attribute(default_value="x"))),
     ):
         with pytest.raises(TypeError):
-            ApixBot(provider=provider, model=model, api_key="test")
+            AliraBot(provider=provider, model=model, api_key="test")
     with pytest.raises(ValueError, match="unknown provider"):
-        ApixBot(provider="missing", model="x", api_key="test")
+        AliraBot(provider="missing", model="x", api_key="test")
     with pytest.raises(ValueError, match="unknown model"):
-        ApixBot(provider="deepseek", model="gpt-5.4", api_key="test")
+        AliraBot(provider="deepseek", model="gpt-5.4", api_key="test")
     with pytest.raises(ValueError, match="unknown model"):
-        ApixBot(provider="custom", model="undeclared", api_key="test")
+        AliraBot(provider="custom", model="undeclared", api_key="test")
 
 
 def test_credentials_use_provider_environment_and_explicit_key_wins(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-test-key")
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     with pytest.raises(ConfigurationError, match="DEEPSEEK_API_KEY"):
-        ApixBot(provider="deepseek", model="deepseek-flash")
+        AliraBot(provider="deepseek", model="deepseek-flash")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-test-key")
-    bot = ApixBot(provider="deepseek", model="deepseek-flash")
+    bot = AliraBot(provider="deepseek", model="deepseek-flash")
     assert bot.llm.provider.api_key.default_value == "deepseek-test-key"
-    explicit = ApixBot(
+    explicit = AliraBot(
         provider="deepseek", model="deepseek-flash", api_key="explicit-test-key"
     )
     assert explicit.llm.provider.api_key.default_value == "explicit-test-key"
@@ -239,7 +239,7 @@ def test_registry_and_model_catalogues_use_independent_library_profiles():
     BaseProvider.register(custom)
     try:
         custom.profile.delete_model(["my-model"])
-        assert ApixBot(provider="isolated-test", model="my-model").model == "my-model"
+        assert AliraBot(provider="isolated-test", model="my-model").model == "my-model"
         with pytest.raises(ValueError, match="already registered"):
             BaseProvider.register(custom)
         BaseProvider.register(custom, replace_existing=True)
@@ -292,7 +292,7 @@ def test_get_profile_returns_an_isolated_complete_configuration(monkeypatch):
 async def test_each_builtin_preset_dispatches_through_official_sdk(
     monkeypatch, provider, model, streaming
 ):
-    bot = ApixBot(provider=provider, model=model, api_key="test")
+    bot = AliraBot(provider=provider, model=model, api_key="test")
     protocol = bot.llm.provider.protocol.default_value
     requests = []
 
@@ -417,7 +417,7 @@ async def test_native_token_defaults_overrides_and_omit(
 
 @pytest.mark.parametrize("value", [0, -1, True, 1.5, "1024"])
 async def test_native_token_limits_validate_before_dispatch(value):
-    bot = ApixBot(provider="moonshot", model="kimi-k2.6", api_key="test")
+    bot = AliraBot(provider="moonshot", model="kimi-k2.6", api_key="test")
     with pytest.raises(ConfigurationError, match="positive integer"):
         await bot.invoke([{"role": "user", "content": "hi"}], max_tokens=value)
 
@@ -437,7 +437,7 @@ async def test_native_token_limits_validate_before_dispatch(value):
     ],
 )
 async def test_unsupported_model_efforts_are_rejected_by_myllm(provider, model, effort):
-    bot = ApixBot(provider=provider, model=model, api_key="test")
+    bot = AliraBot(provider=provider, model=model, api_key="test")
     with pytest.raises(UnsupportedCapabilityError):
         await bot.invoke([{"role": "user", "content": "hi"}], reasoning_effort=effort)
 
@@ -467,7 +467,7 @@ async def test_three_level_efforts_follow_native_profile_mapping(
         )
 
     install_sdk(monkeypatch, "openai_chat", handler)
-    async with ApixBot(provider=provider, model=model, api_key="test") as bot:
+    async with AliraBot(provider=provider, model=model, api_key="test") as bot:
         await bot.invoke([{"role": "user", "content": "hi"}], **options)
     if expected is None:
         assert "reasoning_effort" not in requests[0]
@@ -503,7 +503,7 @@ async def test_openai_model_specific_efforts_reach_responses_sdk(
         )
 
     install_sdk(monkeypatch, "openai_responses", handler)
-    bot = ApixBot(provider="openai", model=model, api_key="test")
+    bot = AliraBot(provider="openai", model=model, api_key="test")
     async with bot:
         await bot.invoke([{"role": "user", "content": "hi"}], reasoning_effort=effort)
     assert requests[0]["reasoning"]["effort"] == expected
@@ -550,7 +550,7 @@ async def test_custom_provider_uses_native_profile_and_library_lifecycle(
     )
     BaseProvider.register(custom)
     try:
-        bot = ApixBot(provider="custom-test", model="custom-model")
+        bot = AliraBot(provider="custom-test", model="custom-model")
     finally:
         BaseProvider.unregister("custom-test")
     requests = []

@@ -9,10 +9,10 @@ from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 
-from apix.agent.core.tool import BaseTool, FunctionToolManager, Tool, ToolNode
-from apix.agent.core.tool.mcp import MCPTool, MCPToolError, MCPToolManager
-from apix.agent.core.tool.mcp.base import _convert_call_tool_result
-from apix.agent.core.utils.message import ApixAiMessage
+from alira.agent.core.tool import BaseTool, FunctionToolManager, Tool, ToolNode
+from alira.agent.core.tool.mcp import MCPTool, MCPToolError, MCPToolManager
+from alira.agent.core.tool.mcp.base import _convert_call_tool_result
+from alira.agent.core.utils.message import AliraAiMessage
 
 META = {
     "mcp_id": "test-mcp",
@@ -61,7 +61,7 @@ def state(*names, identity=None):
     return {
         "target": dict(IDENTITY if identity is None else identity),
         "messages": [
-            ApixAiMessage(
+            AliraAiMessage(
                 tool_calls=[
                     {
                         "id": f"call-{index}",
@@ -124,13 +124,13 @@ async def test_one_graph_node_routes_function_and_mcp_managers(manager):
 
     from apixis.core.graph import AutoMerge
 
-    from apix.agent.core.bot.apix_bot import ApixBot
-    from apix.agent.core.graph import AgentGraphCreator
-    from apix.common.type import ApixIdentity
+    from alira.agent.core.bot.alira_bot import AliraBot
+    from alira.agent.core.graph import AgentGraphCreator
+    from alira.common.type import AliraIdentity
 
     class State(TypedDict):
         messages: Annotated[list, AutoMerge()]
-        target: ApixIdentity
+        target: AliraIdentity
 
     async def local() -> str:
         return "local-result"
@@ -150,7 +150,7 @@ async def test_one_graph_node_routes_function_and_mcp_managers(manager):
     ]
     assert functions.is_started and manager.is_started
     assert not manager.clients[0].closed
-    schemas = ApixBot._schemas([*functions.tool_set, *mcp_tools])
+    schemas = AliraBot._schemas([*functions.tool_set, *mcp_tools])
     assert [schema["function"]["name"] for schema in schemas] == [
         "local",
         "first",
@@ -364,7 +364,7 @@ async def test_discovery_requires_running_manager():
 async def test_transport_configuration_maps_to_fastmcp_and_resident_stdio(
     manager, monkeypatch
 ):
-    import apix.agent.core.tool.mcp.mcp_tool_manager as module
+    import alira.agent.core.tool.mcp.mcp_tool_manager as module
 
     transport = SimpleNamespace()
 
@@ -508,11 +508,11 @@ async def test_real_in_process_mcp_protocol_persists_across_agent_graph_invocati
     from fastmcp import Client as FastMCPClient
     from mcp.server.fastmcp import FastMCP
 
-    from apix.agent.core.graph import AgentGraphCreator
-    from apix.common.type import ApixIdentity
+    from alira.agent.core.graph import AgentGraphCreator
+    from alira.common.type import AliraIdentity
 
     class State(TypedDict):
-        target: ApixIdentity
+        target: AliraIdentity
         messages: Annotated[list, AutoMerge()]
 
     server = FastMCP("in-process")
@@ -552,7 +552,7 @@ async def test_real_in_process_mcp_protocol_persists_across_agent_graph_invocati
                 graph.invoke(
                     {
                         "target": IDENTITY,
-                        "messages": [ApixAiMessage(tool_calls=[request])],
+                        "messages": [AliraAiMessage(tool_calls=[request])],
                     }
                 ),
                 3,
