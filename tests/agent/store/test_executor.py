@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from alira.agent.store.core import executor as execute_module
-from alira.agent.store.core.executor import StoreExecutor
-from alira.agent.store.core.services.cache import CacheService
+from alira.agent.store import executor as execute_module
+from alira.agent.store.executor import StoreExecutor
+from alira.agent.store.services.cache import CacheService
 
 
 def _executor(
@@ -46,7 +46,7 @@ def _executor(
 @pytest.fixture
 def message_nodes(monkeypatch):
     helper = Mock()
-    monkeypatch.setattr(execute_module, "MessageNodeHelper", Mock(return_value=helper))
+    monkeypatch.setattr(execute_module, "MessageNodeTree", Mock(return_value=helper))
     return helper
 
 
@@ -732,7 +732,7 @@ async def test_list_messages_uses_cached_chain_and_recent_messages(
     assert result["branches"] == {"-": [{"node_id": "branch"}]}
     assert "node_id_chain" not in payload
     assert result["current_chain"] == ["-", "cached-leaf"]
-    execute_module.MessageNodeHelper.assert_called_once_with([{"raw": True}])
+    execute_module.MessageNodeTree.assert_called_once_with([{"raw": True}])
     message_nodes.build_visible_messages.assert_called_once_with(
         "cached-leaf",
         allow_roles=expected_roles,

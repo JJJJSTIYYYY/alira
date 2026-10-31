@@ -119,7 +119,7 @@ SDK 错误及库的 `StreamError`、`IncompleteStreamError` 等异常直接向�
 
 数据库服务使用 SQLAlchemy Core + aiosqlite，SQLite 文件位置由
 `DATA_STORE.sqlite.database` 配置。`DataService.start()` 创建异步引擎并通过
-`core/services/schema.py` 中的表定义创建缺失表；`stop()` 等待当前事务结束后释放连接，支持重启。
+`services/data/schema.py` 中的表定义创建缺失表；`stop()` 等待当前事务结束后释放连接，支持重启。
 应用只将默认 `StoreManager` 注册到 `auto_init`。管理器在专用线程内创建独立
 事件循环，并拥有缓存、数据库、文件服务、执行器及查询 worker。启动、查询、
 消息树处理、JSON 编解码、缓存复制与持久化都在该线程内执行。
@@ -135,12 +135,31 @@ Provider 的 `model_list`、MCP 的 `config` 和 cron 的 `extra_config` 也由�
 统一编解码，调用方传原生 JSON 值；字符串按字符串保存，更新时的 `None`
 表示不修改。执行器和缓存直接使用解码后的值。消息支持游标、树分支和软删除。
 
-存储代码集中在 `alira/agent/store/core`：`manager.py` 提供跨线程异步接口并管理线程，
-`runtime.py` 在线程内启停服务并调度 worker；`executor.py` 编排服务调用和缓存读写。
-`services` 下的 `data.py`、`cache.py`、
-`files.py` 分别负责 SQLite、缓存和文件。通用错误协议与 JSON 辅助集中在
-`handlers.py`、`serialization.py`。操作名与执行器方法同名，使用
-`create_*`、`list_*`、`get_*`、`update_*`、`delete_*` 等动词。
+存储代码集中在 `src/alira/agent/store`，按运行编排、具体服务和辅助处理分类：
+
+```text
+store/
+├── manager.py              # 跨线程异步接口与线程生命周期
+├── runtime.py              # 线程内服务生命周期与查询 worker
+├── executor.py             # 业务动作编排与缓存读写
+├── services/
+│   ├── cache/
+│   │   ├── service.py      # TTL 缓存与 JSON 持久化
+│   │   └── keys.py         # 会话及资源缓存键
+│   ├── data/
+│   │   ├── service.py      # SQLite 业务读写
+│   │   ├── engine.py       # 引擎配置、事务与取消保护
+│   │   └── schema.py       # 表、约束与索引
+│   └── files/
+│       ├── service.py      # 上传文件与技能包存储
+│       └── packages.py     # 技能包校验、元数据与文件命名
+└── utils/
+    ├── handlers.py         # 错误返回协议与动作装饰器
+    ├── serialization.py    # JSON 编解码与时间戳归一化
+    └── message_tree.py     # 消息树、可见路径与分支选择
+```
+
+操作名与执行器方法同名，使用 `create_*`、`list_*`、`get_*`、`update_*`、`delete_*` 等动词。
 
 包对外导出 `query_store` 和 `StoreManager`。原有 `await query_store(action, payload)`
 调用方式不变，失败结果仍转为 `RuntimeError`。独立实例通过路径配置创建，

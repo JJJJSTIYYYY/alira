@@ -50,16 +50,23 @@ uv run python -m alira.server
 
 ```text
 alira/
-├── pyproject.toml    # uv 项目与测试配置
+├── pyproject.toml    # 打包、依赖与测试配置
+├── MANIFEST.in       # 源码分发内容
 ├── uv.lock          # 依赖锁文件
 ├── .python-version  # Python 版本
-├── alira/            # 应用代码
+├── src/
+│   └── alira/       # 应用源码，版本号统一定义在 _version.py
 ├── tests/           # 测试
 └── docs/            # 文档
 ```
 
 本地 `config.yaml` 放在仓库根目录，运行数据默认保存在 `.alira_data/`；
 两者均不纳入版本控制。已有 `config.yaml` 中的数据路径继续生效。`uv sync` 在根目录创建 `.venv/`。
+
+`uv sync --locked` 会将本地项目安装为可编辑包，源码修改立即生效。测试从已安装的包导入，
+启动方式仍为 `uv run python -m alira.server`。包版本通过 `alira.__version__` 获取；
+项目元数据、FastAPI 版本和启动横幅均使用 `src/alira/_version.py` 中的 `__version__`。
+构建 wheel 和源码包时执行 `uv build`。
 
 事件与图调度通过 PyPI 依赖 `apixis` 提供；Alira 保留 Agent SDK、工具、存储与服务层。
 

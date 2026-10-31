@@ -1,9 +1,14 @@
+[build-system]
+requires = ["setuptools>=77.0.3"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "alira"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Alira AI agent platform and runtime"
 readme = "README.md"
 requires-python = ">=3.12"
+license-files = ["LICENSE"]
 dependencies = [
     "aiosqlite>=0.21.0",
     "fastapi>=0.139.2",
@@ -23,8 +28,20 @@ dependencies = [
 Repository = "https://github.com/JJJJSTIYYYY/alira"
 Issues = "https://github.com/JJJJSTIYYYY/alira/issues"
 
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["alira", "alira.*"]
+namespaces = false
+
+[tool.setuptools.dynamic]
+version = {attr = "alira._version.__version__"}
+
+[tool.uv]
+cache-keys = [{file = "pyproject.toml"}, {file = "src/alira/_version.py"}]
+
 [tool.pytest.ini_options]
-pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"
 # Process-global runtime queues share one asyncio loop across tests.
 asyncio_mode = "auto"
 asyncio_default_test_loop_scope = "session"

@@ -26,3 +26,6 @@ jobs:
 
       - name: Run pytest
         run: uv run pytest
+
+      - name: Build distributions
+        run: uv build --no-build-logs

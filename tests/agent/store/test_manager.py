@@ -10,12 +10,12 @@ from sqlalchemy import text
 
 import alira.agent.store as store_package
 from alira.agent.store import StoreManager, query_store
-from alira.agent.store.core import manager as manager_module
-from alira.agent.store.core import runtime as runtime_module
-from alira.agent.store.core.executor import StoreExecutor
-from alira.agent.store.core.services.cache import CacheService
-from alira.agent.store.core.services.data import DataService
-from alira.agent.store.utils.message_node_helper import MessageNodeHelper
+from alira.agent.store import manager as manager_module
+from alira.agent.store import runtime as runtime_module
+from alira.agent.store.executor import StoreExecutor
+from alira.agent.store.services.cache import CacheService
+from alira.agent.store.services.data import DataService
+from alira.agent.store.utils.message_tree import MessageNodeTree
 from alira.common.lifespan.auto_init import auto_init
 
 
@@ -225,7 +225,7 @@ async def test_synchronous_message_work_does_not_block_the_caller_loop(
         },
     )
     entered, release = threading.Event(), threading.Event()
-    original = MessageNodeHelper.build_visible_messages
+    original = MessageNodeTree.build_visible_messages
     executed_on = []
 
     def blocked_projection(helper, *args, **kwargs):
@@ -235,7 +235,7 @@ async def test_synchronous_message_work_does_not_block_the_caller_loop(
             raise TimeoutError("projection gate timed out")
         return original(helper, *args, **kwargs)
 
-    monkeypatch.setattr(MessageNodeHelper, "build_visible_messages", blocked_projection)
+    monkeypatch.setattr(MessageNodeTree, "build_visible_messages", blocked_projection)
     query = asyncio.create_task(
         manager.query("list_messages", {**payload, "current_node_id": "n1"})
     )

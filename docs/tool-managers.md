@@ -16,7 +16,7 @@
 目录结构：
 
 ```text
-alira/agent/core/tool/
+src/alira/agent/core/tool/
 ├── base.py                 # BaseTool 与共享调用契约
 ├── tool_node.py            # 图节点编排
 ├── function/               # 函数工具、注入上下文、FunctionToolManager
@@ -55,6 +55,20 @@ tools = ToolNode(functions, bind_llm_node="model")
 ```
 
 管理器构造不自动加入全局服务列表。应用拥有的实例通过 `auto_init.register(functions)` 显式注册，再由 `auto_init.start()` / `auto_init.stop()` 统一启停；独立实例也可以直接 `start()` / `stop()`。模块级 `mcp_mgr` 已显式注册。重复启停幂等，ToolNode 首次执行会启动所需管理器，后续图调用持续复用。
+
+注册时可指定分组；每个实例只能属于一个分组，未指定时属于 `default`：
+
+```python
+auto_init.register(functions, group="tool")
+await auto_init.start(group="tool")
+await auto_init.start(group="tool", restart=True)
+await auto_init.stop(group="tool")
+```
+
+内置 `resource_cleaner`、`mcp_mgr`、默认 `StoreManager` 分别属于 `core`、`mcp`、`database`。
+`start()` / `stop()` 不传分组时选择全部服务，按注册顺序启动、逆序停止；指定不存在的分组抛出 `ValueError`。
+已成功启动的服务会跳过，后续注册的服务仍可启动。运行中异常后可用 `restart=True` 显式重启整个分组；重启先停止选中的所有服务，清理失败时不会开始启动。
+批量启停会继续处理其他服务，并通过 `ExceptionGroup` 汇总普通异常。启动失败后再次 `start()` 会先清理该服务再重试，成功启动的其他服务保持运行。取消会立即向上传播，后续 `stop()` 或 `start()` 可重试未完成的清理。
 
 `ToolNode(weather)` 仍可用，它会创建 FunctionToolManager。需要在多个图中共享工具服务时，显式构造并复用管理器。
 
