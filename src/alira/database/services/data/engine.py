@@ -10,7 +10,7 @@ from sqlalchemy.engine import URL, Connection
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
-from alira.agent.store.services.data.schema import metadata
+from alira.database.services.data.schema import metadata
 
 
 async def database_io[T](operation: Awaitable[T]) -> T:

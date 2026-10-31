@@ -6,12 +6,12 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from uuid import uuid4
 
-from alira.agent.store.services.cache import CacheService
-from alira.agent.store.services.data import DataService
-from alira.agent.store.services.files import FileService
-from alira.agent.store.utils.handlers import store_action
-from alira.agent.store.utils.message_tree import MessageNodeTree
-from alira.agent.store.utils.serialization import decode_message_row
+from alira.database.services.cache import CacheService
+from alira.database.services.data import DataService
+from alira.database.services.files import FileService
+from alira.database.utils.handlers import store_action
+from alira.database.utils.message_tree import MessageNodeTree
+from alira.database.utils.serialization import decode_message_row
 from alira.common.utils.logger import logger
 
 

@@ -9,7 +9,7 @@ from my_llm import (
     ModelProfile,
     Parameter,
     ProviderProfile,
-    UnsupportedCapabilityError,
+    SemanticLossError,
 )
 
 from alira.agent.core.bot import BaseProvider
@@ -70,7 +70,7 @@ async def test_disabled_reasoning_is_rejected_before_opening_an_sdk_client(monke
     )
     async with provider.create_llm("deepseek-flash", api_key="test") as llm:
         with pytest.raises(
-            UnsupportedCapabilityError, match="does not support reasoning"
+            SemanticLossError, match="does not support reasoning"
         ):
             await llm.generate(
                 messages=[{"role": "user", "content": "hi"}], reasoning=True

@@ -7,11 +7,11 @@ from pathlib import Path
 from threading import Lock, Thread
 from typing import TYPE_CHECKING
 
-from alira.common.lifespan.auto_init import auto_init
+from alira.lifespan.auto_init import auto_init
 from alira.config.base_config import WORKER_COUNT
 
 if TYPE_CHECKING:
-    from alira.agent.store.runtime import _StoreRuntime
+    from alira.database.runtime import _StoreRuntime
 
 __all__ = ["StoreManager", "query_store"]
 
@@ -163,7 +163,7 @@ class StoreManager:
     async def _serve(self, state: _ThreadState) -> None:
         # Importing the execution layer here also keeps service construction and
         # its SQLAlchemy imports on the store thread during ordinary application use.
-        from alira.agent.store.runtime import _StoreRuntime
+        from alira.database.runtime import _StoreRuntime
 
         with self._guard:
             state.loop = asyncio.get_running_loop()

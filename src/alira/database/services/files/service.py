@@ -5,11 +5,11 @@ import shutil
 from pathlib import Path
 from uuid import uuid4
 
-from alira.agent.store.services.files.packages import (
+from alira.database.services.files.packages import (
     inspect_skill_package,
     next_available_package_path,
 )
-from alira.agent.store.utils.handlers import service_handler
+from alira.database.utils.handlers import service_handler
 from alira.common.utils.logger import logger
 from alira.config.base_config import ALIRA_BASE_DIR
 

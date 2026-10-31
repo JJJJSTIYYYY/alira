@@ -12,7 +12,7 @@ from my_llm import (
     ModelProfile,
     Parameter,
     ProviderProfile,
-    UnsupportedCapabilityError,
+    SemanticLossError,
     omit,
 )
 
@@ -26,6 +26,51 @@ PRESETS = [
     if name != "custom"
     for model in BaseProvider.get(name).list_models()
 ]
+
+
+@pytest.mark.parametrize(
+    "provider,model",
+    [
+        ("deepseek", "deepseek-flash"),
+        ("moonshot", "kimi-k2.6"),
+        ("mimo", "mimo-v2.6-pro"),
+    ],
+)
+async def test_tool_round_replays_reasoning_with_updated_profile_field(
+    monkeypatch, provider, model
+):
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200, text=wire("openai_chat"), headers={"content-type": "text/event-stream"}
+        )
+
+    clients = install_sdk(monkeypatch, "openai_chat", handler)
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello", "reasoning_content": "greeting"},
+        {"role": "user", "content": "weather in Tokyo?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "reasoning_content": "check weather",
+            "tool_calls": [{
+                "id": "c1", "type": "function",
+                "function": {"name": "weather", "arguments": '{"city":"Tokyo"}'},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "sunny"},
+    ]
+    async with AliraBot(provider=provider, model=model, api_key="test") as bot:
+        assert (await bot.invoke(messages, tools=[weather])).content == "hello"
+
+    history = requests[0]["messages"]
+    assert "reasoning_content" not in history[1]
+    assert history[3]["reasoning_content"] == "check weather"
+    assert messages[1]["reasoning_content"] == "greeting"
+    assert all(client.is_closed for client in clients)
 
 
 @pytest.mark.parametrize(
@@ -438,7 +483,7 @@ async def test_native_token_limits_validate_before_dispatch(value):
 )
 async def test_unsupported_model_efforts_are_rejected_by_myllm(provider, model, effort):
     bot = AliraBot(provider=provider, model=model, api_key="test")
-    with pytest.raises(UnsupportedCapabilityError):
+    with pytest.raises(SemanticLossError):
         await bot.invoke([{"role": "user", "content": "hi"}], reasoning_effort=effort)
 
 

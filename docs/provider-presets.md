@@ -25,7 +25,7 @@ profile = BaseProvider.get("moonshot").get_profile()  # my_llm.ProviderProfile
 model ID 精确匹配，不猜测型号、不匹配通配符。未知名称在网络请求前报错。
 `bot.provider` 是选中的 BaseProvider 子类实例，`bot.model` 是模型 ID；
 原生配置可通过 `bot.llm.provider`、`bot.llm.model`、`bot.llm.resolved_profile` 查看。
-接入已按 MyLLM 1.2.0 验证（2026-10-22）：模型 ID、上下文窗口和模型目录使用 `Attribute`，
+接入已按 MyLLM 1.4.2 验证（2026-10-31）：模型 ID、上下文窗口和模型目录使用 `Attribute`，
 协议与行为字段使用 `Config`，参数使用 `Parameter`。下表的数据与配置值指 wrapper 的
 `default_value`，参数位置使用 `path`，支持状态使用 `supports`。`name` / `source` 由
 Profile 自动绑定，不能手动传入；请求参数的 source 为 input，响应参数为 output。
@@ -103,7 +103,7 @@ MyLLM 的 `reasoning_effort="none"` 表示不注入 effort 绑定，`reasoning=T
 | `reasoning_effort.supports` / `reasoning_effort` | True / 顶层 `reasoning_effort`；[Chat API](https://api-docs.deepseek.com/api/create-chat-completion/) 支持 low/high/max。 |
 | `reasoning_effort_mapping` | 上游原生 low/high/max 依次映射到本地 low/medium/high，本地 xhigh/max 禁用。上述 Chat API 也接受 medium/xhigh 作为 high 的别名；本地预设使用三个原生档位，不额外占用别名档位。 |
 | `reasoning_enable` | `thinking.type=enabled`，以 Parameter 替换库继承的默认 medium 绑定；[思考模式](https://api-docs.deepseek.com/guides/thinking_mode) 展示 OpenAI SDK extra_body 写法。 |
-| `replay_reasoning_content_when_tool_calls` | True；[思考模式工具回合](https://api-docs.deepseek.com/guides/thinking_mode#tool-calls) 要求携带 tools 的后续请求保留历史 reasoning_content。 |
+| `feedback_reasoning_content` | `when_tool_calls`；[思考模式工具回合](https://api-docs.deepseek.com/guides/thinking_mode#tool-calls) 要求携带 tools 的后续请求保留历史 reasoning_content。 |
 | `max_tokens` Parameter 的 path | ProviderProfile 设置 `$.max_tokens`；[Chat API](https://api-docs.deepseek.com/api/create-chat-completion/) 定义 max_tokens。由 MyLLM 写入该 SDK 参数，替代 Chat 默认的 max_completion_tokens。 |
 
 当前目录已覆盖[官方模型表](https://api-docs.deepseek.com/quick_start/pricing/)的两个型号。
@@ -117,7 +117,7 @@ MyLLM 的 `reasoning_effort="none"` 表示不注入 effort 绑定，`reasoning=T
 | `model` | K3、K2.6、K2.7 Code 与 highspeed 四个 ID；[当前型号列表](https://platform.kimi.ai/docs/models)。 |
 | `max_context_window` | K3 为 `1_048_576`，见 [Moonshot 官方模型卡](https://huggingface.co/moonshotai/Kimi-K3)；K2.6 / K2.7 Code 为 `262_144`，见官方 [K2.6 配置](https://huggingface.co/moonshotai/Kimi-K2.6/raw/main/config.json)、[K2.7 配置](https://huggingface.co/moonshotai/Kimi-K2.7-Code/raw/main/config.json)。[型号参数说明](https://platform.kimi.ai/docs/api/models-overview) 确认 highspeed 与 Code 参数相同。 |
 | 推理能力 / `supports_function_calling` | 四型号均 True；[官方参数与工具说明](https://platform.kimi.ai/docs/api/chat)。 |
-| `replay_reasoning_content_when_tool_calls` | True；同上文档要求多轮对话及工具回合保留历史 reasoning_content。 |
+| `feedback_reasoning_content` | `when_tool_calls`；同上文档要求多轮对话及工具回合保留历史 reasoning_content。 |
 | K3 `reasoning_effort.supports` / `reasoning_effort` / `reasoning_effort_mapping` | True / 顶层 reasoning_effort；[官方参数表](https://platform.kimi.ai/docs/api/models-overview)允许上游 low/high/max，依次映射到本地 low/medium/high，本地 xhigh/max 禁用。位置映射遵循本项目的 MyLLM 调用约束，不表示厂商新增档位。 |
 | K3 `reasoning_enable` | omit 去掉 Chat 默认的 medium 绑定，再由 MyLLM 根据映射生成合法的上游 effort。仅传 `reasoning=True` 时，库默认 medium 经 profile 映射为 high；未设置推理选项时不注入 effort，沿用[服务端默认 max](https://platform.kimi.ai/docs/guide/use-reasoning-effort)。 |
 | K2.x `reasoning_enable` | Parameter 替换 OpenAI reasoning_effort 绑定，开启时发送 `thinking={type:enabled,keep:all}`；[参数对照表](https://platform.kimi.ai/docs/api/models-overview) 列出 K2.6 可选 preserved thinking，K2.7 必须保留且不可关闭。 |
@@ -133,7 +133,7 @@ K2.5、K2、moonshot-v1 已在[官方型号页](https://platform.kimi.ai/docs/mo
 | `model` / `max_context_window` | 三个 ID 同上；均为 1M。整数 `1_048_576` 沿用[官方上下文配置](https://mimo.mi.com/docs/zh-CN/tokenplan/integration/codex-configuration)的 1M 口径；UltraSpeed 规格声明保留 Pro 完整能力与相同窗口。 |
 | 推理能力 / `supports_function_calling` | 三型号均 True；三份模型规格列出 Deep Thinking 与 Tool Call。 |
 | `reasoning_enable` | `thinking.type=enabled`，Parameter 替换 OpenAI 默认 reasoning_effort 绑定；[思考模式](https://mimo.mi.com/docs/zh-CN/quick-start/usage-guide/text-generation/deep-thinking) 展示该请求字段。 |
-| `replay_reasoning_content_when_tool_calls` | True；同上思考模式文档给出多轮工具调用时回传 reasoning_content 的示例。 |
+| `feedback_reasoning_content` | `when_tool_calls`；同上思考模式文档给出多轮工具调用时回传 reasoning_content 的示例。 |
 | token 参数 | 使用库原生 max_completion_tokens；三份模型页示例均使用这一字段，不另做 max_tokens 改写。 |
 
 MiMo 2.5 系列即将停用，见[官方型号说明](https://mimo.mi.com/docs/quick-start/model)，默认预设选择 2.6。
@@ -173,18 +173,18 @@ Gemini 的 thinking_config 和 max_output_tokens 由 MyLLM 原生 Gemini Decoder
 
 - 本地 provider 名称是 Alira 的注册键，不是新的厂商参数。
 - 显式 api_key 优先于 profile 的 Parameter.default_value，再读取对应厂商环境变量；覆盖凭据时保留 Parameter 的认证路径。`api_key=omit` 禁用自动凭据读取，显式传入密钥时使用协议默认路径。Ollama 默认使用 Authorization 头，调用方需提供完整的 Bearer 前缀。内置 provider 缺少凭据时报错，避免兼容 OpenAI SDK 意外读取另一家厂商的 OPENAI_API_KEY。
-- `usage_mode=Config(default_value="native", ...)`、能力标记、Parameter 路径和 omit 的语义来自 [my-llm-py 1.2.0 配置指南](https://github.com/JJJJSTIYYYY/my-llm/blob/main/docs/reference/configuration.md)。它们在本地配置，实际请求仍使用上表的官方原生字段。
+- `usage_mode=Config(default_value="native", ...)`、能力标记、Parameter 路径和 omit 的语义来自 [my-llm-py 配置指南](https://github.com/JJJJSTIYYYY/my-llm/blob/main/docs/reference/configuration.md)。它们在本地配置，实际请求仍使用上表的官方原生字段。成功调用后通过 `bot.llm.get_last_usage()` 读取用量，公开事件和结果不含 usage。
 - `max_tokens` Parameter 的 path 从 SDK 参数字典根部开始；`$.max_tokens` 直接传 SDK 参数，`$.extra_body.max_tokens` 经 extra_body 传入。路径由库解释，项目不维护转换层。不传调用参数时，仅在原生目标字段缺失时补 profile 默认预算；显式正整数覆盖目标值，`max_tokens=None` 写入实际空值，`max_tokens=omit` 删除本次目标键。Profile 的 `max_tokens=None` 继承整份 Parameter，`max_tokens=omit` 禁用自动写入并保留手动原生字段。输入参数不被修改。
 - `reasoning=True` 或非 none 的强度会触发自动生成的思考参数；开启参数和映射后的 effort 优先于同路径的原生 extra_body 值。普通默认字段仍仅在缺失时补值。
 - SDK 客户端在 bot 内复用；所有请求完成后 `await bot.aclose()`，或使用 `async with bot`。流自身的 `async with` 关闭本次响应，不关闭共享客户端。
 - `reasoning=False` 按 MyLLM 语义表示本次不注入开启思考的绑定，不等于厂商一定关闭默认思考。需要显式控制时，使用该型号支持的原生 extra_body；K3 与 K2.7 不支持关闭思考，不能伪造关闭参数。
-- 多模态支持取决于 MyLLM 对目标协议的表达能力，不把厂商支持任意媒体等同于本项目能无损转换所有媒体。
+- 图片输入须在 ModelProfile 显式声明 `supports_vision=Config(default_value=True)`；默认不支持，当前内置预设尚未声明。跨协议无法表达的支持内容或禁用能力使用 `SemanticLossError`，保持库默认的 raise 策略。
 - 当前内置型号经官方 SDK + 本地 HTTP transport 验证请求序列化与资源释放；没有使用付费 API 或验证账户权限。
 
 ## 自定义服务
 
 CustomProvider 不猜测远端模型能力；由调用方提供有文档依据的原生配置，
-并显式声明 `protocol=Config(default_value=...)`。1.2.0 的 ProviderProfile 不再默认选择 Chat。
+并显式声明 `protocol=Config(default_value=...)`，ProviderProfile 没有默认协议。
 `reasoning_enable=Parameter(..., supports=False)` 拒绝推理请求；
 `reasoning_effort=Parameter(..., supports=False)` 禁用自动强度绑定。
 `reasoning_enable=omit` 仅停止自动开启参数写入，仍可通过独立的强度参数或原生配置控制推理。

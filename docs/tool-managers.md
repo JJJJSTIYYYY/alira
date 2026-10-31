@@ -1,6 +1,6 @@
 # 工具管理器与图节点
 
-依赖版本为 `apixis==1.1.5`。工具服务的生命周期由应用管理，独立于 AgentGraph。
+依赖版本为 `apixis==1.1.6`。工具服务的生命周期由应用管理，独立于 AgentGraph。
 
 | 概念 | 职责 |
 | --- | --- |
@@ -92,6 +92,8 @@ tools = ToolNode([functions, mcp], identity=identity, bind_llm_node="model")
 也可以将 `await mcp.get_mcp_tools(meta, identity)` 返回的部分工具直接交给 ToolNode。模型绑定接受 ToolNode 或 BaseTool 列表；MCPTool 不继承函数工具 Tool。
 
 客户端按 `(id, platform, conversation_uid)` 隔离，同一身份下再按 `mcp_id` 复用。发现接口要求完整 AliraIdentity；执行时检查 `state["target"]` 与发现身份一致，校验通过后才访问连接。
+
+身份类型从 `alira.interface.utils.identiity` 导入，包含 `id`、`platform`、`conversation_uid` 三个必填字段。
 
 旧的 `config.lifecycle`、`agent_invoke` 和 `tool_calls` 资源作用域已移除。连接在工具批次和图调用结束后保持打开，通过以下入口显式回收：
 

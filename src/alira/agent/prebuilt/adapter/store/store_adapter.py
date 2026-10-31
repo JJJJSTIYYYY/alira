@@ -2,12 +2,12 @@ import hashlib
 from pathlib import Path
 from uuid import uuid4
 
-from alira.agent.store import query_store
+from alira.database import query_store
 from alira.agent.core.utils.message import AnyMessage
 from alira.agent.prebuilt.adapter.context.context_adapter import ai_context_adapter
 from alira.agent.core.utils.funcs import check_identity, convert_generation_id_to_message_node_id
 from alira.agent.core.utils.context import LongtermMemory, ShorttermMemory, Skill, Todo
-from alira.common.type import AliraIdentity
+from alira.interface.utils.identiity import AliraIdentity
 from alira.common.utils.logger import logger
 from alira.common.utils.yaml import load_from_yaml
 
@@ -57,7 +57,7 @@ class AIStoreAdapter:
         """
 
         if not message: return
-        user_uid, _, conversation_uid, _ = check_identity(identity)
+        user_uid, _, conversation_uid = check_identity(identity)
 
         if conversation_uid.startswith("sub_"): 
             logger.info("Sub-assistant conversation, skip.")
@@ -137,7 +137,7 @@ class AIStoreAdapter:
         if not content: 
             logger.error("Can not append an empty memory to database.")
             return
-        user_uid, _, conversation_uid, _ = check_identity(identity)
+        user_uid, _, conversation_uid = check_identity(identity)
         
         payload = {
             "memory_id": memory_id,
@@ -166,7 +166,7 @@ class AIStoreAdapter:
             list[dict]: Message dict list returned by memory service.
         """
 
-        user_uid, _, conversation_uid, _ = check_identity(identity)
+        user_uid, _, conversation_uid = check_identity(identity)
         payload = {
             "user_uid": user_uid,
             "conversation_uid": conversation_uid,
@@ -198,7 +198,7 @@ class AIStoreAdapter:
             list[ShorttermMemory]: :class:`ShorttermMemory` dict list.
         """
 
-        user_uid, _, conversation_uid, _ = check_identity(identity)
+        user_uid, _, conversation_uid = check_identity(identity)
         try:
             payload = {
                 "user_uid": user_uid,
@@ -225,7 +225,7 @@ class AIStoreAdapter:
             list[LongtermMemory]: :class:`LongtermMemory` dict list.
         """
 
-        user_uid, _, conversation_uid, _ = check_identity(identity)
+        user_uid, _, conversation_uid = check_identity(identity)
         try:
             payload = {
                 "user_uid": user_uid,
@@ -251,7 +251,7 @@ class AIStoreAdapter:
         Returns: 
             list[Skill]: :class:`Skill` dict list.
         """
-        user_uid, _, _, _ = check_identity(identity)
+        user_uid, _, _ = check_identity(identity)
         try:
             payload = {
                 "user_uid": user_uid,

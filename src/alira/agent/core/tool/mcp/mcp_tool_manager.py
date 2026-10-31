@@ -23,9 +23,9 @@ from alira.agent.core.tool.mcp.mcp_tool_runtime import MCPToolRuntime
 from alira.agent.core.tool.utils.manager import ToolManager
 from alira.agent.core.tool.utils.request import ToolRequest
 from alira.agent.core.utils.message import ToolCall
-from alira.agent.store import query_store
-from alira.common.lifespan import auto_init
-from alira.common.type import AliraIdentity
+from alira.database import query_store
+from alira.lifespan import auto_init
+from alira.interface.utils.identiity import AliraIdentity
 from alira.common.utils import logger
 
 IdentityKey = tuple[str, str, str]

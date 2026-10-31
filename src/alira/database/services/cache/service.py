@@ -8,12 +8,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from alira.agent.store.services.cache.keys import (
+from alira.database.services.cache.keys import (
     build_conversation_key,
     build_resource_key,
     build_resource_prefix,
 )
-from alira.agent.store.utils.handlers import service_handler
+from alira.database.utils.handlers import service_handler
 from alira.common.utils.logger import logger
 from alira.config.base_config import (
     ALIRA_BASE_DIR,

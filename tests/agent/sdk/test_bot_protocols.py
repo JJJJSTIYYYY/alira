@@ -470,7 +470,7 @@ async def test_cancelling_one_request_closes_its_body_and_preserves_concurrent_s
 
 
 async def test_ollama_schema_constraint_rejection_is_not_silently_weakened():
-    from my_llm import UnsupportedCapabilityError
+    from my_llm import SemanticLossError
 
     bot = make_profile_bot(
         provider=ProviderProfile(protocol=Config(default_value="ollama")),
@@ -479,5 +479,5 @@ async def test_ollama_schema_constraint_rejection_is_not_silently_weakened():
             supports_function_calling=Config(default_value=True),
         ),
     )
-    with pytest.raises(UnsupportedCapabilityError, match="schema constraints"):
+    with pytest.raises(SemanticLossError, match="schema constraints"):
         await bot.invoke([{"role": "user", "content": "hi"}], tools=[weather])

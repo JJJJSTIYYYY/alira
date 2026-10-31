@@ -23,7 +23,7 @@ async def test_provider_options_pass_to_library_without_native_request_translati
                 path="$.extra_body.thinking",
                 default_value={"type": "enabled"},
             ),
-            replay_reasoning_content_when_tool_calls=Config(default_value=True),
+            feedback_reasoning_content=Config(default_value="when_tool_calls"),
         ),
         model=ModelProfile(
             model=Attribute(default_value="test"),

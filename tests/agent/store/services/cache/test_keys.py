@@ -2,7 +2,7 @@
 
 import pytest
 
-from alira.agent.store.services.cache import keys
+from alira.database.services.cache import keys
 
 
 def test_cache_key_builders():

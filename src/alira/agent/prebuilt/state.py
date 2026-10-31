@@ -1,7 +1,7 @@
 from typing import Annotated, Literal, NotRequired, TypedDict
 
 from alira.agent.core.utils.message import AnyMessage, ToolCall
-from alira.common.type import AliraIdentity
+from alira.interface.utils.identiity import AliraIdentity
 from apixis.core.graph.base import AutoMerge
 from alira.agent.core.utils.context import LongtermMemory, ShorttermMemory, Skill, Todo, RoleSchema
 

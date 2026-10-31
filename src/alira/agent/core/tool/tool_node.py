@@ -11,7 +11,7 @@ from alira.agent.core.tool.function import FunctionToolManager, Tool
 from alira.agent.core.tool.utils.manager import ToolManager
 from alira.agent.core.tool.utils.request import ToolRequest
 from alira.agent.core.utils.message import AliraAiMessage, AliraToolMessage, ToolCall
-from alira.common.type import AliraIdentity
+from alira.interface.utils.identiity import AliraIdentity
 
 
 class ToolNode(BaseNode):

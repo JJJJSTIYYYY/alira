@@ -5,10 +5,10 @@ from concurrent.futures import CancelledError as QueryCancelledError
 from concurrent.futures import Future
 from pathlib import Path
 
-from alira.agent.store.executor import StoreExecutor
-from alira.agent.store.services.cache import CacheService
-from alira.agent.store.services.data import DataService
-from alira.agent.store.services.files import FileService
+from alira.database.executor import StoreExecutor
+from alira.database.services.cache import CacheService
+from alira.database.services.data import DataService
+from alira.database.services.files import FileService
 from alira.common.utils.logger import logger
 
 

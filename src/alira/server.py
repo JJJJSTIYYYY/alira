@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 import alira.router as routers_pkg
 from alira._version import __version__
-from alira.common.lifespan.auto_init import auto_init
+from alira.lifespan.auto_init import auto_init
 from alira.common.utils.logger import logger
 from alira.common.utils.version import print_logo
 from alira.config.base_config import BASE_URL

@@ -12,7 +12,7 @@ class MoonShotProvider(BaseProvider):
             ProviderProfile(
                 protocol=Config(default_value="openai_chat"),
                 base_url=Config(default_value="https://api.moonshot.ai/v1"),
-                replay_reasoning_content_when_tool_calls=Config(default_value=True),
+                feedback_reasoning_content=Config(default_value="when_tool_calls"),
                 models=Attribute(
                     default_value=[
                         ModelProfile(

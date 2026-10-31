@@ -13,13 +13,13 @@ from sqlalchemy import case, func, insert, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from sqlalchemy.sql import Executable
 
-from alira.agent.store.services.data.engine import (
+from alira.database.services.data.engine import (
     create_engine,
     database_io,
     engine_transaction,
     initialize_schema,
 )
-from alira.agent.store.services.data.schema import (
+from alira.database.services.data.schema import (
     agent_skills,
     conversations,
     cron_task,
@@ -30,8 +30,8 @@ from alira.agent.store.services.data.schema import (
     shortterm_memory,
     users,
 )
-from alira.agent.store.utils.handlers import identity_failure, service_handler
-from alira.agent.store.utils.serialization import (
+from alira.database.utils.handlers import identity_failure, service_handler
+from alira.database.utils.serialization import (
     decode_json_fields,
     decode_message_row,
     encode_json,

@@ -7,7 +7,7 @@ from uuid import UUID
 import pytest
 from sqlalchemy import text
 
-from alira.agent.store.services.data import DataService
+from alira.database.services.data import DataService
 
 
 @pytest.fixture

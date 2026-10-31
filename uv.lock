@@ -57,12 +57,12 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.21.0" },
-    { name = "apixis", specifier = "==1.1.5" },
+    { name = "apixis", specifier = "==1.1.6" },
     { name = "fastapi", specifier = ">=0.139.2" },
     { name = "fastmcp-slim", extras = ["client"], specifier = "==3.4.7" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1" },
     { name = "inflect", specifier = ">=7.5.0" },
-    { name = "my-llm-py", extras = ["all"], specifier = "==1.2.0" },
+    { name = "my-llm-py", extras = ["all"], specifier = "==1.4.2" },
     { name = "pydantic", specifier = ">=2.12" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "redis", specifier = ">=8.0.1" },
@@ -129,14 +129,14 @@ wheels = [
 
 [[package]]
 name = "apixis"
-version = "1.1.5"
+version = "1.1.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/37/38/668f93abbe78b67c609c39de8ceacc1719279adf30efb24894e70ab143a6/apixis-1.1.5.tar.gz", hash = "sha256:197ee548bc9d8033e6441b363d2208753336baaa33e60344edb475d0d70743ae", size = 242061, upload-time = "2026-10-27T00:03:14.425Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/55/3c/b0569ebb71377d9050d2428d01016bce8fe51dbab4c6a96fd2bb4b5cf474/apixis-1.1.6.tar.gz", hash = "sha256:bdb480c471c1bf755839d654c163aba5c2bb07b3a2ea50d2f50f9b94a34de5ab", size = 251096, upload-time = "2026-10-31T13:29:33.43Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/17/bd/5adb791a36b8ab86e5366d5fbdc37125f7f8f2291d0562d5b795261584a6/apixis-1.1.5-py3-none-any.whl", hash = "sha256:f98cc493b228ea7e25cfe25c2a3bea613c43e781e0628190df0e554c3769c2c9", size = 68343, upload-time = "2026-10-27T00:03:12.554Z" },
+    { url = "https://files.pythonhosted.org/packages/95/2c/1c953ab92f431f12be76b5b1f2f77c376b994efac1900d34b69b572e3765/apixis-1.1.6-py3-none-any.whl", hash = "sha256:79efb85012476acf6605750ff7e2338b00cd0a2eb8cabefd0930560a81e2317a", size = 68646, upload-time = "2026-10-31T13:29:31.7Z" },
 ]
 
 [[package]]
@@ -1108,14 +1108,14 @@ wheels = [
 
 [[package]]
 name = "my-llm-py"
-version = "1.2.0"
+version = "1.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bf/3d/24a4e5fcd1f8bf156102e0e50b585ced60dcce9f8293a34bef2638e2c819/my_llm_py-1.2.0.tar.gz", hash = "sha256:ba1ac82a7974a03ebe39e073a877505888bce761f51ad3a1ef6301a540411da0", size = 1104030, upload-time = "2026-10-21T15:20:59.527Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f6/3b/df010f80478a93fde471fc436fa4697e72eb9f038f4aad336ff2c57a194b/my_llm_py-1.4.2.tar.gz", hash = "sha256:66b99a794bca3a5236610dcc1a0172254eddf0808ffa745669881db36604eb6d", size = 492776, upload-time = "2026-10-30T19:21:56.546Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f9/6e/ddee9171efde4da2e7a5dcc657e1dfad75f921811f581147b4e6abfa16cb/my_llm_py-1.2.0-py3-none-any.whl", hash = "sha256:7b19b22a5a4fa1b85fde540d149d1decd707a2dab31a57176949d6b4090295e8", size = 112999, upload-time = "2026-10-21T15:20:57.436Z" },
+    { url = "https://files.pythonhosted.org/packages/de/f1/2952360df708e075a54a8a6182d14074d1da5757ddd83ed347bab1bfe1c2/my_llm_py-1.4.2-py3-none-any.whl", hash = "sha256:2f3c7862cc1c4c2e15453d6c236ac335f06bec30cfd400ddb13938cbc06d045d", size = 151520, upload-time = "2026-10-30T19:21:54.853Z" },
 ]
 
 [package.optional-dependencies]

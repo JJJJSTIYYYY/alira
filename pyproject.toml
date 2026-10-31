@@ -19,9 +19,9 @@ dependencies = [
     "redis>=8.0.1",
     "uvicorn>=0.51.0",
     "fastmcp-slim[client]==3.4.7",
-    "apixis==1.1.5",
+    "apixis==1.1.6",
     "pydantic>=2.12",
-    "my-llm-py[all]==1.2.0",
+    "my-llm-py[all]==1.4.2",
 ]
 
 [project.urls]

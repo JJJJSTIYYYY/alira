@@ -1,6 +1,6 @@
 """Database timestamp normalization."""
 
-from alira.agent.store.utils.serialization import normalize_row
+from alira.database.utils.serialization import normalize_row
 
 
 def test_normalize_row_timestamps():

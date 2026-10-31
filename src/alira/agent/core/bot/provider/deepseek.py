@@ -33,7 +33,7 @@ class DeepseekProvider(BaseProvider):
                         "max": None,
                     },
                 ),
-                replay_reasoning_content_when_tool_calls=Config(default_value=True),
+                feedback_reasoning_content=Config(default_value="when_tool_calls"),
                 models=Attribute(
                     default_value=[
                         ModelProfile(

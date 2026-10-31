@@ -6,9 +6,9 @@ import zipfile
 
 import pytest
 
-from alira.agent.store import executor as execute_module
-from alira.agent.store.executor import StoreExecutor
-from alira.agent.store.services.cache import CacheService
+from alira.database import executor as execute_module
+from alira.database.executor import StoreExecutor
+from alira.database.services.cache import CacheService
 
 
 def make_executor(*, data_store, file_store):

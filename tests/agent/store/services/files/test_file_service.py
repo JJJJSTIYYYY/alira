@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from alira.agent.store.services.files import service as file_module
-from alira.agent.store.services.files import FileService
+from alira.database.services.files import service as file_module
+from alira.database.services.files import FileService
 
 
 def make_skill_zip(path: Path, frontmatter: str | None, *, nested=True) -> Path:
@@ -75,7 +75,7 @@ async def test_import_skill_packages_moves_valid_zip_and_extracts_metadata(
 ):
     monkeypatch.setattr(file_module, "ALIRA_BASE_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(
-        "alira.agent.store.services.files.service.uuid4",
+        "alira.database.services.files.service.uuid4",
         lambda: SimpleNamespace(hex="fixedid")
     )
     source = make_skill_zip(

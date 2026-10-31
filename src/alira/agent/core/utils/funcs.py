@@ -4,7 +4,8 @@ import json
 import time
 from typing import Callable, Generator, Literal
 
-from alira.common.type import IdentityError, AliraIdentity
+from alira.common.type import IdentityError
+from alira.interface.utils.identiity import AliraIdentity
 
 
 def get_date_natural_language() -> str:
@@ -51,7 +52,7 @@ def convert_generation_id_to_message_node_id(
     )
 
 
-def check_identity(identity: AliraIdentity | None) -> tuple[str, str, str, dict | None]:
+def check_identity(identity: AliraIdentity | None) -> tuple[str, str, str]:
     '''Check if the identity is available.
 
     Returns:
@@ -59,11 +60,10 @@ def check_identity(identity: AliraIdentity | None) -> tuple[str, str, str, dict 
             - user_uid
             - platform
             - conversation_uid
-            - associated_account
 
     Raises:
         `IdentityError` when identity is not provided or ambiguous alira identity.
-        `RuntimeError` when generation_id is not provided.
+        `RuntimeError` when identity is not provided.
     '''
     if not identity:
         raise RuntimeError("Alira identity is not provided.")
@@ -79,7 +79,7 @@ def check_identity(identity: AliraIdentity | None) -> tuple[str, str, str, dict 
     if raise_key:
         raise IdentityError(f"Key {", ".join(raise_key)} is not provided in identity.")
     
-    return identity.get("id"), identity.get("platform"), identity.get("conversation_uid"), identity.get("associated_account")
+    return identity["id"], identity["platform"], identity["conversation_uid"]
 
 
 @contextmanager

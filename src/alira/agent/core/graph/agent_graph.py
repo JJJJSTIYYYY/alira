@@ -5,7 +5,7 @@ from apixis.core.graph import BaseNode, GraphManager, NodeGraph
 from alira.agent.core.tool import BaseTool, ToolNode
 from alira.agent.core.tool.base import ToolFunction
 from alira.agent.core.tool.utils.manager import ToolManager
-from alira.common.type import AliraIdentity
+from alira.interface.utils.identiity import AliraIdentity
 
 
 class AgentGraph(NodeGraph):

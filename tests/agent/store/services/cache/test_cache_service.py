@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from alira.agent.store.services.cache import service as cache_module
-from alira.agent.store.services.cache import CacheService
+from alira.database.services.cache import service as cache_module
+from alira.database.services.cache import CacheService
 
 
 @pytest.fixture

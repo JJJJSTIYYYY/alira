@@ -1,6 +1,6 @@
 # 模型调用与消息存储
 
-Alira 使用 `my-llm-py[all]==1.2.0` 的 `MyLLM`、`ProviderProfile` 和 `ModelProfile`。
+Alira 使用 `my-llm-py[all]==1.4.2` 的 `MyLLM`、`ProviderProfile` 和 `ModelProfile`。
 所有上游协议都显式使用 `stdio_protocol="openai_chat"`，消息和工具声明采用
 [OpenAI Chat Completions 格式](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)。
 协议转换、SDK 客户端、流累积和终止校验由 my-llm-py 负责。
@@ -96,9 +96,14 @@ async def tool_round():
 ```
 
 当前 Ollama SDK 不能完整表达部分工具 JSON Schema 约束；my-llm-py 会抛出
-`UnsupportedCapabilityError`。Alira 保留这个异常，不静默删除约束。
+`SemanticLossError`。模型声明不支持的能力或无法跨协议表达的内容也使用此异常；
+Alira 保留默认的 raise 策略。
+图片输入需要在 ModelProfile 显式设置 `supports_vision=Config(default_value=True)`；
+默认不支持，内置预设尚未声明此能力。历史思考的回放策略使用
+`feedback_reasoning_content=Config(default_value="when_tool_calls")`，仅回放工具调用消息中的思考。
 SDK 错误及库的 `StreamError`、`IncompleteStreamError` 等异常直接向调用者传播。
-完成原因和 usage 位于 Chat 流事件中；需要存储时由调用方记录到 `metadata`。
+完成原因位于 Chat 流事件中；usage 不进入公开事件或结果，成功调用或消费完整流后通过
+`bot.llm.get_last_usage()` 读取，需要存储时由调用方记录到 `metadata`。
 
 ## 消息
 
@@ -135,10 +140,10 @@ Provider 的 `model_list`、MCP 的 `config` 和 cron 的 `extra_config` 也由�
 统一编解码，调用方传原生 JSON 值；字符串按字符串保存，更新时的 `None`
 表示不修改。执行器和缓存直接使用解码后的值。消息支持游标、树分支和软删除。
 
-存储代码集中在 `src/alira/agent/store`，按运行编排、具体服务和辅助处理分类：
+存储代码集中在 `src/alira/database`，按运行编排、具体服务和辅助处理分类：
 
 ```text
-store/
+database/
 ├── manager.py              # 跨线程异步接口与线程生命周期
 ├── runtime.py              # 线程内服务生命周期与查询 worker
 ├── executor.py             # 业务动作编排与缓存读写
@@ -166,7 +171,7 @@ store/
 无需从调用方传入内部服务或事件循环：
 
 ```python
-from alira.agent.store import StoreManager
+from alira.database import StoreManager
 
 store = StoreManager(db_path="store.sqlite3", cache_path="cache.json", worker_count=2)
 try:

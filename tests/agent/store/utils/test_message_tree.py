@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from alira.agent.store.utils.message_tree import MessageNodeTree
+from alira.database.utils.message_tree import MessageNodeTree
 
 
 def _row(

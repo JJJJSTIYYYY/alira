@@ -8,15 +8,15 @@ from uuid import UUID
 import pytest
 from sqlalchemy import text
 
-import alira.agent.store as store_package
-from alira.agent.store import StoreManager, query_store
-from alira.agent.store import manager as manager_module
-from alira.agent.store import runtime as runtime_module
-from alira.agent.store.executor import StoreExecutor
-from alira.agent.store.services.cache import CacheService
-from alira.agent.store.services.data import DataService
-from alira.agent.store.utils.message_tree import MessageNodeTree
-from alira.common.lifespan.auto_init import auto_init
+import alira.database as store_package
+from alira.database import StoreManager, query_store
+from alira.database import manager as manager_module
+from alira.database import runtime as runtime_module
+from alira.database.executor import StoreExecutor
+from alira.database.services.cache import CacheService
+from alira.database.services.data import DataService
+from alira.database.utils.message_tree import MessageNodeTree
+from alira.lifespan.auto_init import auto_init
 
 
 async def wait_for_thread(event):

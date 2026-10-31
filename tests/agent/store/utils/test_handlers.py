@@ -4,8 +4,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from alira.agent.store.utils import handlers as service_utils
-from alira.agent.store.utils.handlers import service_handler
+from alira.database.utils import handlers as service_utils
+from alira.database.utils.handlers import service_handler
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,7 @@ from alira.agent.core.utils.message import (
     AliraToolMessage,
 )
 from alira.agent.prebuilt.adapter.context.context_adapter import AIContextAdapter
-from alira.agent.store.services.data import DataService
+from alira.database.services.data import DataService
 from tests.agent.store.services.data.test_data_service import create_user_and_conversation
 
 
