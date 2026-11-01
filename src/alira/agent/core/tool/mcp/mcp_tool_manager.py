@@ -25,7 +25,7 @@ from alira.agent.core.tool.utils.request import ToolRequest
 from alira.agent.core.utils.message import ToolCall
 from alira.database import query_store
 from alira.lifespan import auto_init
-from alira.interface.utils.identiity import AliraIdentity
+from alira.interface.utils.identiity import AliraIdentity, ConversationIdentity
 from alira.common.utils import logger
 
 IdentityKey = tuple[str, str, str]
@@ -53,22 +53,28 @@ class MCPToolManager(ToolManager):
         self._closing_users: dict[UserKey, asyncio.Task[None]] = {}
 
     @staticmethod
-    def identity_key(identity: AliraIdentity) -> IdentityKey:
+    def user_key(identity: AliraIdentity) -> UserKey:
         if not isinstance(identity, dict):
             raise TypeError("MCP requires an AliraIdentity dictionary.")
-        values = tuple(
-            identity.get(field) for field in ("id", "platform", "conversation_uid")
-        )
+        values = tuple(identity.get(field) for field in ("id", "platform"))
         if any(not isinstance(value, str) or not value for value in values):
+            raise ValueError("MCP identity requires non-empty id and platform.")
+        return identity["id"], identity["platform"]
+
+    @staticmethod
+    def identity_key(identity: ConversationIdentity) -> IdentityKey:
+        user_uid, platform = MCPToolManager.user_key(identity)
+        conversation_uid = identity.get("conversation_uid")
+        if not isinstance(conversation_uid, str) or not conversation_uid:
             raise ValueError(
                 "MCP identity requires non-empty id, platform and conversation_uid."
             )
-        return identity["id"], identity["platform"], identity["conversation_uid"]
+        return user_uid, platform, conversation_uid
 
     def owns(self, tool: BaseTool) -> bool:
         return isinstance(tool, MCPTool) and tool.manager is self
 
-    def tools_for(self, identity: AliraIdentity | None = None) -> list[MCPTool]:
+    def tools_for(self, identity: ConversationIdentity | None = None) -> list[MCPTool]:
         if identity is None:
             raise ValueError("An MCP manager requires a discovery identity.")
         catalog = self._catalogs.get(self.identity_key(identity))
@@ -124,7 +130,7 @@ class MCPToolManager(ToolManager):
 
     async def call_tool(
         self,
-        identity: AliraIdentity,
+        identity: ConversationIdentity,
         mcp_id: str,
         tool_name: str,
         arguments: dict[str, Any] | None = None,
@@ -215,7 +221,7 @@ class MCPToolManager(ToolManager):
         return Client(transport, **client_options)
 
     async def get_mcp_tools(
-        self, mcp_meta: McpMetaSchema, identity: AliraIdentity
+        self, mcp_meta: McpMetaSchema, identity: ConversationIdentity
     ) -> list[MCPTool]:
         """Discover through a runtime; only its task can enter or exit the client."""
         meta = deepcopy(mcp_meta)
@@ -254,7 +260,7 @@ class MCPToolManager(ToolManager):
             catalog.tools[mcp_id] = tools
             return tools
 
-    async def load_all_mcp_tools(self, identity: AliraIdentity) -> list[MCPTool]:
+    async def load_all_mcp_tools(self, identity: ConversationIdentity) -> list[MCPTool]:
         key = self.identity_key(identity)
         self._check_admission(key, self._catalogs.get(key))
         tools: list[MCPTool] = []
@@ -306,7 +312,7 @@ class MCPToolManager(ToolManager):
         if not task.cancelled():
             task.exception()
 
-    async def close_session(self, identity: AliraIdentity) -> None:
+    async def close_session(self, identity: ConversationIdentity) -> None:
         """Reject new calls and stop this conversation's runtimes through events."""
         task = self._begin_close_session(self.identity_key(identity))
         if task is not None:
@@ -339,7 +345,7 @@ class MCPToolManager(ToolManager):
 
     async def close_user(self, identity: AliraIdentity) -> None:
         """Close every conversation for the same user and platform."""
-        await asyncio.shield(self._begin_close_user(self.identity_key(identity)[:2]))
+        await asyncio.shield(self._begin_close_user(self.user_key(identity)))
 
     async def _stop(self) -> None:
         """Close resident clients after the event service has drained requests."""

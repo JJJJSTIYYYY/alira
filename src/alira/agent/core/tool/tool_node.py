@@ -3,7 +3,6 @@
 import asyncio
 from typing import Any
 
-from apixis.core.event import start_core
 from apixis.core.graph import BaseNode, Command
 
 from alira.agent.core.tool.base import BaseTool, ToolFunction
@@ -11,7 +10,7 @@ from alira.agent.core.tool.function import FunctionToolManager, Tool
 from alira.agent.core.tool.utils.manager import ToolManager
 from alira.agent.core.tool.utils.request import ToolRequest
 from alira.agent.core.utils.message import AliraAiMessage, AliraToolMessage, ToolCall
-from alira.interface.utils.identiity import AliraIdentity
+from alira.interface.utils.identiity import ConversationIdentity
 
 
 class ToolNode(BaseNode):
@@ -32,7 +31,7 @@ class ToolNode(BaseNode):
         timeout: float | None = None,
         *,
         bind_llm_node: str | BaseNode | None = None,
-        identity: AliraIdentity | None = None,
+        identity: ConversationIdentity | None = None,
     ) -> None:
         if not isinstance(name, str) or not name:
             raise ValueError("A tool node requires a name.")
@@ -146,7 +145,6 @@ class ToolNode(BaseNode):
         calls = self._get_tool_calls(state)
         if not calls:
             return []
-        await start_core()
         for manager in self.managers:
             await manager.start()
         tasks = [asyncio.create_task(self._request_call(state, call)) for call in calls]

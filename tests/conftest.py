@@ -9,7 +9,26 @@ from apixis.core.event import aget_event_loop, aget_event_pipe, factory
 from apixis.core.graph import NodeGraph
 
 from alira.agent.core.tool.utils.manager import ToolManager
+from alira.common.utils.logger import logger
 from alira.lifespan import auto_init
+from alira.lifespan.auto_init import ApixisCore, AutoInit
+
+
+@pytest_asyncio.fixture
+async def core_lifecycle():
+    """Use real core services without starting unrelated application storage."""
+
+    class IsolatedAutoInit(AutoInit):
+        _instance = None
+
+    registry = IsolatedAutoInit()
+    registry.register(logger, group="core")
+    registry.register(ApixisCore(), group="core")
+    try:
+        yield registry
+    finally:
+        if registry._started_services or registry._pending_stop:
+            await registry.stop()
 
 
 @pytest_asyncio.fixture(autouse=True, loop_scope="session")
@@ -61,4 +80,4 @@ async def cleanup_event_runtime(event_runtime_capacity, monkeypatch):
 @pytest.fixture
 def event_runtime_capacity():
     """Use ordinary runtime limits unless a boundary test requests a new core."""
-    return None
+    return

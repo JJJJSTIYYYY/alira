@@ -8,27 +8,23 @@
 | --- | --- | --- |
 | `alira.agent.store` | `alira.database` | 已核对业务导入、内部导入、测试和 monkeypatch 路径，更新文档目录。 |
 | `alira.common.lifespan` | `alira.lifespan` | 已核对应用、数据库管理器和测试调用，保留分组启停契约。 |
-| `alira.common.type.AliraIdentity` | `alira.interface.utils.identiity.AliraIdentity` | 已更新图、工具管理器、MCP、预置状态、存储适配器、身份工具和相关测试的导入。 |
+| `alira.common.type.AliraIdentity` | `alira.interface.utils.identiity` 中的 `AliraIdentity` / `ConversationIdentity` | 已按用户和会话边界对齐图、工具管理器、MCP、身份工具和相关测试。 |
 
-身份类型沿用当前文件名 `identiity.py`，必填字段为 `id`、`platform`、`conversation_uid`。
+身份类型沿用当前文件名 `identiity.py`：`AliraIdentity` 必填字段为 `id`、`platform`；
+`ConversationIdentity(AliraIdentity)` 额外要求 `conversation_uid`。
+普通请求和用户配置使用 `AliraIdentity`；Generation、图工具目录和 MCP 会话操作使用 `ConversationIdentity`。
 补齐 `interface/utils/__init__.py`，使该目录能被当前 `namespaces = false` 的打包配置发现。
 
 ## 身份校验与存储调用
 
-[check_identity](../src/alira/agent/core/utils/funcs.py) 返回
-`(user_uid, platform, conversation_uid)` 三元组。`associated_account` 已从类型、
-返回值、读取逻辑和返回值说明中移除；原有必填字段校验和异常行为保留。
+[check_identity](../src/alira/agent/core/utils/funcs.py) 校验用户身份并返回
+`(user_uid, platform)`；`check_conversation_identity` 额外校验会话 ID，返回
+`(user_uid, platform, conversation_uid)`。缺少身份抛出 `RuntimeError`，
+必填字段为空时抛出 `IdentityError`。
 
-[AIStoreAdapter](../src/alira/agent/prebuilt/adapter/store/store_adapter.py) 的六处调用已同步：
-
-| 方法 | 当前解包 |
-| --- | --- |
-| `append_message_to_store` | `user_uid, _, conversation_uid` |
-| `append_shortterm_to_store` | `user_uid, _, conversation_uid` |
-| `get_messages_from_store` | `user_uid, _, conversation_uid` |
-| `get_shortterm_from_store` | `user_uid, _, conversation_uid` |
-| `get_longterm_from_store` | `user_uid, _, conversation_uid` |
-| `get_skills_from_store` | `user_uid, _, _` |
+预置上下文和存储适配器已删除，其专属测试随实现移除。消息模型测试直接验证
+`AliraMessageBase` 的应用字段与扩展属性；SQLite 持久化测试直接使用消息的
+`to_dict()` 和 `DataService`，验证协议字段、业务扩展、消息树标识及重启后的读取。
 
 ## Generation 上下文
 
@@ -42,5 +38,8 @@
 
 ## 验证
 
-- 存储适配器的既有测试覆盖三元组解包后的读写调用。
+- 消息持久化测试覆盖 null、空字符串、JSON 形状字符串、多模态内容和工具消息的 SQLite 往返。
+- 配置测试使用 `DATABASE` 和 `DATACACHE`，并验证已移除配置不会覆盖当前值。
+- 应用启停测试通过真实 `AutoInit` 和 `ApixisCore` 验证重启、运行时清理顺序和日志线程退出。
+- 身份测试覆盖用户及会话校验、普通请求绑定；MCP 测试覆盖用户身份关闭所有会话和会话操作的必填字段校验。
 - 新增 generation 上下文测试，覆盖对象返回、上下文外访问、嵌套异常恢复和异步任务隔离。

@@ -118,12 +118,12 @@ SDK 错误及库的 `StreamError`、`IncompleteStreamError` 等异常直接向�
 - `metadata` 保留 provider、model、usage、duration 等运行信息。
 - `extensions` 保留文件、引用、任务、todo、搜索、系统指令及其他自定义业务字段。
 - `content` 保留字符串、内容数组及 assistant 的 null；不将多模态内容转换为字符串。
-- `info` 仍是仅用于数据库的业务事件，由上下文适配器读取，不能发送给模型。
+- `info` 是仅用于数据库的业务事件；调用方选择模型输入时必须排除该角色。
 
 ## 数据库
 
 数据库服务使用 SQLAlchemy Core + aiosqlite，SQLite 文件位置由
-`DATA_STORE.sqlite.database` 配置。`DataService.start()` 创建异步引擎并通过
+`DATABASE.sqlite.database` 配置。`DataService.start()` 创建异步引擎并通过
 `services/data/schema.py` 中的表定义创建缺失表；`stop()` 等待当前事务结束后释放连接，支持重启。
 应用只将默认 `StoreManager` 注册到 `auto_init`。管理器在专用线程内创建独立
 事件循环，并拥有缓存、数据库、文件服务、执行器及查询 worker。启动、查询、

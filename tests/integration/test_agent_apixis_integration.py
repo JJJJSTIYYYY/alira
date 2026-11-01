@@ -159,7 +159,11 @@ async def test_custom_messages_key_reaches_tool_node():
             "conversation": [
                 AliraAiMessage(
                     tool_calls=[
-                        {"id": "hello-1", "type": "function", "function": {"name": "hello", "arguments": '{}'}}
+                        {
+                            "id": "hello-1",
+                            "type": "function",
+                            "function": {"name": "hello", "arguments": "{}"},
+                        }
                     ]
                 )
             ]
@@ -171,6 +175,7 @@ async def test_custom_messages_key_reaches_tool_node():
 
 async def test_server_lifespan_can_restart_with_local_events_and_health_check(
     monkeypatch,
+    core_lifecycle,
 ):
     from apixis.core.event import (
         BuiltinChannel,
@@ -183,9 +188,12 @@ async def test_server_lifespan_can_restart_with_local_events_and_health_check(
     from alira.server import create_app
 
     # Exercise the real event runtime without opening unrelated storage services.
-    start, stop = AsyncMock(), AsyncMock()
-    monkeypatch.setattr("alira.server.auto_init.start", start)
-    monkeypatch.setattr("alira.server.auto_init.stop", stop)
+    start = AsyncMock(wraps=core_lifecycle.start)
+    stop = AsyncMock(wraps=core_lifecycle.stop)
+    monkeypatch.setattr(core_lifecycle, "start", start)
+    monkeypatch.setattr(core_lifecycle, "stop", stop)
+    monkeypatch.setattr("alira.server.auto_init", core_lifecycle)
+    monkeypatch.setattr("alira.server.auto_load_router", lambda app: None)
     app = create_app()
     for _ in range(2):
         received = asyncio.Event()
@@ -240,7 +248,11 @@ async def test_add_tools_forwards_llm_binding_with_custom_messages_key():
             "conversation": [
                 AliraAiMessage(
                     tool_calls=[
-                        {"id": "hello-1", "type": "function", "function": {"name": "hello", "arguments": '{}'}}
+                        {
+                            "id": "hello-1",
+                            "type": "function",
+                            "function": {"name": "hello", "arguments": "{}"},
+                        }
                     ]
                 )
             ]

@@ -29,24 +29,6 @@ def compare_version(v: str) -> int:
         return 1
 
 
-
-# def print_logo():
-#     teal = "\033[38;2;0;200;170m"
-#     gray = "\033[38;2;140;140;140m"
-#     reset = "\033[0m"
-
-#     logo = r"""
-#     ___    __  __________  ___
-#    /   |  / /  \   _/ __ \/   |
-#   / /| | / /   / / / /_/ / /| |
-#  / ___ |/ /___/ /_/ _, _/ ___ |
-# /_/  |_/____/____/_/ |_/_/  |_|
-# """.strip("\n")
-
-#     print(f"{teal}{logo}{reset}")
-#     print(f"{gray}    Alira Agent  |  v{__version__}{reset}\n\n\n")
-
-
 def print_logo():
     teal = "\033[38;2;0;200;170m"
     orange = "\033[38;2;255;140;0m"
@@ -63,5 +45,6 @@ def print_logo():
 
     for ali, ra in logo:
         print(f"{teal}{ali}{orange}{ra}{reset}")
-
-    print(f"{gray}    Alira Agent  |  v{__version__}{reset}\n\n\n")
+    print(f"{gray}"+("=" * 31)+f"{reset}")
+    print(f"{gray}    Alira Agent  |  v{__version__}{reset}")
+    print(f"{gray}"+("=" * 31)+f"{reset}\n")

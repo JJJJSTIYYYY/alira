@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from uuid import uuid4
 
-from alira.interface.utils.identiity import AliraIdentity
+from alira.interface.utils.identiity import ConversationIdentity
 
 
 @dataclass
@@ -16,7 +16,7 @@ class Generation:
     State for a single AI generation.
     """
 
-    identity: AliraIdentity
+    identity: ConversationIdentity
     generation_id: str = field(default_factory=lambda: str(uuid4()))
 
     @cached_property

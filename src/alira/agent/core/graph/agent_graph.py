@@ -5,7 +5,7 @@ from apixis.core.graph import BaseNode, GraphManager, NodeGraph
 from alira.agent.core.tool import BaseTool, ToolNode
 from alira.agent.core.tool.base import ToolFunction
 from alira.agent.core.tool.utils.manager import ToolManager
-from alira.interface.utils.identiity import AliraIdentity
+from alira.interface.utils.identiity import ConversationIdentity
 
 
 class AgentGraph(NodeGraph):
@@ -94,7 +94,7 @@ class AgentGraphCreator(GraphManager):
         node_name: str = "tools",
         *,
         bind_llm_node: str | BaseNode | None = None,
-        identity: AliraIdentity | None = None,
+        identity: ConversationIdentity | None = None,
     ):
         """Add tools for agent.
 

@@ -15,7 +15,6 @@ from apixis.core.event import (
     EventType,
     get_event_pipe,
     get_handler_registry,
-    start_core,
 )
 from apixis.core.event.base import suspend_process
 from fastmcp import Client
@@ -88,7 +87,6 @@ class MCPToolRuntime:
 
     async def _start_task(self) -> None:
         if self._task is None:
-            await start_core()
             self._registry = get_handler_registry()
             try:
                 self._handler.register(

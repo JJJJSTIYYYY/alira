@@ -57,12 +57,12 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.21.0" },
-    { name = "apixis", specifier = "==1.1.6" },
+    { name = "apixis", specifier = ">=1.1.7" },
     { name = "fastapi", specifier = ">=0.139.2" },
     { name = "fastmcp-slim", extras = ["client"], specifier = "==3.4.7" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1" },
     { name = "inflect", specifier = ">=7.5.0" },
-    { name = "my-llm-py", extras = ["all"], specifier = "==1.4.2" },
+    { name = "my-llm-py", extras = ["all"], specifier = ">=1.4.2" },
     { name = "pydantic", specifier = ">=2.12" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "redis", specifier = ">=8.0.1" },
@@ -129,14 +129,14 @@ wheels = [
 
 [[package]]
 name = "apixis"
-version = "1.1.6"
+version = "1.1.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/55/3c/b0569ebb71377d9050d2428d01016bce8fe51dbab4c6a96fd2bb4b5cf474/apixis-1.1.6.tar.gz", hash = "sha256:bdb480c471c1bf755839d654c163aba5c2bb07b3a2ea50d2f50f9b94a34de5ab", size = 251096, upload-time = "2026-10-31T13:29:33.43Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/61/1e/adcca8a41e69c404a879fcd6505f3da342bb725f107c195f7ad3f85d5bc8/apixis-1.1.8.tar.gz", hash = "sha256:1acdca00d0b3e35273522a175140eb014cae48a65c47ac07d7e630370cebd7fa", size = 253325, upload-time = "2026-11-01T08:17:45.926Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/95/2c/1c953ab92f431f12be76b5b1f2f77c376b994efac1900d34b69b572e3765/apixis-1.1.6-py3-none-any.whl", hash = "sha256:79efb85012476acf6605750ff7e2338b00cd0a2eb8cabefd0930560a81e2317a", size = 68646, upload-time = "2026-10-31T13:29:31.7Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/33/57ca74a1ce6372a8c9ca9b522aaff4da253d422cf80868fb1cadd331ef39/apixis-1.1.8-py3-none-any.whl", hash = "sha256:3398969013316dbee931322a83ef3e33e8b4ad8c2c285a771618ceaa2bc635a3", size = 69144, upload-time = "2026-11-01T08:17:44.076Z" },
 ]
 
 [[package]]

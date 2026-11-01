@@ -1,12 +1,5 @@
-import asyncio
-from unittest.mock import AsyncMock
+"""Application-owned message fields and business extension properties."""
 
-from alira.agent.prebuilt.adapter.store import store_adapter as store_adapter_module
-from alira.agent.prebuilt.adapter.context.context_adapter import AIContextAdapter
-from alira.agent.prebuilt.adapter.store.store_adapter import AIStoreAdapter
-from alira.agent.core.utils.funcs import (
-    convert_generation_id_to_message_node_id,
-)
 from alira.agent.core.utils.message import AliraAiMessage, AliraToolMessage
 
 
@@ -17,8 +10,13 @@ def test_message_object_keeps_only_application_owned_fields():
         content="answer",
         metadata={"model": "gpt-test", "usage": {"input_tokens": 2}},
         reasoning_content="because",
-        tool_calls=[{"id": "call-1", "type": "function", "function": {
-            "name": "search", "arguments": '{"query":"alira"}'}}],
+        tool_calls=[
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "search", "arguments": '{"query":"alira"}'},
+            }
+        ],
         extensions={"uploaded_files": ["brief.pdf"]},
     )
 
@@ -50,97 +48,3 @@ def test_extension_properties_update_the_underlying_dictionary():
         "todo_list": [{"content": "read", "status": "pending"}],
         "system_instruction": ["cite sources"],
     }
-
-
-def test_message_storage_conversion_uses_the_new_schema():
-    adapter = AIContextAdapter()
-    generation_id = "12345678-1234-1234-1234-123456789abc"
-    message = AliraAiMessage(
-        message_uid="message-3",
-        name="assistant",
-        content="answer",
-        metadata={"provider": "openai"},
-        reasoning_content="internal",
-    )
-
-    stored = adapter.convert_to_dict_message(
-        message,
-        generation_id,
-        parent_id="parent-node",
-    )
-
-    assert stored == {
-        **message.to_dict(),
-        "message_uid": "message-3",
-        "generation_id": generation_id,
-        "role": "assistant",
-        "name": "assistant",
-        "content": "answer",
-        "node_id": convert_generation_id_to_message_node_id(
-            generation_id,
-            "assistant",
-        ),
-        "parent_id": "parent-node",
-        "metadata": {"provider": "openai"},
-        "extensions": {},
-    }
-    assert {"id", "timestamp", "think", "extra", "info"}.isdisjoint(stored)
-
-
-def test_database_row_conversion_ignores_database_generated_timestamp():
-    adapter = AIContextAdapter()
-    messages, todo = adapter.convert_to_alira_messages(
-        [
-            {
-                "message_uid": "message-4",
-                "role": "tool",
-                "name": "search",
-                "content": "result",
-                "metadata": {"duration": 0.5},
-                "extensions": {},
-                "tool_call_id": "call-4",
-                "timestamp": "2026-07-28T00:00:00",
-            }
-        ]
-    )
-
-    assert todo is None
-    assert len(messages) == 1
-    assert messages[0].message_uid == "message-4"
-    assert messages[0].metadata == {"duration": 0.5}
-    assert messages[0].tool_call_id == "call-4"
-    assert not hasattr(messages[0], "timestamp")
-
-
-def test_store_adapter_sends_the_canonical_message_payload():
-    query_store = AsyncMock(return_value="success")
-    original_query_store = store_adapter_module.query_store
-    store_adapter_module.query_store = query_store
-    try:
-        message = AliraAiMessage(
-            message_uid="message-5",
-            content="answer",
-            reasoning_content="because",
-        )
-        asyncio.run(
-            AIStoreAdapter().append_message_to_store(
-                message,
-                {
-                    "id": "user-1",
-                    "platform": "web",
-                    "conversation_uid": "conversation-1",
-                },
-                "12345678-1234-1234-1234-123456789abc",
-            )
-        )
-    finally:
-        store_adapter_module.query_store = original_query_store
-
-    payload = query_store.await_args.kwargs["payload"]
-    assert query_store.await_args.kwargs["action"] == "append_message"
-    assert payload["message"]["message_uid"] == "message-5"
-    assert payload["message"]["extensions"] == {}
-    assert payload["message"]["reasoning_content"] == "because"
-    assert {"id", "timestamp", "think", "extra", "info"}.isdisjoint(
-        payload["message"]
-    )

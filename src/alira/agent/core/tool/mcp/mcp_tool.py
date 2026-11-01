@@ -12,7 +12,7 @@ from alira.agent.core.tool.mcp.base import (
     _get_model_value,
 )
 from alira.agent.core.utils.message import ToolCall
-from alira.interface.utils.identiity import AliraIdentity
+from alira.interface.utils.identiity import ConversationIdentity
 
 if TYPE_CHECKING:
     from alira.agent.core.tool.mcp.mcp_tool_manager import MCPToolManager
@@ -26,7 +26,7 @@ class MCPTool(BaseTool):
         definition: Any,
         manager: MCPToolManager,
         mcp_meta: McpMetaSchema,
-        identity: AliraIdentity,
+        identity: ConversationIdentity,
     ) -> None:
         name = _get_model_value(definition, "name")
         if not isinstance(name, str) or not name:

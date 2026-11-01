@@ -5,7 +5,7 @@ import time
 from typing import Callable, Generator, Literal
 
 from alira.common.type import IdentityError
-from alira.interface.utils.identiity import AliraIdentity
+from alira.interface.utils.identiity import AliraIdentity, ConversationIdentity
 
 
 def get_date_natural_language() -> str:
@@ -52,19 +52,11 @@ def convert_generation_id_to_message_node_id(
     )
 
 
-def check_identity(identity: AliraIdentity | None) -> tuple[str, str, str]:
-    '''Check if the identity is available.
+def check_identity(identity: AliraIdentity | None) -> tuple[str, str]:
+    """Validate a user identity and return ``(user_uid, platform)``.
 
-    Returns:
-        tuple:
-            - user_uid
-            - platform
-            - conversation_uid
-
-    Raises:
-        `IdentityError` when identity is not provided or ambiguous alira identity.
-        `RuntimeError` when identity is not provided.
-    '''
+    Raise RuntimeError for a missing identity, or IdentityError for empty fields.
+    """
     if not identity:
         raise RuntimeError("Alira identity is not provided.")
     
@@ -73,13 +65,20 @@ def check_identity(identity: AliraIdentity | None) -> tuple[str, str, str]:
         raise_key.append('user_uid')
     if not identity.get("platform"):
         raise_key.append("platform")
-    if not identity.get("conversation_uid"):
-        raise_key.append("conversation_uid")
-
     if raise_key:
         raise IdentityError(f"Key {", ".join(raise_key)} is not provided in identity.")
     
-    return identity["id"], identity["platform"], identity["conversation_uid"]
+    return identity["id"], identity["platform"]
+
+
+def check_conversation_identity(
+    identity: ConversationIdentity | None,
+) -> tuple[str, str, str]:
+    """Validate a conversation identity and return its user, platform and session."""
+    user_uid, platform = check_identity(identity)
+    if identity is None or not identity.get("conversation_uid"):
+        raise IdentityError("Key conversation_uid is not provided in identity.")
+    return user_uid, platform, identity["conversation_uid"]
 
 
 @contextmanager

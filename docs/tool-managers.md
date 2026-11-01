@@ -91,15 +91,15 @@ tools = ToolNode([functions, mcp], identity=identity, bind_llm_node="model")
 
 也可以将 `await mcp.get_mcp_tools(meta, identity)` 返回的部分工具直接交给 ToolNode。模型绑定接受 ToolNode 或 BaseTool 列表；MCPTool 不继承函数工具 Tool。
 
-客户端按 `(id, platform, conversation_uid)` 隔离，同一身份下再按 `mcp_id` 复用。发现接口要求完整 AliraIdentity；执行时检查 `state["target"]` 与发现身份一致，校验通过后才访问连接。
+客户端按 `(id, platform, conversation_uid)` 隔离，同一身份下再按 `mcp_id` 复用。发现接口要求完整 `ConversationIdentity`；执行时检查 `state["target"]` 与发现身份一致，校验通过后才访问连接。
 
-身份类型从 `alira.interface.utils.identiity` 导入，包含 `id`、`platform`、`conversation_uid` 三个必填字段。
+身份类型从 `alira.interface.utils.identiity` 导入：`AliraIdentity` 包含 `id`、`platform`，`ConversationIdentity(AliraIdentity)` 再增加必填的 `conversation_uid`。MCP 发现、调用和关闭单个会话使用 `ConversationIdentity`；`close_user()` 只要求 `AliraIdentity`。
 
 旧的 `config.lifecycle`、`agent_invoke` 和 `tool_calls` 资源作用域已移除。连接在工具批次和图调用结束后保持打开，通过以下入口显式回收：
 
 ```python
 await mcp.close_session(identity)  # 当前会话
-await mcp.close_user(identity)     # 同一用户和平台的所有会话
+await mcp.close_user({"id": identity["id"], "platform": identity["platform"]})  # 所有会话
 await mcp.stop()                   # 整个管理器
 ```
 

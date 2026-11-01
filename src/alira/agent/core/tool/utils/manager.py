@@ -12,7 +12,7 @@ from apixis.core.event.base import suspend_process
 
 from alira.agent.core.tool.base import BaseTool
 from alira.agent.core.tool.utils.request import ToolRequest, send_request
-from alira.interface.utils.identiity import AliraIdentity
+from alira.interface.utils.identiity import ConversationIdentity
 
 
 class ToolManager(ABC):
@@ -48,7 +48,7 @@ class ToolManager(ABC):
         return self._generation
 
     @abstractmethod
-    def tools_for(self, identity: AliraIdentity | None = None) -> list[BaseTool]:
+    def tools_for(self, identity: ConversationIdentity | None = None) -> list[BaseTool]:
         """Select definitions visible to this graph's identity."""
 
     def owns(self, tool: BaseTool) -> bool:

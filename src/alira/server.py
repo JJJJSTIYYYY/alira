@@ -1,10 +1,12 @@
+from alira.common.utils.version import print_logo
+print_logo()
+
 import importlib
 import pkgutil
 from contextlib import asynccontextmanager
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse
 
 import uvicorn
-from apixis.core.event import get_event_loop, get_event_pipe, start_core
 from fastapi import APIRouter, FastAPI
 from fastapi.responses import JSONResponse
 
@@ -12,7 +14,6 @@ import alira.router as routers_pkg
 from alira._version import __version__
 from alira.lifespan.auto_init import auto_init
 from alira.common.utils.logger import logger
-from alira.common.utils.version import print_logo
 from alira.config.base_config import BASE_URL
 
 
@@ -34,28 +35,12 @@ def auto_load_router(app: FastAPI):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    event_pipe = event_loop = None
     try:
         auto_load_router(app)
-
-        event_pipe = get_event_pipe()
-        event_loop = get_event_loop()
-        await start_core()
         await auto_init.start()
-
         yield
     finally:
-        # Runtime shutdown exchanges lifecycle and result events. Keep the core
-        # available until every application-owned service has finished cleanup.
-        try:
-            await auto_init.stop()
-        finally:
-            try:
-                if event_pipe is not None:
-                    await event_pipe.stop()
-            finally:
-                if event_loop is not None:
-                    await event_loop.stop()
+        await auto_init.stop()
 
 
 def create_app() -> FastAPI:
@@ -71,11 +56,8 @@ def create_app() -> FastAPI:
 if __name__ == "__main__":
     app = create_app()
 
-    parsed = urlparse(BASE_URL)
-
+    parsed: ParseResult = urlparse(BASE_URL)
     host = parsed.hostname or "0.0.0.0"
     port = parsed.port or 2712
 
-    print_logo()
-    
     uvicorn.run(app, host=host, port=port, reload=False)

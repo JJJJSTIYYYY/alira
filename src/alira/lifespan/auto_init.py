@@ -3,6 +3,7 @@
 import asyncio
 from typing import Protocol
 
+from apixis import start_core, stop_core
 from alira.common.utils.logger import logger
 
 
@@ -138,4 +139,22 @@ class AutoInit:
             raise ExceptionGroup("Failed to stop services", errors)
 
 
+class ApixisCore:
+    """first registered service to start/stop the apixis core automatically."""
+
+    async def start(self):
+        await start_core()
+
+    async def stop(self):
+        await stop_core()
+
+    def get_version(self) -> str:
+        from apixis import VERSION
+        return VERSION
+
+apixis_core = ApixisCore()
+
+
 auto_init = AutoInit()
+auto_init.register(logger, group="core")
+auto_init.register(apixis_core, group="core")

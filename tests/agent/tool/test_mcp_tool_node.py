@@ -126,11 +126,11 @@ async def test_one_graph_node_routes_function_and_mcp_managers(manager):
 
     from alira.agent.core.bot.alira_bot import AliraBot
     from alira.agent.core.graph import AgentGraphCreator
-    from alira.interface.utils.identiity import AliraIdentity
+    from alira.interface.utils.identiity import ConversationIdentity
 
     class State(TypedDict):
         messages: Annotated[list, AutoMerge()]
-        target: AliraIdentity
+        target: ConversationIdentity
 
     async def local() -> str:
         return "local-result"
@@ -246,7 +246,9 @@ async def test_close_user_blocks_all_conversations_but_preserves_other_platforms
     second = manager.clients[-1]
     await manager.get_mcp_tools(META, other_platform)
     independent = manager.clients[-1]
-    closing = asyncio.create_task(manager.close_user(IDENTITY))
+    closing = asyncio.create_task(
+        manager.close_user({"id": IDENTITY["id"], "platform": IDENTITY["platform"]})
+    )
     await asyncio.sleep(0)
     with pytest.raises(RuntimeError, match="closing"):
         await manager.get_mcp_tools(META, {**IDENTITY, "conversation_uid": "new"})
@@ -254,6 +256,26 @@ async def test_close_user_blocks_all_conversations_but_preserves_other_platforms
     await active
     await closing
     assert first.closed and second.closed and not independent.closed
+
+
+@pytest.mark.asyncio
+async def test_mcp_session_operations_require_conversation_identity(manager):
+    identity = {"id": "user", "platform": "test"}
+    with pytest.raises(ValueError, match="conversation_uid"):
+        await manager.get_mcp_tools(META, identity)
+    with pytest.raises(ValueError, match="conversation_uid"):
+        await manager.close_session(identity)
+    assert manager.clients == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "identity",
+    [{"id": "user"}, {"platform": "test"}, {"id": "user", "platform": ""}],
+)
+async def test_close_user_rejects_incomplete_user_identity(manager, identity):
+    with pytest.raises(ValueError, match="id and platform"):
+        await manager.close_user(identity)
 
 
 @pytest.mark.asyncio
@@ -509,10 +531,10 @@ async def test_real_in_process_mcp_protocol_persists_across_agent_graph_invocati
     from mcp.server.fastmcp import FastMCP
 
     from alira.agent.core.graph import AgentGraphCreator
-    from alira.interface.utils.identiity import AliraIdentity
+    from alira.interface.utils.identiity import ConversationIdentity
 
     class State(TypedDict):
-        target: AliraIdentity
+        target: ConversationIdentity
         messages: Annotated[list, AutoMerge()]
 
     server = FastMCP("in-process")

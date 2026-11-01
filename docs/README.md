@@ -12,3 +12,5 @@ Alira 提供 Agent SDK、工具执行、消息存储和 HTTP 服务。
 - [工具管理器、事件调用与 MCP 生命周期](tool-managers.md)
 
 - [目录迁移对齐记录与待处理调用](refactor-alignment.md)
+
+- [日志器生命周期、背压与性能验证](logging.md)

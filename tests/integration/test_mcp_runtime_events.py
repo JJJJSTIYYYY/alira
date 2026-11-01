@@ -322,7 +322,7 @@ async def test_concurrent_runtime_start_creates_only_one_owner():
 
 
 async def test_application_shutdown_keeps_event_core_alive_until_runtimes_close(
-    resident, monkeypatch
+    resident, monkeypatch, core_lifecycle
 ):
     from unittest.mock import AsyncMock
 
@@ -331,14 +331,16 @@ async def test_application_shutdown_keeps_event_core_alive_until_runtimes_close(
     manager, client = resident
     pipe = factory.get_event_pipe()
     monkeypatch.setattr("alira.server.auto_load_router", lambda app: None)
-    monkeypatch.setattr("alira.server.auto_init.start", AsyncMock())
+    monkeypatch.setattr("alira.server.auto_init", core_lifecycle)
 
     async def stop_services():
         assert pipe.is_running
         await manager.stop()
         assert pipe.is_running and client.closed
 
-    monkeypatch.setattr("alira.server.auto_init.stop", stop_services)
+    core_lifecycle.register(
+        SimpleNamespace(start=AsyncMock(), stop=stop_services), group="tool"
+    )
     app = create_app()
     async with app.router.lifespan_context(app):
         assert await manager.call_tool(IDENTITY, "server", "echo") == "ok"
