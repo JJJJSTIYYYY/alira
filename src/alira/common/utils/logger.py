@@ -3,13 +3,16 @@
 import asyncio
 import atexit
 import json
+import logging
 import sys
 import time
 import traceback
 from collections import deque
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from datetime import datetime
 from pathlib import Path
-from threading import Condition, Lock, Thread
+from threading import Condition, RLock, Thread
 from typing import Any, ClassVar
 
 from alira.config.base_config import (
@@ -50,6 +53,8 @@ class LogWriter:
     the call; cancellation of an async caller does not cancel the worker's I/O.
     """
 
+    STARTUP_SUFFIX: ClassVar[str] = datetime.now().strftime("%H%M%S%f")[:-3]
+
     def __init__(self, root: str, capacity: int, file_size: int, interval: float = 0.2):
         if capacity <= 0 or file_size <= 0 or interval <= 0:
             raise ValueError(
@@ -60,7 +65,8 @@ class LogWriter:
         self.file_size = file_size
         self.interval = interval
         self._condition = Condition()
-        self._lifecycle = Lock()
+        self._lifecycle = RLock()
+        self._holds = 0
         self._pending: deque[tuple[int, str, str]] = deque()
         self._thread: Thread | None = None
         self._stopping = False
@@ -95,6 +101,20 @@ class LogWriter:
         with self._lifecycle:
             self._start()
 
+    @contextmanager
+    def running(self) -> Iterator[None]:
+        """Keep the writer alive across nested application start/stop calls."""
+        with self._lifecycle:
+            self._start()
+            self._holds += 1
+        try:
+            yield
+        finally:
+            with self._lifecycle:
+                self._holds -= 1
+                if not self._holds:
+                    self.stop()
+
     def _start(self) -> None:
         with self._condition:
             if self._thread is not None:
@@ -126,6 +146,9 @@ class LogWriter:
 
     def stop(self) -> None:
         with self._lifecycle:
+            if self._holds:
+                self.flush()
+                return
             with self._condition:
                 if self._thread is None and not self._pending:
                     self._raise_error()
@@ -224,8 +247,10 @@ class LogWriter:
         index = self._indices.get(name, 0)
         offset = 0
         while offset < len(lines):
-            suffix = f"_{index}" if index else ""
-            path = directory / f"{today}{suffix}.log"
+            rotation_suffix = f"_{index}" if index else ""
+            path = (
+                directory / f"{today}_{LogWriter.STARTUP_SUFFIX}{rotation_suffix}.log"
+            )
             with path.open("ab") as output:
                 size = output.tell()
                 end = offset
@@ -272,6 +297,8 @@ class Logger:
         "warning": "yellow",
         "error": "red",
         "exception": "red",
+        "critical": "red",
+        "trace": "cyan",
         "success": "green",
         "debug": "cyan",
     }
@@ -362,10 +389,18 @@ class Logger:
         return " | ".join(parts)
 
     def _get_formatted_message(self, level, message, *args, **kwargs):
+        formatted = self._format_message(message, *args)
+        if kwargs:
+            formatted += f" ({self._format_kwargs(**kwargs)})"
+        return self._format_entry(level, formatted, " ".join(self._get_caller_info()))
+
+    def _format_entry(
+        self, level: str, message: str, source: str, created: float | None = None
+    ) -> str:
         parts = []
 
         if self.show_time:
-            second = int(time.time())
+            second = int(time.time() if created is None else created)
             cached = Logger._time_cache
             if cached[0] != second:
                 cached = (
@@ -380,17 +415,8 @@ class Logger:
         if self.show_level:
             parts.append(f"[{level.upper()}]")
 
-        module_name, class_name, function_name = self._get_caller_info()
-
-        parts.append(f"[{module_name} {class_name} {function_name}]:")
-
-        formatted_main = self._format_message(message, *args)
-        parts.append(formatted_main)
-
-        if kwargs:
-            kwargs_str = self._format_kwargs(**kwargs)
-            parts.append(f"({kwargs_str})")
-
+        parts.append(f"[{source}]:")
+        parts.append(message)
         return " ".join(parts)
 
     def _colorize(self, text, color_name):
@@ -398,21 +424,54 @@ class Logger:
         return f"{color_code}{text}{self.COLOR_CODES['reset']}"
 
     def _log(self, level, message, *args, color_name=None, **kwargs):
-        if color_name is None:
-            color_name = self.LEVEL_COLORS.get(level, "white")
-
         formatted_message = self._get_formatted_message(level, message, *args, **kwargs)
 
         if level == "exception" and sys.exc_info()[0] is not None:
             formatted_message += "\n" + traceback.format_exc().rstrip()
+        self._emit(level, formatted_message, color_name)
+
+    def _emit(
+        self, level: str, formatted_message: str, color_name: str | None = None
+    ) -> None:
+        if color_name is None:
+            color_name = self.LEVEL_COLORS.get(level, "white")
         Logger._writer.enqueue(self.name, formatted_message)
 
         colored_message = self._colorize(formatted_message, color_name)
 
         print(
             colored_message,
-            file=sys.stderr if level in ["error", "exception"] else sys.stdout,
+            file=sys.stderr
+            if level in {"error", "exception", "critical"}
+            else sys.stdout,
         )
+
+    def log_record(self, record: logging.LogRecord) -> None:
+        """Render a standard record using its original source, time and traceback."""
+        if record.levelno >= logging.ERROR:
+            priority = LOG_LEVELS["ERROR"]
+        elif record.levelno >= logging.WARNING:
+            priority = LOG_LEVELS["WARN"]
+        elif record.levelno >= logging.INFO:
+            priority = LOG_LEVELS["INFO"]
+        else:
+            priority = LOG_LEVELS["DEBUG"]
+        if priority < LOG_LEVELS[DEBUG_LEVEL]:
+            return
+        if record.levelno < logging.DEBUG and not TRACE:
+            return
+        message = record.getMessage()
+        if record.exc_info:
+            message += (
+                "\n" + "".join(traceback.format_exception(*record.exc_info)).rstrip()
+            )
+        elif record.exc_text:
+            message += "\n" + record.exc_text.rstrip()
+        if record.stack_info:
+            message += "\n" + record.stack_info.rstrip()
+        source = f"{record.name} {record.module} {record.funcName}:{record.lineno}"
+        level = record.levelname.lower()
+        self._emit(level, self._format_entry(level, message, source, record.created))
 
     def info(self, message, *args, **kwargs):
         if LOG_LEVELS["INFO"] < LOG_LEVELS[DEBUG_LEVEL]:
@@ -506,6 +565,37 @@ class Logger:
     async def flush(cls) -> None:
         """Wait for records already accepted; surface any file output failure."""
         await asyncio.to_thread(Logger._writer.flush)
+
+    @classmethod
+    def file_logging(cls) -> AbstractContextManager[None]:
+        """Own file output until the entire server, including final logs, exits."""
+        return Logger._writer.running()
+
+
+class AliraLogHandler(logging.Handler):
+    """Forward standard-library records to the application logger."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            logger.log_record(record)
+        except Exception:  # noqa: BLE001 - use the standard Handler error path
+            self.handleError(record)
+
+
+def get_uvicorn_log_config() -> dict[str, Any]:
+    """Replace Uvicorn handlers; application settings perform level filtering."""
+    return {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "handlers": {"alira": {"()": AliraLogHandler}},
+        "loggers": {
+            "uvicorn": {"handlers": ["alira"], "level": "DEBUG", "propagate": False},
+            **{
+                name: {"handlers": [], "level": "NOTSET", "propagate": True}
+                for name in ("uvicorn.error", "uvicorn.access", "uvicorn.asgi")
+            },
+        },
+    }
 
 
 def _shutdown() -> None:

@@ -12,7 +12,7 @@ BASE_URL = _get_config("SERVER.base_url", "http://localhost:2712")
 DEBUG_LEVEL = _get_config("LOG.debug_level", "DEBUG")
 TRACE = _get_config("LOG.trace", True)
 MAX_LOG_FILE_SIZE = _get_config("LOG.max_log_file_size", 5242880)
-LOG_BUFFER_SIZE = _get_config("LOG.log_buffer_size", 100)
+LOG_BUFFER_SIZE = _get_config("LOG.log_buffer_size", 1024)
 
 # Runtime
 GENERATION_TTL = _get_config("RUNTIME.generation_ttl", 600)

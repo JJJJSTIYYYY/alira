@@ -3,6 +3,8 @@
 import asyncio
 import importlib
 import json
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from threading import Event
@@ -123,21 +125,22 @@ def test_prestart_eviction_is_counted_and_reported(tmp_path, capsys):
 
 def test_utf8_rotation_restarts_existing_file_and_oversized_record(tmp_path):
     today = datetime.now().strftime("%Y-%m-%d")
+    basename = f"{today}_{LogWriter.STARTUP_SUFFIX}"
     directory = tmp_path / "test"
     directory.mkdir()
-    (directory / f"{today}.log").write_bytes(b"123456\n")
+    (directory / f"{basename}.log").write_bytes(b"123456\n")
     writer = LogWriter(str(tmp_path), 100, 10)
     for message in ["中文", "中文", "a" * 11, "z"]:
         writer.enqueue("test", message)
     writer.stop()
-    assert (directory / f"{today}.log").read_bytes() == b"123456\n"
-    assert (directory / f"{today}_1.log").read_text() == "中文\n"
-    assert (directory / f"{today}_2.log").read_text() == "中文\n"
-    assert (directory / f"{today}_3.log").read_text() == "a" * 11 + "\n"
-    assert (directory / f"{today}_4.log").read_text() == "z\n"
+    assert (directory / f"{basename}.log").read_bytes() == b"123456\n"
+    assert (directory / f"{basename}_1.log").read_text() == "中文\n"
+    assert (directory / f"{basename}_2.log").read_text() == "中文\n"
+    assert (directory / f"{basename}_3.log").read_text() == "a" * 11 + "\n"
+    assert (directory / f"{basename}_4.log").read_text() == "z\n"
     writer.enqueue("test", "next")
     writer.stop()
-    assert (directory / f"{today}_4.log").read_text() == "z\nnext\n"
+    assert (directory / f"{basename}_4.log").read_text() == "z\nnext\n"
 
 
 def test_file_failure_is_visible_and_other_names_still_write(writer, tmp_path, capsys):
@@ -240,8 +243,12 @@ def test_date_rollover_resets_rotation_indices(tmp_path, monkeypatch):
     writer.write_batch([("test", "a"), ("test", "b")])
     monkeypatch.setattr(logging.time, "time", lambda: first + 1)
     writer.write_batch([("test", "c")])
-    assert (tmp_path / "test/2026-11-01_1.log").read_text() == "b\n"
-    assert (tmp_path / "test/2026-11-02.log").read_text() == "c\n"
+    assert (
+        tmp_path / f"test/2026-11-01_{LogWriter.STARTUP_SUFFIX}_1.log"
+    ).read_text() == "b\n"
+    assert (
+        tmp_path / f"test/2026-11-02_{LogWriter.STARTUP_SUFFIX}.log"
+    ).read_text() == "c\n"
 
 
 async def test_stop_failure_can_be_cleaned_up_and_restarted(
@@ -336,3 +343,42 @@ def test_closed_stderr_does_not_kill_file_worker_or_hang_barriers(
     writer.enqueue("test", "still alive")
     writer.stop()
     assert lines(tmp_path) == ["still alive"]
+
+
+def test_process_starts_get_separate_files_and_loggers_share_suffix(tmp_path):
+    legacy = tmp_path / "first" / f"{datetime.now():%Y-%m-%d}.log"
+    legacy.parent.mkdir()
+    legacy.write_text("previous logs\n")
+    script = """
+import sys
+from importlib import import_module
+from alira.common.utils.logger import Logger, LogWriter
+
+module = import_module('alira.common.utils.logger')
+module.DEBUG_LEVEL = 'DEBUG'
+Logger._writer = LogWriter(sys.argv[1], 100, 1024 * 1024)
+with Logger.file_logging():
+    Logger('first').info(sys.argv[2])
+    Logger('second').info(sys.argv[2])
+print(LogWriter.STARTUP_SUFFIX)
+"""
+    suffixes = []
+    for marker in ("first-start", "second-start"):
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(tmp_path), marker],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        suffix = result.stdout.splitlines()[-1]
+        assert suffix.isdecimal() and len(suffix) == 9
+        suffixes.append(suffix)
+        for name in ("first", "second"):
+            paths = list((tmp_path / name).glob(f"*_{suffix}.log"))
+            assert len(paths) == 1
+            assert marker in paths[0].read_text()
+            other_marker = "second-start" if marker == "first-start" else "first-start"
+            assert other_marker not in paths[0].read_text()
+    assert suffixes[0] != suffixes[1]
+    assert legacy.read_text() == "previous logs\n"

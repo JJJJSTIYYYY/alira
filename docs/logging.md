@@ -1,16 +1,40 @@
 # 日志器
 
-应用通过 `alira.common.utils.logger.logger` 输出彩色控制台日志，同时按日志器名称将纯文本保存到 `SERVER.base_dir/<name>/YYYY-MM-DD[_index].log`。Apixis 自身的日志仍由依赖管理。
+应用通过 `alira.common.utils.logger.logger` 输出彩色控制台日志，同时按日志器名称将纯文本保存到 `SERVER.base_dir/<name>/YYYY-MM-DD_<HHMMSSmmm>[_index].log`。Apixis 自身的日志仍由依赖管理。
 
-服务加载路由后，由 `AutoInit` 依次启动日志器、Apixis 核心和其他已注册服务；日志器启动前的日志先进入缓冲区。关闭时按注册逆序清理其他服务和核心，最后排空日志并等待写入线程退出。直接使用 SDK 时，调用 `await logger.start()`，退出时调用 `await logger.stop()`。需要提前读取文件时调用 `await logger.flush()`。
+`LogWriter.STARTUP_SUFFIX` 在进程加载日志模块时生成一次，取本地启动时间的时、分、秒和毫秒，格式为 `HHMMSSmmm`，不包含日期或毫秒之后的部分，供同一次启动中的所有日志器共享。例如 `2026-11-01_213045123.log` 表示启动时间为 21:30:45.123。重新启动进程会重新生成后缀；同一进程内的写入线程重启和跨天轮转沿用该后缀，轮转编号仍从 `_1` 递增。
+
+服务器入口先启动日志写入线程，再运行 Uvicorn。应用加载路由后，由 `AutoInit` 依次启动日志器、Apixis 核心和其他已注册服务。关闭时按注册逆序清理服务和核心，应用日志器的 `stop()` 排空当时已接收的记录；写入线程继续接收 Uvicorn 的关闭日志，直到 Uvicorn 返回后才最终排空并退出。入口异常退出时同样执行清理。
+
+直接使用 SDK 时，调用 `await logger.start()`，退出时调用 `await logger.stop()`；未使用服务器外层作用域时，`stop()` 会排空并等待线程退出。需要提前读取文件时调用 `await logger.flush()`。
+
+## Uvicorn 日志
+
+`uv run src/alira/server.py` 和 `uv run python -m alira.server` 均通过 `run_server()` 启动，传入 `get_uvicorn_log_config()`。该配置用 `AliraLogHandler` 接管 Uvicorn 的运行、请求访问和 ASGI 日志，统一使用应用日志器的颜色、格式和文件输出。默认不启用 Uvicorn 的 ASGI TRACE 消息跟踪。
+
+标准日志的 WARNING 使用应用的 WARN 阈值，CRITICAL 使用 ERROR 阈值；最终过滤遵循 `LOG.debug_level`。ERROR 和 CRITICAL 输出到 stderr，其余级别输出到 stdout。转发保留记录的创建时间、日志器名称、源模块、函数、行号和异常堆栈，不将转发器自身作为调用来源。访问日志中的客户端地址、HTTP 方法、路径和状态码保持完整。
+
+配置将子日志器统一传播到一个 Uvicorn 处理器，避免默认处理器和父级传播造成重复输出；不接管其他库的日志器。标准 Handler 扩展机制见 [Python logging 文档](https://docs.python.org/3.12/library/logging.html#handler-objects)。
+
+需要自己调用 Uvicorn 时，可使用相同的入口作用域：
+
+```python
+import uvicorn
+from alira.common.utils.logger import get_uvicorn_log_config, logger
+
+with logger.file_logging():
+    uvicorn.run(app, log_config=get_uvicorn_log_config())
+```
+
+`file_logging()` 可嵌套，最外层退出时关闭写入线程；作用域中的 `start()` 保持幂等，`stop()` 只排空当前记录。这样应用生命周期结束后产生的服务器日志仍能正常写入文件。
 
 ## 写入与错误处理
 
 - 一个独立线程处理普通日志的批量写入和文件轮转，文件不跨批次保持打开。生产者只负责格式化、加入缓冲区和同步输出控制台。
-- `LOG.log_buffer_size` 控制待写记录数量，默认 100。满批立即写入，低流量时约每 200 ms 刷新；磁盘繁忙时实际完成时间会延长。
+- `LOG.log_buffer_size` 控制待写记录数量，默认 1024。满批立即写入，低流量时约每 200 ms 刷新；磁盘繁忙时实际完成时间会延长。
 - 运行期间缓冲区满时，调用线程等待写入线程取走一批，不丢弃已接收记录。这种背压也可能阻塞调用日志器的事件循环，尤其是在慢磁盘或持续过载时。
 - 启动前保留最近一个缓冲区的记录；超出的记录会被淘汰，并在写入线程启动时向 stderr 报告数量。关闭开始后新调用只输出控制台；关闭完成后的调用重新进入启动前缓冲区。进程正常退出时会尝试排空残留记录。
-- `flush()` 等待调用前已接收的记录完成写入，`stop()` 还会等待线程退出。取消等待者不会中断已经运行的文件操作；后续启动会等待上一次关闭完成。
+- `flush()` 等待调用前已接收的记录完成写入，`stop()` 在没有外层 `file_logging()` 作用域时还会等待线程退出。取消等待者不会中断已经运行的文件操作；后续启动会等待上一次关闭完成。
 - 文件失败立即向 stderr 报告，并由下一次 `flush()` 或 `stop()` 抛出 `RuntimeError`。失败批次不自动重试，避免部分写入后重试产生重复；其他日志器名称的文件仍会尝试写入。
 - 轮转按 UTF-8 字节数和记录边界执行，单条记录大于 `LOG.max_log_file_size` 时独占一个超限文件。支持跨日切换和已有文件续写。
 - 写入成功表示数据已交给操作系统，不包含 `fsync`。轮转协调范围为当前进程。

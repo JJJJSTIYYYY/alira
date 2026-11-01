@@ -1,4 +1,7 @@
+"""HTTP application and Uvicorn entry point with shared application logging."""
+
 from alira.common.utils.version import print_logo
+
 print_logo()
 
 import importlib
@@ -12,9 +15,9 @@ from fastapi.responses import JSONResponse
 
 import alira.router as routers_pkg
 from alira._version import __version__
-from alira.lifespan.auto_init import auto_init
-from alira.common.utils.logger import logger
+from alira.common.utils.logger import get_uvicorn_log_config, logger
 from alira.config.base_config import BASE_URL
+from alira.lifespan.auto_init import auto_init
 
 
 def auto_load_router(app: FastAPI):
@@ -53,11 +56,20 @@ def create_app() -> FastAPI:
     return app
 
 
-if __name__ == "__main__":
-    app = create_app()
-
+def run_server() -> None:
+    """Keep file output alive until Uvicorn has emitted its final messages."""
     parsed: ParseResult = urlparse(BASE_URL)
     host = parsed.hostname or "0.0.0.0"
     port = parsed.port or 2712
+    with logger.file_logging():
+        uvicorn.run(
+            create_app(),
+            host=host,
+            port=port,
+            reload=False,
+            log_config=get_uvicorn_log_config(),
+        )
 
-    uvicorn.run(app, host=host, port=port, reload=False)
+
+if __name__ == "__main__":
+    run_server()
