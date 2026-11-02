@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from uuid import uuid4
 
-from alira.interface.utils.identiity import ConversationIdentity
+from alira.common.type.identiity import ConversationIdentity
 
 
 @dataclass

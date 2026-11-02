@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
-from typing import Any, Self
+from typing import Any, Literal, Self
 
-from my_llm import MessageStream
+from my_llm import MessageStream, ModelProfile, ProviderProfile, ResolvedProfile
 
 from alira.agent.core.bot.provider import BaseProvider
 from alira.agent.core.tool import BaseTool, ToolNode
@@ -27,9 +27,9 @@ class AliraBot:
     ) -> None:
         """Select a registered provider and an exact model ID.
 
-        ``api_key`` overrides profile/environment credentials. Each provider
-        declares its own environment variable; CustomProvider catalogues are
-        registered through BaseProvider before selecting them by name.
+        ``api_key`` overrides credentials on the profile's active binding.
+        CustomProvider catalogues are registered through BaseProvider before
+        selecting them by name.
         Unknown providers/models and invalid profiles fail before inference.
         """
         self.provider = BaseProvider.get(provider)
@@ -191,3 +191,7 @@ class AliraBot:
             tools=self.tool_schemas if tools is None else self._schemas(tools),
             stream=True, **parameters,
         )
+
+    def compare_profiles(self, provider: ProviderProfile, model: ModelProfile) -> (tuple[ResolvedProfile, int] | Literal[True]):
+        """Return True if the provider and model are identical, or a tuple of the resolved profile and a hash key."""
+        return self.llm.compare(provider, model)

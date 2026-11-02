@@ -4,8 +4,8 @@ import pytest
 
 from alira.agent.core.utils.funcs import check_conversation_identity, check_identity
 from alira.common.type import IdentityError
-from alira.interface.utils.identiity import AliraIdentity, ConversationIdentity
-from alira.interface.utils.request import BasePayload, HttpRequest, WebSocketRequest
+from alira.common.type.identiity import AliraIdentity, ConversationIdentity
+from alira.common.type.request import BasePayload, HttpRequest, WebSocketRequest
 
 
 def test_user_and_conversation_validation():

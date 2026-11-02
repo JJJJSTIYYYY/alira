@@ -99,7 +99,8 @@ async def tool_round():
 `SemanticLossError`。模型声明不支持的能力或无法跨协议表达的内容也使用此异常；
 Alira 保留默认的 raise 策略。
 图片输入需要在 ModelProfile 显式设置 `supports_vision=Config(default_value=True)`；
-默认不支持，内置预设尚未声明此能力。历史思考的回放策略使用
+内置预设均显式设置为 False。历史思考的回放由 profile 控制：
+DeepSeek、Kimi 显式设置 `always`，完整回放历史思考；MiMo 使用
 `feedback_reasoning_content=Config(default_value="when_tool_calls")`，仅回放工具调用消息中的思考。
 SDK 错误及库的 `StreamError`、`IncompleteStreamError` 等异常直接向调用者传播。
 完成原因位于 Chat 流事件中；usage 不进入公开事件或结果，成功调用或消费完整流后通过

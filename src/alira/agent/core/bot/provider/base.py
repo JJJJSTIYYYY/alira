@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import os
 from copy import deepcopy
 from dataclasses import replace
 
 from my_llm import (
-    ConfigurationError,
     ModelProfile,
     MyLLM,
     ProviderProfile,
-    omit,
     resolve_profiles,
 )
 
@@ -27,8 +24,6 @@ class BaseProvider:
         self,
         name: str,
         profile: ProviderProfile,
-        *,
-        api_key_env: str | None = None,
     ) -> None:
         if not isinstance(name, str) or not name.strip():
             raise ValueError("provider name must be a non-empty string")
@@ -36,7 +31,6 @@ class BaseProvider:
             raise TypeError("profile must be a my_llm.ProviderProfile")
         self.name = name.strip().lower()
         self.profile = deepcopy(profile)
-        self.api_key_env = api_key_env
 
     @classmethod
     def get(cls, name: str) -> BaseProvider:
@@ -76,22 +70,18 @@ class BaseProvider:
         del PROVIDERS[name]
 
     def list_models(self) -> list[ModelProfile]:
-        return deepcopy(self.profile.list_models())
+        return self.profile.list_models()
 
     def get_profile(self) -> ProviderProfile:
-        """Return an independent provider configuration, including its models.
-
-        This snapshot contains configured credentials but does not resolve
-        environment variables or apply call-specific credential overrides.
-        """
-        return deepcopy(self.profile)
+        """Return an provider configuration without copying, including its models."""
+        return self.profile
 
     def get_model(self, model: str) -> ModelProfile:
         if not isinstance(model, str):
             raise TypeError("model must be a string")
         for preset in self.profile.list_models():
             if preset.model.default_value == model:
-                return deepcopy(preset)
+                return preset
         available = [
             preset.model.default_value for preset in self.profile.list_models()
         ]
@@ -101,30 +91,13 @@ class BaseProvider:
 
     def create_llm(self, model: str, *, api_key: str | None = None) -> MyLLM:
         selected = self.get_model(model)
-        if api_key is not None and (
-            not isinstance(api_key, str) or not api_key.strip()
-        ):
-            raise ValueError("api_key must be a non-empty string or None")
         profile = self.get_profile()
-        binding = resolve_profiles(profile, selected).parameter(
-            "api_key", source="input"
-        )
-        credential = binding.default_value if binding is not None else omit
         if api_key is not None:
-            credential = api_key
-            if binding is None:
-                binding = resolve_profiles(
-                    ProviderProfile(protocol=profile.protocol),
-                    selected,
-                ).parameter("api_key", source="input")
-        elif binding is not None and credential in (None, omit) and self.api_key_env:
-            credential = os.environ.get(self.api_key_env)
-            if not credential:
-                raise ConfigurationError(
-                    f"set {self.api_key_env} or pass api_key for {self.name}"
-                )
-        if binding is not None and credential is not omit:
-            profile = replace(
-                profile, api_key=replace(binding, default_value=credential)
+            binding = resolve_profiles(profile, selected).parameter(
+                "api_key", source="input"
             )
+            if binding is not None:
+                profile = replace(
+                    profile, api_key=replace(binding, default_value=api_key)
+                )
         return MyLLM(provider=profile, model=selected, stdio_protocol="openai_chat")

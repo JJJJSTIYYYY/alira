@@ -25,7 +25,7 @@ from alira.agent.core.tool.utils.request import ToolRequest
 from alira.agent.core.utils.message import ToolCall
 from alira.database import query_store
 from alira.lifespan import auto_init
-from alira.interface.utils.identiity import AliraIdentity, ConversationIdentity
+from alira.common.type.identiity import AliraIdentity, ConversationIdentity
 from alira.common.utils import logger
 
 IdentityKey = tuple[str, str, str]

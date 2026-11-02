@@ -17,12 +17,8 @@ class CustomProvider(BaseProvider):
         *,
         name: str = "custom",
         profile: ProviderProfile | None = None,
-        api_key_env: str | None = None,
     ) -> None:
         super().__init__(
             name,
             profile
-            if profile is not None
-            else ProviderProfile(models=Attribute(default_value=[])),
-            api_key_env=api_key_env,
         )

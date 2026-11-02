@@ -21,7 +21,7 @@ dependencies = [
     "fastmcp-slim[client]==3.4.7",
     "apixis>=1.1.7",
     "pydantic>=2.12",
-    "my-llm-py[all]>=1.4.2",
+    "my-llm-py[all]>=1.4.4",
 ]
 
 [project.urls]

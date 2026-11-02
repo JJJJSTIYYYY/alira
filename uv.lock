@@ -62,7 +62,7 @@ requires-dist = [
     { name = "fastmcp-slim", extras = ["client"], specifier = "==3.4.7" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1" },
     { name = "inflect", specifier = ">=7.5.0" },
-    { name = "my-llm-py", extras = ["all"], specifier = ">=1.4.2" },
+    { name = "my-llm-py", extras = ["all"], specifier = ">=1.4.4" },
     { name = "pydantic", specifier = ">=2.12" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "redis", specifier = ">=8.0.1" },
@@ -1108,14 +1108,14 @@ wheels = [
 
 [[package]]
 name = "my-llm-py"
-version = "1.4.2"
+version = "1.4.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f6/3b/df010f80478a93fde471fc436fa4697e72eb9f038f4aad336ff2c57a194b/my_llm_py-1.4.2.tar.gz", hash = "sha256:66b99a794bca3a5236610dcc1a0172254eddf0808ffa745669881db36604eb6d", size = 492776, upload-time = "2026-10-30T19:21:56.546Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/23/1e/c059e02803b52418c8896da8e5f51f5f37dd92798b3169659514de3955d0/my_llm_py-1.4.4.tar.gz", hash = "sha256:3afe64d8c879aa54bc92b3886e3361c671bbce35bd6fb85cdad61784a012803e", size = 531627, upload-time = "2026-11-02T14:16:03.972Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/de/f1/2952360df708e075a54a8a6182d14074d1da5757ddd83ed347bab1bfe1c2/my_llm_py-1.4.2-py3-none-any.whl", hash = "sha256:2f3c7862cc1c4c2e15453d6c236ac335f06bec30cfd400ddb13938cbc06d045d", size = 151520, upload-time = "2026-10-30T19:21:54.853Z" },
+    { url = "https://files.pythonhosted.org/packages/3d/86/9e1d13736dc6eb4842293a32017cc42969f1cb5fbe2f51a5e6f14095422f/my_llm_py-1.4.4-py3-none-any.whl", hash = "sha256:b2e1415696d33e5f49a6204296bb0af552a6291ddb25ebf8ac0731a61014ad9a", size = 176598, upload-time = "2026-11-02T14:16:02.152Z" },
 ]
 
 [package.optional-dependencies]

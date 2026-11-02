@@ -32,8 +32,10 @@ def compare_version(v: str) -> int:
 def print_logo():
     teal = "\033[38;2;0;200;170m"
     orange = "\033[38;2;255;140;0m"
+    orange_background = "\033[48;2;255;140;0m"
     gray = "\033[38;2;140;140;140m"
     reset = "\033[0m"
+    apixis_link = "\033]8;;https://github.com/JJJJSTIYYYY/apixis\033\\apixis\033]8;;\033\\"
 
     logo = [
         ("    ___    __  ______", "____  ___"),
@@ -43,8 +45,13 @@ def print_logo():
         ("/_/  |_/____/____", "/_/ |_/_/  |_|"),
     ]
 
-    for ali, ra in logo:
-        print(f"{teal}{ali}{orange}{ra}{reset}")
-    print(f"{gray}"+("=" * 31)+f"{reset}")
-    print(f"{gray}    Alira Agent  |  v{__version__}{reset}")
-    print(f"{gray}"+("=" * 31)+f"{reset}\n")
+    print("")
+    for index, (ali, ra) in enumerate(logo):
+        version_tag = (
+            f"  {orange_background}{teal} v{__version__} {reset}"
+            if index == 0 else ""
+        )
+        print(f"{teal}{ali}{orange}{ra}{reset}{version_tag}")
+    print(f"{gray}"+("-" * 31)+f"{reset}")
+    print(f"{gray}Alira Harness powered by {apixis_link}{reset}")
+    print(f"{gray}"+("-" * 31)+f"{reset}\n")

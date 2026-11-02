@@ -1,15 +1,5 @@
-from typing import TypedDict
-
-from alira.interface.utils.identiity import AliraIdentity
-
-
-class Config(TypedDict):
-    """
-    Configuration for the Alira agent loop.
-    """
-
-    identity: AliraIdentity
-    # Add other configuration fields as needed
+from alira.common.type.configuration import Configuration
+from alira.common.type.identiity import AliraIdentity
 
 
 class ConfigCenter:
@@ -18,9 +8,9 @@ class ConfigCenter:
     """
 
     def __init__(self):
-        self._config: dict[AliraIdentity, Config] = {}
+        self._config: dict[AliraIdentity, Configuration] = {}
 
-    def set_config(self, identity: AliraIdentity, value: Config):
+    def set_config(self, identity: AliraIdentity, value: Configuration):
         """
         Set a configuration value.
 
@@ -29,7 +19,7 @@ class ConfigCenter:
         """
         self._config[identity] = value
 
-    def get_config(self, identity: AliraIdentity) -> Config | None:
+    def get_config(self, identity: AliraIdentity) -> Configuration | None:
         """
         Get a configuration value.
 

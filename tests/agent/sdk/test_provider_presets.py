@@ -1,7 +1,9 @@
 """Named selection, isolated catalogues, and actual vendor request serialization."""
 
+import ast
+import inspect
 import json
-from dataclasses import replace
+from dataclasses import fields, replace
 
 import httpx
 import pytest
@@ -14,6 +16,7 @@ from my_llm import (
     ProviderProfile,
     SemanticLossError,
     omit,
+    resolve_profiles,
 )
 
 from alira.agent.core.bot import AliraBot, BaseProvider, CustomProvider
@@ -29,15 +32,20 @@ PRESETS = [
 
 
 @pytest.mark.parametrize(
-    "provider,model",
+    "provider,model,replay_plain_reasoning",
     [
-        ("deepseek", "deepseek-flash"),
-        ("moonshot", "kimi-k2.6"),
-        ("mimo", "mimo-v2.6-pro"),
+        ("deepseek", "deepseek-flash", True),
+        ("deepseek", "deepseek-v4-pro", True),
+        ("moonshot", "kimi-k3", True),
+        ("moonshot", "kimi-k2.6", True),
+        ("moonshot", "kimi-k2.7-code", True),
+        ("moonshot", "kimi-k2.7-code-highspeed", True),
+        ("mimo", "mimo-v2.6-pro", False),
     ],
 )
-async def test_tool_round_replays_reasoning_with_updated_profile_field(
-    monkeypatch, provider, model
+@pytest.mark.parametrize("tool_round", [False, True])
+async def test_history_replays_reasoning_according_to_provider_policy(
+    monkeypatch, provider, model, replay_plain_reasoning, tool_round
 ):
     requests = []
 
@@ -52,23 +60,37 @@ async def test_tool_round_replays_reasoning_with_updated_profile_field(
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hello", "reasoning_content": "greeting"},
         {"role": "user", "content": "weather in Tokyo?"},
-        {
-            "role": "assistant",
-            "content": None,
-            "reasoning_content": "check weather",
-            "tool_calls": [{
-                "id": "c1", "type": "function",
-                "function": {"name": "weather", "arguments": '{"city":"Tokyo"}'},
-            }],
-        },
-        {"role": "tool", "tool_call_id": "c1", "content": "sunny"},
     ]
+    if tool_round:
+        messages.extend([
+            {
+                "role": "assistant",
+                "content": None,
+                "reasoning_content": "check weather",
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {
+                            "name": "weather",
+                            "arguments": '{"city":"Tokyo"}',
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "sunny"},
+        ])
     async with AliraBot(provider=provider, model=model, api_key="test") as bot:
-        assert (await bot.invoke(messages, tools=[weather])).content == "hello"
+        result = await bot.invoke(messages, tools=[weather] if tool_round else None)
+        assert result.content == "hello"
 
     history = requests[0]["messages"]
-    assert "reasoning_content" not in history[1]
-    assert history[3]["reasoning_content"] == "check weather"
+    if replay_plain_reasoning:
+        assert history[1]["reasoning_content"] == "greeting"
+    else:
+        assert "reasoning_content" not in history[1]
+    if tool_round:
+        assert history[3]["reasoning_content"] == "check weather"
     assert messages[1]["reasoning_content"] == "greeting"
     assert all(client.is_closed for client in clients)
 
@@ -121,6 +143,78 @@ def test_builtin_effort_mappings_have_an_ordered_contiguous_prefix(provider, mod
     assert ranks == sorted(ranks), f"{provider}/{model} has descending effort levels"
 
 
+@pytest.mark.parametrize("provider", BaseProvider.list_providers())
+def test_provider_catalogues_explicitly_declare_every_profile_field(provider):
+    catalogue = BaseProvider.get(provider)
+    tree = ast.parse(inspect.getsource(type(catalogue)))
+    contracts = {
+        "ProviderProfile": {field.name for field in fields(ProviderProfile)},
+        "ModelProfile": {field.name for field in fields(ModelProfile)},
+        "Parameter": {"path", "default_value", "supports"},
+    }
+    counts = {name: 0 for name in contracts}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        if node.func.id in contracts:
+            counts[node.func.id] += 1
+            declared = {keyword.arg for keyword in node.keywords}
+            assert contracts[node.func.id] <= declared, (
+                provider, node.func.id, contracts[node.func.id] - declared
+            )
+    assert counts["ProviderProfile"] == 1
+    assert counts["ModelProfile"] == len(catalogue.list_models())
+
+
+@pytest.mark.parametrize("provider,model", PRESETS)
+def test_builtin_profile_inheritance_always_retains_a_declaration(provider, model):
+    catalogue = BaseProvider.get(provider)
+    profile = catalogue.get_profile()
+    selected = catalogue.get_model(model)
+    for field in fields(profile):
+        assert getattr(profile, field.name) is not None, (provider, field.name)
+    for field in fields(selected):
+        declaration = getattr(selected, field.name)
+        if declaration is None:
+            declaration = getattr(profile, field.name, None)
+        assert isinstance(declaration, (Config, Parameter, Attribute)) or declaration is omit, (
+            provider, model, field.name
+        )
+
+
+@pytest.mark.parametrize(
+    "provider", [name for name in BaseProvider.list_providers() if name != "custom"]
+)
+def test_explicit_null_connection_fields_do_not_reach_sdk_clients(provider):
+    catalogue = BaseProvider.get(provider)
+    model = catalogue.list_models()[0].model.default_value
+    llm = catalogue.create_llm(model, api_key="test")
+    for name in ("timeout", "max_retries"):
+        declaration = getattr(llm.provider, name)
+        assert isinstance(declaration, Config)
+        assert declaration.default_value is None
+        assert name in llm.resolved_profile.values
+        assert llm.resolved_profile.get(name, "fallback") is None
+        assert name not in llm.resolved_profile.connection
+        assert name not in llm.client_parameters
+    if provider == "google":
+        assert llm.provider.base_url.default_value is None
+        assert "base_url" not in llm.resolved_profile.connection
+        assert llm.client_parameters["http_options"].base_url is None
+
+
+@pytest.mark.parametrize("provider,model", PRESETS)
+def test_builtin_profiles_resolve_identically_without_protocol_defaults(provider, model):
+    catalogue = BaseProvider.get(provider)
+    profile = catalogue.get_profile()
+    selected = catalogue.get_model(model)
+    llm = catalogue.create_llm(model)
+    defaults = llm.codec.defaults(profile.protocol.default_value)
+    empty = replace(defaults, **{field.name: omit for field in fields(defaults)})
+    resolved = resolve_profiles(profile, selected, defaults_for=lambda protocol: empty)
+    assert resolved == llm.resolved_profile
+
+
 def test_required_provider_classes_and_exact_string_selection():
     from alira.agent.core.bot import provider as package
 
@@ -166,33 +260,30 @@ def test_required_provider_classes_and_exact_string_selection():
         AliraBot(provider="custom", model="undeclared", api_key="test")
 
 
-def test_credentials_use_provider_environment_and_explicit_key_wins(monkeypatch):
+def test_credentials_ignore_environment_and_explicit_key_wins(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-test-key")
-    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    with pytest.raises(ConfigurationError, match="DEEPSEEK_API_KEY"):
-        AliraBot(provider="deepseek", model="deepseek-flash")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-test-key")
     bot = AliraBot(provider="deepseek", model="deepseek-flash")
-    assert bot.llm.provider.api_key.default_value == "deepseek-test-key"
+    assert bot.llm.provider.api_key.default_value is omit
+    binding = bot.llm.resolved_profile.parameter("api_key", source="input")
+    assert binding.default_value is omit
     explicit = AliraBot(
         provider="deepseek", model="deepseek-flash", api_key="explicit-test-key"
     )
     assert explicit.llm.provider.api_key.default_value == "explicit-test-key"
-    assert BaseProvider.get("deepseek").profile.api_key is None
+    assert BaseProvider.get("deepseek").profile.api_key.default_value is omit
 
 
-@pytest.mark.parametrize("source", ["profile", "environment", "explicit"])
+@pytest.mark.parametrize("source", ["profile", "explicit"])
 async def test_credential_overrides_keep_custom_authentication_path(
     monkeypatch, source
 ):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setenv("CUSTOM_AUTH_KEY", "environment-test-key")
     binding = Parameter(
         path="$.extra_headers.X-Api-Key",
-        default_value=omit if source == "environment" else "profile-test-key",
+        default_value="profile-test-key",
     )
     provider = CustomProvider(
-        api_key_env="CUSTOM_AUTH_KEY",
         profile=ProviderProfile(
             protocol=Config(default_value="anthropic"),
             api_key=binding,
@@ -230,12 +321,8 @@ async def test_credential_overrides_keep_custom_authentication_path(
     assert provider.get_profile().api_key.default_value == binding.default_value
 
 
-def test_omitted_credentials_skip_environment_and_explicit_key_uses_protocol_path(
-    monkeypatch,
-):
-    monkeypatch.delenv("CUSTOM_AUTH_KEY", raising=False)
+def test_omitted_credentials_stay_disabled_with_explicit_key():
     provider = CustomProvider(
-        api_key_env="CUSTOM_AUTH_KEY",
         profile=ProviderProfile(
             protocol=Config(default_value="ollama"),
             api_key=omit,
@@ -246,11 +333,8 @@ def test_omitted_credentials_skip_environment_and_explicit_key_uses_protocol_pat
     )
     assert provider.create_llm("test").provider.api_key is omit
     explicit = provider.create_llm("test", api_key="Bearer explicit-test-key")
-    assert explicit.provider.api_key.path == "$.extra_headers.Authorization"
-    assert (
-        explicit.client_parameters["headers"]["Authorization"]
-        == "Bearer explicit-test-key"
-    )
+    assert explicit.provider.api_key is omit
+    assert "Authorization" not in explicit.client_parameters.get("headers", {})
 
 
 def test_registry_and_model_catalogues_use_independent_library_profiles():
@@ -293,10 +377,8 @@ def test_registry_and_model_catalogues_use_independent_library_profiles():
         BaseProvider.unregister("isolated-test")
 
 
-def test_get_profile_returns_an_isolated_complete_configuration(monkeypatch):
-    monkeypatch.setenv("SNAPSHOT_TEST_API_KEY", "environment-test-key")
+def test_get_profile_returns_an_isolated_complete_configuration():
     provider = CustomProvider(
-        api_key_env="SNAPSHOT_TEST_API_KEY",
         profile=ProviderProfile(
             protocol=Config(default_value="openai_chat"),
             extra_body=Config(default_value={"thinking": {"type": "enabled"}}),
@@ -313,9 +395,7 @@ def test_get_profile_returns_an_isolated_complete_configuration(monkeypatch):
     profile = provider.get_profile()
     assert isinstance(profile, ProviderProfile)
     assert profile == provider.profile
-    assert (
-        profile.api_key is None
-    )  # Reading configuration does not resolve environment credentials.
+    assert profile.api_key is None
     profile.extra_body.default_value["thinking"]["type"] = "disabled"
     profile.list_models()[0].extra_body.default_value["options"]["seed"] = 2
     profile.add_models(ModelProfile(model=Attribute(default_value="another-model")))

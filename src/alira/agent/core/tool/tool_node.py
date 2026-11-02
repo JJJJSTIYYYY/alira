@@ -10,7 +10,7 @@ from alira.agent.core.tool.function import FunctionToolManager, Tool
 from alira.agent.core.tool.utils.manager import ToolManager
 from alira.agent.core.tool.utils.request import ToolRequest
 from alira.agent.core.utils.message import AliraAiMessage, AliraToolMessage, ToolCall
-from alira.interface.utils.identiity import ConversationIdentity
+from alira.common.type.identiity import ConversationIdentity
 
 
 class ToolNode(BaseNode):

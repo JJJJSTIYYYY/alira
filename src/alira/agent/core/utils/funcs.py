@@ -5,7 +5,7 @@ import time
 from typing import Callable, Generator, Literal
 
 from alira.common.type import IdentityError
-from alira.interface.utils.identiity import AliraIdentity, ConversationIdentity
+from alira.common.type.identiity import AliraIdentity, ConversationIdentity
 
 
 def get_date_natural_language() -> str:

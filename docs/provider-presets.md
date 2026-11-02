@@ -2,7 +2,7 @@
 
 核对日期：2026-10-18。预设不是在线模型发现；型号可用性和接口规则发生变化时，应重新核对下列官方资料。
 本次提供 6 家官方供应商的 27 个模型，以及由调用方声明配置的 CustomProvider。
-不预设未找到官方依据的采样参数、超时、重试次数或输出上限。
+不额外指定未找到官方依据的采样参数、超时、重试次数或输出上限。
 
 ## 使用与管理
 
@@ -45,11 +45,78 @@ Profile 自动绑定，不能手动传入；请求参数的 source 为 input，�
 
 `OpenAIPorvider` 按本项目要求的公开类名保留这一拼写。
 `BaseProvider.get()`、`register()`、`get_profile()` 和 `list_models()` 都隔离嵌套配置，避免修改一个 bot 的配置影响其他 bot。
-`get_profile()` 返回包含模型目录的原生配置副本，不解析环境变量或应用调用时的凭据覆盖。
+`get_profile()` 返回包含模型目录的原生配置副本，不应用调用时的凭据覆盖。
 模型增删复用原生 `ProviderProfile.add_models()` / `delete_model()`，配置合并、能力验证、
 请求构造、工具关联、SDK 客户端与流状态仍由 MyLLM 负责。
 Provider 只负责配置目录和创建 MyLLM；AliraBot 直接调用 `MyLLM.generate()`。
 token 字段通过原生 `max_tokens=Parameter(...)` 声明，推理参数按 profile 验证和映射。
+
+### 完整 Profile 配置
+
+所有内置 `ProviderProfile` 的 17 个字段、`ModelProfile` 的 14 个字段均在源码中显式列出，
+协议绑定按当前安装的 MyLLM 1.4.2 固定；Parameter 显式声明 `path`、`default_value` 和 `supports`。
+模型字段的 `None` 表示继承本项目已声明的 provider 配置，继承后的声明为
+Config、Parameter、Attribute 或 omit，不保留裸 None。需要空值时使用 wrapper 的
+`default_value=None`，不依赖 MyLLM 的协议默认值。
+`name`、`source` 仍由 MyLLM 绑定，不手动赋值。
+
+| ProviderProfile 字段 | 显式配置 |
+| --- | --- |
+| `protocol` | 各 provider 对应的上游协议，见下表及各厂商章节 |
+| `base_url` | 各厂商地址；Google 为 `Config(default_value=None)`，由 SDK 决定地址 |
+| `api_key` | `Parameter(path="$.api_key", default_value=omit, supports=True)`，不预置密钥 |
+| `timeout` | `Config(default_value=None)`，不向 SDK 注入超时 |
+| `max_retries` | `Config(default_value=None)`，不向 SDK 注入重试次数 |
+| `supports_stream` | `Config(default_value=True)` |
+| `usage_mode` | OpenAI、Anthropic、Google 为 `native`；其余为 `none` |
+| `extra_headers` | `Config(default_value={})` |
+| `extra_body` | `Config(default_value={})`，不固定注入推理开关 |
+| `max_tokens` | 下表中的协议绑定；默认值为 omit，模型可覆盖 |
+| `content` | 下表中的输出文本路径，默认值为 omit |
+| `reasoning_content` | 下表中的输出推理路径，默认值为 omit |
+| `reasoning_enable` | 下表中的开启绑定，按调用参数注入 |
+| `reasoning_effort` | 下表中的强度绑定，按调用参数注入 |
+| `reasoning_effort_mapping` | 显式列出 none、low、medium、high、xhigh、max；型号差异见后续 effort 表 |
+| `feedback_reasoning_content` | MiMo 为 `when_tool_calls`，其余为 `always` |
+| `models` | `Attribute` 包含完整的型号目录 |
+
+下表列出 provider 层的路径和开启值；模型覆盖在各厂商章节说明。
+除标记为不支持的强度绑定外，所有 Parameter 的 `supports` 均为 True。
+
+| 字段 | OpenAI Responses | DeepSeek | Kimi | MiMo | Anthropic | Google |
+| --- | --- | --- | --- | --- | --- | --- |
+| `max_tokens` | `$.max_output_tokens` | `$.max_tokens` | `$.max_completion_tokens` | `$.max_completion_tokens` | `$.max_tokens` | `$.config.max_output_tokens` |
+| `content` | `$.delta` | `$.choices[0].delta.content` | 同 DeepSeek | 同 DeepSeek | `$.delta.text` | `$.candidates[0].content.parts[0].text` |
+| `reasoning_content` | `$.delta` | `$.choices[0].delta.reasoning_content` | 同 DeepSeek | 同 DeepSeek | `$.delta.thinking` | 同 Google content |
+| `reasoning_enable` | `$.reasoning`，`{effort:medium,summary:detailed}` | `$.extra_body.thinking`，`{type:enabled}` | `$.reasoning_effort`，medium；由各模型覆盖 | 同 DeepSeek | `$.thinking`，`{type:adaptive}` | `$.config.thinking_config`，`{include_thoughts:True,thinking_budget:-1}` |
+| `reasoning_effort` | `$.reasoning.effort` | `$.reasoning_effort` | 同 DeepSeek，provider 层不支持；K3 覆盖为支持 | 同 DeepSeek，不支持 | `$.output_config.effort` | `$.config.thinking_config.thinking_level` |
+
+Google 的旧式 thinking_budget 与 thinking_level 同时出现时，由 MyLLM 在请求构造时移除 budget，
+保留现有请求行为，不在应用层复制该转换。
+
+| ModelProfile 字段 | 显式配置 |
+| --- | --- |
+| `model` / `max_context_window` | 各型号 ID 和展示窗口 |
+| `supports_function_calling` / `supports_vision` / `supports_message_name` | 分别为 True / False / True |
+| `extra_headers` / `extra_body` | `None`，继承 provider |
+| `max_tokens` | 通常为 `None`；K2.x 覆盖路径，Claude 显式设置 4096 |
+| `content` / `reasoning_content` | `None`，继承 provider |
+| `reasoning_enable` / `reasoning_effort` | 通常为 `None`；Kimi 按型号覆盖 |
+| `reasoning_effort_mapping` | 通常为 `None`；OpenAI、K3 的型号差异显式覆盖 |
+| `feedback_reasoning_content` | `None`，继承 provider |
+
+CustomProvider 没有默认协议：空模板显式列出全部字段并保留 `None`，模型目录为空。
+调用方传入的 profile 保持原样，不套用任何内置厂商配置。
+
+空连接选项使用 Config 后，配置声明与 SDK 行为的差异如下：
+
+| 字段 | 范围 | 声明变化 | 解析与请求行为 |
+| --- | --- | --- | --- |
+| `timeout` / `max_retries` | 六家内置 provider | 裸 None → `Config(default_value=None)` | resolved.values 从没有该键变为显式 None；客户端仍不接收该选项 |
+| `base_url` | Google | 裸 None → `Config(default_value=None)` | resolved.values 从没有该键变为显式 None；SDK 仍使用默认地址 |
+
+因此 `resolved_profile.get(field, fallback)` 对上述字段从返回 fallback 变为返回 None。
+其他解析字段、模型元数据、客户端参数、请求及错误结果保持一致。
 
 ### 通用 effort 与上游档位
 
@@ -75,13 +142,13 @@ Kimi K2.x / MiMo 没有强度控制，只使用其 profile 中的思考开关绑
 `supports_*` 是 MyLLM 的本地配置名称，不是提交给厂商的新参数；
 它们对应的上游 API/能力见各表。
 `max_context_window` 只是展示元数据，不计数、不截断，也不作为请求参数。
-未显式设置的字段保持 MyLLM / 官方 SDK 的默认值。
+MyLLM 的协议配置已在本项目完整声明；连接选项的 `Config(default_value=None)` 继续由官方 SDK 决定。
 
 ### OpenAI
 
 | 配置项 | 取值与依据 |
 | --- | --- |
-| `protocol` / `base_url` / `api_key_env` | `openai_responses` / `https://api.openai.com/v1` / `OPENAI_API_KEY`；[官方 quickstart](https://developers.openai.com/api/docs/quickstart) 展示 Responses 地址与该环境变量。输入输出仍为 Chat，由 MyLLM 转换。 |
+| `protocol` / `base_url` | `openai_responses` / `https://api.openai.com/v1`；[官方 quickstart](https://developers.openai.com/api/docs/quickstart) 展示 Responses 地址。输入输出仍为 Chat，由 MyLLM 转换。 |
 | `usage_mode` | `native`：使用 Responses 的标准 usage，经 MyLLM 的原生用量策略输出；[Responses 对象](https://developers.openai.com/api/reference/resources/responses/methods/create) 定义 usage。 |
 | GPT-6 `model` / `max_context_window` | 四型号均为 `1_050_000`，见 [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra)、[6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)、[Sol](https://developers.openai.com/api/docs/models/gpt-6-sol)、[Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)。 |
 | GPT-5.4 `model` / `max_context_window` | `gpt-5.4`、`gpt-5.4-pro` 为 `1_050_000`，Mini 为 `400_000`；见 [GPT-5.4](https://developers.openai.com/api/docs/models/gpt-5.4)、[Pro](https://developers.openai.com/api/docs/models/gpt-5.4-pro)、[Mini](https://developers.openai.com/api/docs/models/gpt-5.4-mini)。 |
@@ -97,13 +164,12 @@ MyLLM 的 `reasoning_effort="none"` 表示不注入 effort 绑定，`reasoning=T
 | 配置项 | 取值与依据 |
 | --- | --- |
 | `protocol` / `base_url` | `openai_chat` / `https://api.deepseek.com`；[模型与接口](https://api-docs.deepseek.com/quick_start/pricing/) 列出 OpenAI 格式地址。 |
-| `api_key_env` | `DEEPSEEK_API_KEY`；[官方思考模式示例](https://api-docs.deepseek.com/guides/thinking_mode) 读取该变量。 |
 | `model` / `max_context_window` | `deepseek-flash`、`deepseek-v4-pro` 均为 `1_048_576`；[官方模型列表示例](https://api-docs.deepseek.com/zh-cn/api/list-models/) 给出精确整数。 |
 | 推理能力 / `supports_function_calling` | 两型号均为 True；[模型与接口](https://api-docs.deepseek.com/quick_start/pricing/) 明确支持思考和工具调用。 |
 | `reasoning_effort.supports` / `reasoning_effort` | True / 顶层 `reasoning_effort`；[Chat API](https://api-docs.deepseek.com/api/create-chat-completion/) 支持 low/high/max。 |
 | `reasoning_effort_mapping` | 上游原生 low/high/max 依次映射到本地 low/medium/high，本地 xhigh/max 禁用。上述 Chat API 也接受 medium/xhigh 作为 high 的别名；本地预设使用三个原生档位，不额外占用别名档位。 |
 | `reasoning_enable` | `thinking.type=enabled`，以 Parameter 替换库继承的默认 medium 绑定；[思考模式](https://api-docs.deepseek.com/guides/thinking_mode) 展示 OpenAI SDK extra_body 写法。 |
-| `feedback_reasoning_content` | `when_tool_calls`；[思考模式工具回合](https://api-docs.deepseek.com/guides/thinking_mode#tool-calls) 要求携带 tools 的后续请求保留历史 reasoning_content。 |
+| `feedback_reasoning_content` | 显式 `always`，完整回传历史 reasoning_content；[思考模式](https://api-docs.deepseek.com/guides/thinking_mode/) 要求携带 tools 时回传所有历史轮次的推理，不携带 tools 时上游会忽略这些内容。 |
 | `max_tokens` Parameter 的 path | ProviderProfile 设置 `$.max_tokens`；[Chat API](https://api-docs.deepseek.com/api/create-chat-completion/) 定义 max_tokens。由 MyLLM 写入该 SDK 参数，替代 Chat 默认的 max_completion_tokens。 |
 
 当前目录已覆盖[官方模型表](https://api-docs.deepseek.com/quick_start/pricing/)的两个型号。
@@ -113,15 +179,15 @@ MyLLM 的 `reasoning_effort="none"` 表示不注入 effort 绑定，`reasoning=T
 
 | 配置项 | 取值与依据 |
 | --- | --- |
-| `protocol` / `base_url` / `api_key_env` | `openai_chat` / `https://api.moonshot.ai/v1` / `MOONSHOT_API_KEY`；[官方 quickstart](https://platform.kimi.ai/docs/overview) 的 OpenAI SDK 示例。 |
+| `protocol` / `base_url` | `openai_chat` / `https://api.moonshot.ai/v1`；[官方 quickstart](https://platform.kimi.ai/docs/overview) 的 OpenAI SDK 示例。 |
 | `model` | K3、K2.6、K2.7 Code 与 highspeed 四个 ID；[当前型号列表](https://platform.kimi.ai/docs/models)。 |
 | `max_context_window` | K3 为 `1_048_576`，见 [Moonshot 官方模型卡](https://huggingface.co/moonshotai/Kimi-K3)；K2.6 / K2.7 Code 为 `262_144`，见官方 [K2.6 配置](https://huggingface.co/moonshotai/Kimi-K2.6/raw/main/config.json)、[K2.7 配置](https://huggingface.co/moonshotai/Kimi-K2.7-Code/raw/main/config.json)。[型号参数说明](https://platform.kimi.ai/docs/api/models-overview) 确认 highspeed 与 Code 参数相同。 |
 | 推理能力 / `supports_function_calling` | 四型号均 True；[官方参数与工具说明](https://platform.kimi.ai/docs/api/chat)。 |
-| `feedback_reasoning_content` | `when_tool_calls`；同上文档要求多轮对话及工具回合保留历史 reasoning_content。 |
+| `feedback_reasoning_content` | 显式 `always`；[Preserved Thinking](https://platform.kimi.ai/docs/guide/use-thinking-models#preserve-thinking-across-turns-preserved-thinking) 要求 K3、K2.7 和开启 `keep=all` 的 K2.6 完整回传每条历史 assistant 消息的 reasoning_content。 |
 | K3 `reasoning_effort.supports` / `reasoning_effort` / `reasoning_effort_mapping` | True / 顶层 reasoning_effort；[官方参数表](https://platform.kimi.ai/docs/api/models-overview)允许上游 low/high/max，依次映射到本地 low/medium/high，本地 xhigh/max 禁用。位置映射遵循本项目的 MyLLM 调用约束，不表示厂商新增档位。 |
 | K3 `reasoning_enable` | omit 去掉 Chat 默认的 medium 绑定，再由 MyLLM 根据映射生成合法的上游 effort。仅传 `reasoning=True` 时，库默认 medium 经 profile 映射为 high；未设置推理选项时不注入 effort，沿用[服务端默认 max](https://platform.kimi.ai/docs/guide/use-reasoning-effort)。 |
 | K2.x `reasoning_enable` | Parameter 替换 OpenAI reasoning_effort 绑定，开启时发送 `thinking={type:enabled,keep:all}`；[参数对照表](https://platform.kimi.ai/docs/api/models-overview) 列出 K2.6 可选 preserved thinking，K2.7 必须保留且不可关闭。 |
-| `max_tokens` Parameter 的 path | 三个 K2.x ModelProfile 设置 `$.max_tokens`，见 [K2.6 官方调用示例](https://platform.kimi.ai/docs/api/models-overview)；K3 继承库默认的 `$.max_completion_tokens`，见 [Chat API](https://platform.kimi.ai/docs/api/chat)。 |
+| `max_tokens` Parameter 的 path | 三个 K2.x ModelProfile 设置 `$.max_tokens`，见 [K2.6 官方调用示例](https://platform.kimi.ai/docs/api/models-overview)；K3 继承本项目 ProviderProfile 显式声明的 `$.max_completion_tokens`，见 [Chat API](https://platform.kimi.ai/docs/api/chat)。 |
 
 K2.5、K2、moonshot-v1 已在[官方型号页](https://platform.kimi.ai/docs/models)标为停用，因此不预设。
 
@@ -129,7 +195,7 @@ K2.5、K2、moonshot-v1 已在[官方型号页](https://platform.kimi.ai/docs/mo
 
 | 配置项 | 取值与依据 |
 | --- | --- |
-| `protocol` / `base_url` / `api_key_env` | `openai_chat` / `https://api.xiaomimimo.com/v1` / `MIMO_API_KEY`；官方 [V2.6 Pro](https://mimo.mi.com/models/en-US/mimo-v2.6-pro)、[Pro UltraSpeed](https://mimo.mi.com/models/en-US/mimo-v2.6-pro-ultraspeed)、[V2.6 Flash](https://mimo.mi.com/models/en-US/mimo-v2.6-flash) 均展示 OpenAI SDK 调用示例。 |
+| `protocol` / `base_url` | `openai_chat` / `https://api.xiaomimimo.com/v1`；官方 [V2.6 Pro](https://mimo.mi.com/models/en-US/mimo-v2.6-pro)、[Pro UltraSpeed](https://mimo.mi.com/models/en-US/mimo-v2.6-pro-ultraspeed)、[V2.6 Flash](https://mimo.mi.com/models/en-US/mimo-v2.6-flash) 均展示 OpenAI SDK 调用示例。 |
 | `model` / `max_context_window` | 三个 ID 同上；均为 1M。整数 `1_048_576` 沿用[官方上下文配置](https://mimo.mi.com/docs/zh-CN/tokenplan/integration/codex-configuration)的 1M 口径；UltraSpeed 规格声明保留 Pro 完整能力与相同窗口。 |
 | 推理能力 / `supports_function_calling` | 三型号均 True；三份模型规格列出 Deep Thinking 与 Tool Call。 |
 | `reasoning_enable` | `thinking.type=enabled`，Parameter 替换 OpenAI 默认 reasoning_effort 绑定；[思考模式](https://mimo.mi.com/docs/zh-CN/quick-start/usage-guide/text-generation/deep-thinking) 展示该请求字段。 |
@@ -142,12 +208,12 @@ MiMo 2.5 系列即将停用，见[官方型号说明](https://mimo.mi.com/docs/q
 
 | 配置项 | 取值与依据 |
 | --- | --- |
-| `protocol` / `base_url` / `api_key_env` | `anthropic` / `https://api.anthropic.com` / `ANTHROPIC_API_KEY`；[API overview](https://platform.claude.com/docs/en/api/overview) 定义 Messages API 地址，[SDK 示例](https://platform.claude.com/docs/en/cli-sdks-libraries/sdks/python) 使用该环境变量。 |
+| `protocol` / `base_url` | `anthropic` / `https://api.anthropic.com`；[API overview](https://platform.claude.com/docs/en/api/overview) 定义 Messages API 地址。 |
 | `usage_mode` | `native`：读取 Messages 的标准 usage；[Messages API](https://platform.claude.com/docs/en/api/messages/create)。 |
 | `model` / `max_context_window` | 四个 ID 见[当前模型目录](https://platform.claude.com/docs/en/models/overview)，均为官方标示的 1M（本地元数据为 `1_000_000`）；详见 [Fable 5.1](https://platform.claude.com/docs/en/models/fable-5-1/overview)、[Opus 5.5](https://platform.claude.com/docs/en/models/opus-5-5/overview)、[Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview)、[Haiku 5.5](https://platform.claude.com/docs/en/models/haiku-5-5/overview)。 |
 | 推理能力 / `supports_function_calling` | 四型号均 True；上述目录列出 adaptive thinking 与 tool use；[工具调用指南](https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview) 定义工具协议。 |
 | `reasoning_effort.supports` | True；[effort 表](https://platform.claude.com/docs/en/build-with-claude/effort) 确认四型号支持 low/medium/high/xhigh/max，沿用 MyLLM 的原值映射。 |
-| `extra_body` | `thinking={type:adaptive}`；[思考控制](https://platform.claude.com/docs/en/build-with-claude/thinking-steering-and-cost) 定义 adaptive thinking。同时以 reasoning_enable=omit 禁用库旧式 enabled/budget_tokens 自动绑定，保持 adaptive 配置。 |
+| `reasoning_enable` | `Parameter(path="$.thinking", default_value={"type": "adaptive"})`；[思考控制](https://platform.claude.com/docs/en/build-with-claude/thinking-steering-and-cost) 定义 adaptive thinking。替换库旧式 enabled/budget_tokens 绑定，仅在调用方开启推理或指定非 none 强度时注入，不再通过 extra_body 固定发送。 |
 | `max_tokens` | 4096 是应用的初始输出预算，采用同上官方示例值；它不是型号最大输出能力，调用时可覆盖。Messages API 要求此参数，因此在 ModelProfile 配置，不复制原生参数转换逻辑。 |
 
 Fable 5.1 与 Opus 5.5 为始终开启的 adaptive thinking；不为它们伪造关闭参数。
@@ -157,7 +223,7 @@ Fable 5.1 与 Opus 5.5 为始终开启的 adaptive thinking；不为它们伪造
 
 | 配置项 | 取值与依据 |
 | --- | --- |
-| `protocol` / `api_key_env` | `gemini` / `GEMINI_API_KEY`；[官方认证说明](https://ai.google.dev/gemini-api/docs/api-key) 支持该变量。保持 SDK 官方默认服务地址。 |
+| `protocol` | `gemini`；使用原生 Gemini 协议，保持 SDK 官方默认服务地址。 |
 | `usage_mode` | `native`：读取 GenerateContent 的 usageMetadata；[GenerateContent API](https://ai.google.dev/api/generate-content)。 |
 | 稳定版 `model` / `max_context_window` | 四型号均为 `1_048_576`；见 [3.8 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash)、[3.6 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash)、[3.5 Flash-Lite](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite)、[3.1 Flash-Lite](https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite) 的 Input token limit。 |
 | 预览版 `model` / `max_context_window` | 三型号均为 `1_048_576`；见 [3.1 Pro / customtools](https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview)、[3 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3-flash-preview)。customtools 是官方为自定义工具工作流提供的独立端点。 |
@@ -172,13 +238,13 @@ Gemini 的 thinking_config 和 max_output_tokens 由 MyLLM 原生 Gemini Decoder
 ## 应用约定与兼容边界
 
 - 本地 provider 名称是 Alira 的注册键，不是新的厂商参数。
-- 显式 api_key 优先于 profile 的 Parameter.default_value，再读取对应厂商环境变量；覆盖凭据时保留 Parameter 的认证路径。`api_key=omit` 禁用自动凭据读取，显式传入密钥时使用协议默认路径。Ollama 默认使用 Authorization 头，调用方需提供完整的 Bearer 前缀。内置 provider 缺少凭据时报错，避免兼容 OpenAI SDK 意外读取另一家厂商的 OPENAI_API_KEY。
+- 凭据使用显式 `api_key` 或 profile 的 `Parameter.default_value`，Alira 不读取环境变量兜底；覆盖凭据时保留有效 Parameter 的认证路径。`api_key=omit` 禁用绑定，显式传入密钥也不会重建绑定。Ollama 默认使用 Authorization 头，调用方需提供完整的 Bearer 前缀。
 - `usage_mode=Config(default_value="native", ...)`、能力标记、Parameter 路径和 omit 的语义来自 [my-llm-py 配置指南](https://github.com/JJJJSTIYYYY/my-llm/blob/main/docs/reference/configuration.md)。它们在本地配置，实际请求仍使用上表的官方原生字段。成功调用后通过 `bot.llm.get_last_usage()` 读取用量，公开事件和结果不含 usage。
 - `max_tokens` Parameter 的 path 从 SDK 参数字典根部开始；`$.max_tokens` 直接传 SDK 参数，`$.extra_body.max_tokens` 经 extra_body 传入。路径由库解释，项目不维护转换层。不传调用参数时，仅在原生目标字段缺失时补 profile 默认预算；显式正整数覆盖目标值，`max_tokens=None` 写入实际空值，`max_tokens=omit` 删除本次目标键。Profile 的 `max_tokens=None` 继承整份 Parameter，`max_tokens=omit` 禁用自动写入并保留手动原生字段。输入参数不被修改。
 - `reasoning=True` 或非 none 的强度会触发自动生成的思考参数；开启参数和映射后的 effort 优先于同路径的原生 extra_body 值。普通默认字段仍仅在缺失时补值。
 - SDK 客户端在 bot 内复用；所有请求完成后 `await bot.aclose()`，或使用 `async with bot`。流自身的 `async with` 关闭本次响应，不关闭共享客户端。
 - `reasoning=False` 按 MyLLM 语义表示本次不注入开启思考的绑定，不等于厂商一定关闭默认思考。需要显式控制时，使用该型号支持的原生 extra_body；K3 与 K2.7 不支持关闭思考，不能伪造关闭参数。
-- 图片输入须在 ModelProfile 显式声明 `supports_vision=Config(default_value=True)`；默认不支持，当前内置预设尚未声明。跨协议无法表达的支持内容或禁用能力使用 `SemanticLossError`，保持库默认的 raise 策略。
+- 图片输入须在 ModelProfile 显式声明 `supports_vision=Config(default_value=True)`；当前内置预设均显式设置为 False。跨协议无法表达的支持内容或禁用能力使用 `SemanticLossError`，保持库默认的 raise 策略。
 - 当前内置型号经官方 SDK + 本地 HTTP transport 验证请求序列化与资源释放；没有使用付费 API 或验证账户权限。
 
 ## 自定义服务
@@ -195,7 +261,6 @@ from alira.agent.core.bot import AliraBot, BaseProvider, CustomProvider
 
 custom = CustomProvider(
     name="my-service",
-    api_key_env="MY_SERVICE_API_KEY",
     profile=ProviderProfile(
         protocol=Config(default_value="openai_chat"),
         base_url=Config(default_value="https://your-service.example/v1"),
@@ -209,7 +274,7 @@ custom = CustomProvider(
     ),
 )
 BaseProvider.register(custom)
-bot = AliraBot(provider="my-service", model="your-model")
+bot = AliraBot(provider="my-service", model="your-model", api_key="YOUR_API_KEY")
 ```
 
 更改已有配置时，先获取隔离副本，使用库的模型目录方法，再显式替换注册项：

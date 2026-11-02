@@ -37,7 +37,6 @@ async def test_live_chat(streaming):
     BaseProvider.register(
         CustomProvider(
             name="live-test",
-            api_key_env="ALIRA_LIVE_API_KEY",
             profile=ProviderProfile(
                 protocol=Config(default_value=protocol),
                 base_url=Config(default_value=endpoint) if endpoint else None,
@@ -58,7 +57,11 @@ async def test_live_chat(streaming):
         ),
         replace_existing=True,
     )
-    bot = AliraBot(provider="live-test", model=os.environ["ALIRA_LIVE_MODEL"])
+    bot = AliraBot(
+        provider="live-test",
+        model=os.environ["ALIRA_LIVE_MODEL"],
+        api_key=os.environ["ALIRA_LIVE_API_KEY"],
+    )
     async with bot:
         history = [AliraUserMessage(content="Reply with exactly: OK")]
         if streaming:

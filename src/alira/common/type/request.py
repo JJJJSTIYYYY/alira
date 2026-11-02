@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from alira.interface.utils.identiity import AliraIdentity
+from alira.common.type.identiity import AliraIdentity
 
 
 

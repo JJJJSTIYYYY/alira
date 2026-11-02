@@ -126,7 +126,7 @@ async def test_one_graph_node_routes_function_and_mcp_managers(manager):
 
     from alira.agent.core.bot.alira_bot import AliraBot
     from alira.agent.core.graph import AgentGraphCreator
-    from alira.interface.utils.identiity import ConversationIdentity
+    from alira.common.type.identiity import ConversationIdentity
 
     class State(TypedDict):
         messages: Annotated[list, AutoMerge()]
@@ -531,7 +531,7 @@ async def test_real_in_process_mcp_protocol_persists_across_agent_graph_invocati
     from mcp.server.fastmcp import FastMCP
 
     from alira.agent.core.graph import AgentGraphCreator
-    from alira.interface.utils.identiity import ConversationIdentity
+    from alira.common.type.identiity import ConversationIdentity
 
     class State(TypedDict):
         target: ConversationIdentity

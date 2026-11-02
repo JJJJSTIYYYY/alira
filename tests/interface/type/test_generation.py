@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from alira.interface.utils.generation import (
+from alira.common.type.generation import (
     Generation,
     generation_context,
     get_generation,
