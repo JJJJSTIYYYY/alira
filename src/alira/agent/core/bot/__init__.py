@@ -3,8 +3,10 @@
 from my_llm import (
     Attribute,
     Config,
+    InputParameter,
     MessageStream,
     ModelProfile,
+    OutputParameter,
     Parameter,
     ProviderProfile,
 )
@@ -15,7 +17,6 @@ from alira.agent.core.bot.provider import (
     BaseProvider,
     CustomProvider,
     DeepseekProvider,
-    GoogleProvider,
     MoonShotProvider,
     OpenAIPorvider,
     XiaomiMiMOProvider,
@@ -29,12 +30,13 @@ __all__ = [
     "Attribute",
     "Config",
     "Parameter",
+    "InputParameter",
+    "OutputParameter",
     "BaseProvider",
     "OpenAIPorvider",
     "DeepseekProvider",
     "MoonShotProvider",
     "XiaomiMiMOProvider",
     "AnthropicProvider",
-    "GoogleProvider",
     "CustomProvider",
 ]

@@ -84,13 +84,10 @@ async def test_lifecycle_helpers_and_transaction_rollback(tmp_path):
             "role",
             "name",
             "content",
-            "tool_calls",
-            "tool_call_id",
-            "refusal",
-            "reasoning_content",
-            "audio",
-            "annotations",
-            "function_call",
+            "protocol",
+            "item",
+            "origin",
+            "call_id",
             "metadata",
             "extensions",
             "timestamp",
@@ -118,7 +115,6 @@ async def test_lifecycle_helpers_and_transaction_rollback(tmp_path):
             )
             == []
         )
-
 
     finally:
         await service.stop()
@@ -329,7 +325,9 @@ async def test_concurrent_appends_allocate_unique_contiguous_cursors(
                                 "message_uid": f"message-{index}",
                                 "node_id": f"node-{index}",
                                 "role": "assistant",
-                                "content": f"concurrent-{index}",
+                                "content": [
+                                    {"type": "text", "text": f"concurrent-{index}"}
+                                ],
                             },
                         }
                     )
@@ -361,7 +359,11 @@ async def test_failed_message_insert_does_not_advance_conversation_cursor(
     payload = {
         "user_uid": "user-1",
         "conversation_uid": "conv-1",
-        "message": {"message_uid": "message-1", "role": "user", "content": "first"},
+        "message": {
+            "message_uid": "message-1",
+            "role": "user",
+            "content": [{"type": "text", "text": "first"}],
+        },
     }
     assert (await db.append_message(payload))["messages"]["msg_cursor"] == 1
     assert (await db.append_message(payload))["success"] is False
@@ -372,7 +374,7 @@ async def test_failed_message_insert_does_not_advance_conversation_cursor(
     payload["message"] = {
         "message_uid": "message-2",
         "role": "assistant",
-        "content": "second",
+        "content": [{"type": "text", "text": "second"}],
     }
     assert (await db.append_message(payload))["messages"]["msg_cursor"] == 2
     fetched = await db.list_messages(payload)
@@ -453,7 +455,7 @@ async def test_users_conversations_and_messages(db, monkeypatch):
                 "message_uid": "message-1",
                 "role": "user",
                 "name": "alice",
-                "content": "hello sqlite",
+                "content": [{"type": "text", "text": "hello sqlite"}],
                 "node_id": "node-1",
                 "metadata": None,
                 "extensions": {"uploaded_files": ["brief.pdf"]},
@@ -468,7 +470,7 @@ async def test_users_conversations_and_messages(db, monkeypatch):
                 "message_uid": "message-2",
                 "role": "assistant",
                 "name": "assistant",
-                "content": "hello back",
+                "content": [{"type": "text", "text": "hello back"}],
                 "generation_id": "gen-1",
                 "node_id": "node-2",
                 "parent_id": "node-1",
@@ -513,7 +515,9 @@ async def test_users_conversations_and_messages(db, monkeypatch):
     matches = await db.search_messages(
         {"user_uid": "user-1", "keyword": "hello_sqlite"}
     )
-    assert [row["content"] for row in matches["messages"]] == ["hello sqlite"]
+    assert [row["content"][0]["text"] for row in matches["messages"]] == [
+        "hello sqlite"
+    ]
     assert await db.search_messages({"user_uid": "user-1", "keyword": "% _ \\"}) == {
         "success": True,
         "messages": [],

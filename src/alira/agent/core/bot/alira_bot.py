@@ -1,4 +1,4 @@
-"""Application role and tool binding around my-llm-py's Chat interface."""
+"""Application role and tool binding around my-llm-py's middleware interface."""
 
 from __future__ import annotations
 
@@ -6,23 +6,36 @@ from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from typing import Any, Literal, Self
 
-from my_llm import MessageStream, ModelProfile, ProviderProfile, ResolvedProfile
+from my_llm import (
+    FunctionTool,
+    InstructionMessage,
+    Message,
+    MessageStream,
+    ModelProfile,
+    ProviderProfile,
+    ResolvedProfile,
+    TextContent,
+)
 
 from alira.agent.core.bot.provider import BaseProvider
 from alira.agent.core.tool import BaseTool, ToolNode
 from alira.agent.core.utils.context import RoleSchema, to_prompt
-from alira.agent.core.utils.message import AliraAiMessage, AliraMessageBase
+from alira.agent.core.utils.message import AliraAiMessage
 
 
 class AliraBot:
-    """Use my-llm-py profiles and OpenAI Chat messages/tools for every provider.
+    """Use my-llm-py profiles and middleware messages/tools for every provider.
 
     Profiles configure model/connection behavior; my-llm-py owns SDK clients,
     protocol conversion, stream assembly and terminal validation.
     """
 
     def __init__(
-        self, *, provider: str, model: str, api_key: str | None = None,
+        self,
+        *,
+        provider: str,
+        model: str,
+        api_key: str | None = None,
         role_schema: RoleSchema | None = None,
     ) -> None:
         """Select a registered provider and an exact model ID.
@@ -36,7 +49,7 @@ class AliraBot:
         self.llm = self.provider.create_llm(model, api_key=api_key)
         self.model = self.llm.model.model.default_value
         self.role_schema = None
-        self._tool_schemas: list[dict] = []
+        self._tool_schemas: list[FunctionTool] = []
         if role_schema is not None:
             self.bind_role_schema(role_schema)
 
@@ -82,14 +95,14 @@ class AliraBot:
         return self
 
     @property
-    def tool_schemas(self) -> list[dict]:
+    def tool_schemas(self) -> list[FunctionTool]:
         """Return an independent copy of the currently bound function schemas."""
         return deepcopy(self._tool_schemas)
 
     @staticmethod
     def _schemas(
         tool_set: Iterable[BaseTool] | ToolNode, permissions: set[str] | None = None
-    ) -> list[dict]:
+    ) -> list[FunctionTool]:
         """Filter tools and copy validated schemas with unique function names."""
         if isinstance(tool_set, ToolNode):
             schemas = tool_set.get_schemas(filter_names=permissions)
@@ -111,10 +124,10 @@ class AliraBot:
                 for tool in tools
                 if permissions is None or tool.name in permissions
             ]
-        names = [schema["function"]["name"] for schema in schemas]
+        names = [schema.name for schema in schemas]
         if len(names) != len(set(names)):
             raise ValueError("function tool names must be unique")
-        return deepcopy(schemas)
+        return schemas
 
     def bind_tools(
         self,
@@ -139,33 +152,33 @@ class AliraBot:
         self._tool_schemas = self._schemas(tool_set, tool_permission_set)
         return self
 
-    def _messages(self, messages: list, system_prompt: list | None) -> list[dict]:
+    def _messages(
+        self, messages: list[Message], system_prompt: list[Message] | None
+    ) -> list[Message]:
         if not isinstance(messages, list):
             raise TypeError("messages must be a list")
         if system_prompt is not None and not isinstance(system_prompt, list):
             raise TypeError("system_prompt must be a list or None")
         result = list(system_prompt or [])
         if self.role_schema:
-            result.append({"role": "system", "content": to_prompt(self.role_schema, "RoleSchema")})
+            result.append(
+                InstructionMessage(
+                    role="system",
+                    content=[TextContent(to_prompt(self.role_schema, "RoleSchema"))],
+                )
+            )
         result.extend(messages)
-        chat_messages = []
-        for message in result:
-            if isinstance(message, AliraMessageBase):
-                chat_messages.append(message.to_chat())
-            elif isinstance(message, Mapping):
-                chat_messages.append({
-                    key: deepcopy(value) for key, value in message.items()
-                    if key not in {"message_uid", "metadata", "extensions"}
-                })
-            else:
-                raise TypeError("messages must contain complete messages or Chat dictionaries")
-        return chat_messages
+        return result
 
     async def invoke(
-        self, messages: list, system_prompt: list | None = None,
-        *, tools: Iterable[BaseTool] | ToolNode | None = None, **parameters: Any,
+        self,
+        messages: list[Message],
+        system_prompt: list[Message] | None = None,
+        *,
+        tools: Iterable[BaseTool] | ToolNode | None = None,
+        **parameters: Any,
     ) -> AliraAiMessage:
-        """Generate a complete Chat assistant message without executing tools.
+        """Generate a complete middleware assistant message without executing tools.
 
         ``parameters`` are my-llm-py generate options, including reasoning,
         max_tokens and extra_body. Provider-specific parameters belong in profiles.
@@ -173,25 +186,33 @@ class AliraBot:
         response = await self.llm.generate(
             messages=self._messages(messages, system_prompt),
             tools=self.tool_schemas if tools is None else self._schemas(tools),
-            stream=False, **parameters,
+            stream=False,
+            **parameters,
         )
-        return AliraAiMessage.from_chat(response)
+        return AliraAiMessage.from_middleware(response)
 
     async def stream(
-        self, messages: list, system_prompt: list | None = None,
-        *, tools: Iterable[BaseTool] | ToolNode | None = None, **parameters: Any,
+        self,
+        messages: list[Message],
+        system_prompt: list[Message] | None = None,
+        *,
+        tools: Iterable[BaseTool] | ToolNode | None = None,
+        **parameters: Any,
     ) -> MessageStream:
         """Return the library stream: use async with, then read stream.result.
 
-        Events and result are standard OpenAI Chat dictionaries. The library
-        closes requests on success, early exit, cancellation and failure.
+        Events are middleware MessageEvent objects; result is an AssistantMessage.
+        The library closes requests on success, early exit, cancellation and failure.
         """
         return await self.llm.generate(
             messages=self._messages(messages, system_prompt),
             tools=self.tool_schemas if tools is None else self._schemas(tools),
-            stream=True, **parameters,
+            stream=True,
+            **parameters,
         )
 
-    def compare_profiles(self, provider: ProviderProfile, model: ModelProfile) -> (tuple[ResolvedProfile, int] | Literal[True]):
+    def compare_profiles(
+        self, provider: ProviderProfile, model: ModelProfile
+    ) -> tuple[ResolvedProfile, int] | Literal[True]:
         """Return True if the provider and model are identical, or a tuple of the resolved profile and a hash key."""
         return self.llm.compare(provider, model)

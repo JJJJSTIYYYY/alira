@@ -13,6 +13,8 @@ from sqlalchemy import case, func, insert, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from sqlalchemy.sql import Executable
 
+from alira.common.utils.message import message_from_record, message_record
+from alira.config.base_config import SQLITE_DATABASE
 from alira.database.services.data.engine import (
     create_engine,
     database_io,
@@ -38,7 +40,6 @@ from alira.database.utils.serialization import (
     encode_optional_json,
     normalize_row,
 )
-from alira.config.base_config import SQLITE_DATABASE
 
 
 class DataService:
@@ -359,23 +360,18 @@ class DataService:
             payload: Required ``user_uid``, ``conversation_uid`` and a nonempty
                 ``message`` dictionary. The conversation must belong to the user
                 and have ``is_deleted = 0``.
-                ``message`` requires a unique ``message_uid`` and ``role`` from
-                ``user``, ``assistant``, ``system``, ``tool`` or ``info``.
-                Optional ``generation_id``, ``node_id`` and ``parent_id`` default
-                to ``""``. ``name``, ``content``, ``tool_calls``, ``tool_call_id``,
-                ``refusal``, ``reasoning_content``, ``audio``, ``annotations`` and
-                ``function_call`` default to ``None``. Content can be any
-                JSON-serializable value; tool calls/annotations must be arrays
-                and audio/function_call objects when present.
-                ``metadata`` and ``extensions`` must be objects and default to
-                empty objects, including for ``None``. JSON values are encoded
-                by the service, without accepting pre-encoded JSON text.
+                ``message`` contains flat middleware Message fields: ``role``,
+                ordered ``content`` blocks, ``name``, ``protocol``, ``item`` and
+                ``origin``; ToolMessage also has ``call_id``. A unique
+                ``message_uid`` is required. ``generation_id``, ``node_id`` and
+                ``parent_id`` default to empty strings; ``metadata`` and
+                ``extensions`` default to objects. JSON values are native data.
 
         Returns:
             Success: ``{"success": True, "messages": {"msg_cursor": int, "timestamp": str}}``.
                 The timestamp uses a ``T`` separator. Updates ``latest_cursor``
-                and ``last_active_at``; ``has_new_message`` is zero for user
-                messages and one for other roles.
+                and ``last_active_at``; ``has_new_message`` is zero for ordinary
+                user input and one for assistant, instruction and tool messages.
             Failure: ``{"success": False, "messages": "fail: <error>"}``;
                 the insert and conversation update are rolled back together.
         """
@@ -387,7 +383,8 @@ class DataService:
         for field in ("metadata", "extensions"):
             if message.get(field) is not None and not isinstance(message[field], dict):
                 raise TypeError(f"Message {field} must be an object")
-        role = message["role"]
+        protocol_fields = message_record(message_from_record(message))
+        role = protocol_fields["role"]
         async with self._transaction() as connection:
             # Allocate the cursor with the first write. SQLite serializes this
             # UPDATE across engines, avoiding a read-then-write race.
@@ -424,17 +421,12 @@ class DataService:
                         node_id=message.get("node_id", ""),
                         parent_id=message.get("parent_id", ""),
                         role=role,
-                        name=message.get("name"),
-                        content=encode_json(message.get("content")),
-                        tool_calls=encode_optional_json(message.get("tool_calls")),
-                        tool_call_id=message.get("tool_call_id"),
-                        refusal=message.get("refusal"),
-                        reasoning_content=message.get("reasoning_content"),
-                        audio=encode_optional_json(message.get("audio")),
-                        annotations=encode_optional_json(message.get("annotations")),
-                        function_call=encode_optional_json(
-                            message.get("function_call")
-                        ),
+                        name=protocol_fields["name"],
+                        content=encode_json(protocol_fields["content"]),
+                        protocol=protocol_fields["protocol"],
+                        item=encode_optional_json(protocol_fields["item"]),
+                        origin=encode_optional_json(protocol_fields["origin"]),
+                        call_id=protocol_fields["call_id"],
                         metadata=encode_json(message.get("metadata"), default={}),
                         extensions=encode_json(message.get("extensions"), default={}),
                     )
@@ -505,13 +497,11 @@ class DataService:
             Success: ``{"success": True, "messages": rows, "next_cursor": int}``.
                 Rows follow ascending ``msg_cursor`` order and contain
                 ``message_uid``, ``msg_cursor``, ``role``, ``name``, ``content``,
-                ``tool_calls``, ``tool_call_id``, ``refusal``, ``reasoning_content``,
-                ``audio``, ``annotations``, ``function_call``, ``metadata``,
+                ``protocol``, ``item``, ``origin``, ``call_id``, ``metadata``,
                 ``extensions``, ``timestamp``, ``generation_id``, ``node_id``,
-                ``parent_id`` and integer ``is_deleted``. Content, tool calls,
-                audio, annotations and function_call are JSON-decoded; metadata
-                and extensions are objects, defaulting to empty objects.
-                Timestamps are strings.
+                ``parent_id``, ``user_uid``, ``conversation_uid`` and integer
+                ``is_deleted``. JSON columns are decoded; internal ``id`` and
+                ``conversation_id`` are never returned.
                 ``next_cursor`` is the last row's cursor plus one, or the clamped
                 input cursor if no rows match.
             Failure: ``{"success": False, "messages": "fail: <error>"}``, with
@@ -525,13 +515,12 @@ class DataService:
                 messages.c.role,
                 messages.c.name,
                 messages.c.content,
-                messages.c.tool_calls,
-                messages.c.tool_call_id,
-                messages.c.refusal,
-                messages.c.reasoning_content,
-                messages.c.audio,
-                messages.c.annotations,
-                messages.c.function_call,
+                messages.c.protocol,
+                messages.c.item,
+                messages.c.origin,
+                messages.c.call_id,
+                messages.c.user_uid,
+                messages.c.conversation_uid,
                 messages.c.metadata,
                 messages.c.extensions,
                 messages.c.timestamp,

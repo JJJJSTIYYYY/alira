@@ -8,18 +8,19 @@ import time
 from pathlib import Path
 from typing import Any
 
+from alira.common.utils.logger import logger
+from alira.common.utils.serialization import json_default
+from alira.config.base_config import (
+    ALIRA_BASE_DIR,
+    HOT_CACHE_DEFAULT_EXPIRE_SECONDS,
+    STATIC_CACHE_DEFAULT_EXPIRE_SECONDS,
+)
 from alira.database.services.cache.keys import (
     build_conversation_key,
     build_resource_key,
     build_resource_prefix,
 )
 from alira.database.utils.handlers import service_handler
-from alira.common.utils.logger import logger
-from alira.config.base_config import (
-    ALIRA_BASE_DIR,
-    HOT_CACHE_DEFAULT_EXPIRE_SECONDS,
-    STATIC_CACHE_DEFAULT_EXPIRE_SECONDS,
-)
 
 
 class CacheService:
@@ -33,7 +34,9 @@ class CacheService:
     def __init__(self, persistence_path: str | Path | None = None):
         self._persistence_path = Path(
             persistence_path
-            or (Path(ALIRA_BASE_DIR) / "builtin_cache_store.json").expanduser().resolve()
+            or (Path(ALIRA_BASE_DIR) / "builtin_cache_store.json")
+            .expanduser()
+            .resolve()
         )
         self._cache: dict[str, dict[str, Any]] = {}
         self._lock = asyncio.Lock()
@@ -75,7 +78,11 @@ class CacheService:
             try:
                 with temporary_path.open("w", encoding="utf-8") as file:
                     json.dump(
-                        self._cache, file, ensure_ascii=False, separators=(",", ":")
+                        self._cache,
+                        file,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        default=json_default,
                     )
                 os.replace(temporary_path, self._persistence_path)
                 self._started = False

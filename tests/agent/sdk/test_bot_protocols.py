@@ -5,23 +5,22 @@ import json
 import httpx
 import pytest
 from anthropic import AsyncAnthropic
-from google import genai
 from my_llm import (
     Attribute,
     Config,
     IncompleteStreamError,
+    InputParameter,
+    MessageEvent,
     ModelProfile,
-    Parameter,
     ProviderProfile,
+    TextContent,
+    UserMessage,
 )
-from ollama import AsyncClient as AsyncOllama
 from openai import AsyncOpenAI
 
 from alira.agent.core.tool import ToolNode
 from alira.agent.core.utils.message import AliraAiMessage, AliraUserMessage
 from tests.agent.sdk.test_bot import make_profile_bot, weather
-
-GenAIClient = genai.Client
 
 
 def wire(protocol):
@@ -95,29 +94,6 @@ def wire(protocol):
             },
             {"type": "message_stop"},
         ]
-    elif protocol == "gemini":
-        events = [
-            {
-                "candidates": [
-                    {
-                        "content": {"role": "model", "parts": [{"text": "hello"}]},
-                        "finishReason": "STOP",
-                    }
-                ]
-            }
-        ]
-    else:
-        return (
-            json.dumps(
-                {
-                    "model": "test",
-                    "message": {"role": "assistant", "content": "hello"},
-                    "done": True,
-                    "done_reason": "stop",
-                }
-            )
-            + "\n"
-        )
     return "".join(
         (f"event: {e['type']}\n" if "type" in e else "") + f"data: {json.dumps(e)}\n\n"
         for e in events
@@ -137,39 +113,16 @@ def install_sdk(monkeypatch, protocol, handler):
         clients.append(http)
         return AsyncAnthropic(**kwargs, http_client=http)
 
-    def gemini_factory(**kwargs):
-        options = kwargs.pop("http_options")
-        options = options.model_copy(
-            update={
-                "async_client_args": {
-                    **(options.async_client_args or {}),
-                    "transport": httpx.MockTransport(handler),
-                }
-            }
-        )
-        client = GenAIClient(**kwargs, http_options=options)
-        clients.append(client._api_client._async_httpx_client)
-        return client
-
-    def ollama_factory(**kwargs):
-        client = AsyncOllama(**kwargs, transport=httpx.MockTransport(handler))
-        clients.append(client._client)
-        return client
-
     module, name, factory = {
         "openai_chat": ("openai.chat", "AsyncOpenAI", openai_factory),
         "openai_responses": ("openai.responses", "AsyncOpenAI", openai_factory),
         "anthropic": ("anthropic", "AsyncAnthropic", anthropic_factory),
-        "gemini": ("gemini", "genai.Client", gemini_factory),
-        "ollama": ("ollama", "AsyncOllama", ollama_factory),
     }[protocol]
     monkeypatch.setattr(f"my_llm.codec.{module}.transport.{name}", factory)
     return clients
 
 
-@pytest.mark.parametrize(
-    "protocol", ["openai_chat", "openai_responses", "anthropic", "gemini", "ollama"]
-)
+@pytest.mark.parametrize("protocol", ["openai_chat", "openai_responses", "anthropic"])
 @pytest.mark.parametrize("streaming", [False, True])
 async def test_sdk_protocols_keep_chat_input_and_output(
     monkeypatch, protocol, streaming
@@ -181,11 +134,7 @@ async def test_sdk_protocols_keep_chat_input_and_output(
         return httpx.Response(
             200,
             text=wire(protocol),
-            headers={
-                "content-type": "application/x-ndjson"
-                if protocol == "ollama"
-                else "text/event-stream"
-            },
+            headers={"content-type": "text/event-stream"},
         )
 
     clients = install_sdk(monkeypatch, protocol, handler)
@@ -193,8 +142,6 @@ async def test_sdk_protocols_keep_chat_input_and_output(
         "openai_chat": "$.max_completion_tokens",
         "openai_responses": "$.max_output_tokens",
         "anthropic": "$.max_tokens",
-        "gemini": "$.config.max_output_tokens",
-        "ollama": "$.options.num_predict",
     }
     bot = make_profile_bot(
         provider=ProviderProfile(
@@ -203,7 +150,7 @@ async def test_sdk_protocols_keep_chat_input_and_output(
         ),
         model=ModelProfile(
             model=Attribute(default_value="test"),
-            max_tokens=Parameter(
+            max_tokens=InputParameter(
                 path=token_paths[protocol],
                 default_value=100,
             ),
@@ -211,27 +158,22 @@ async def test_sdk_protocols_keep_chat_input_and_output(
         ),
         api_key="test",
     )
-    messages = [AliraUserMessage(content="hi")]
+    messages = [AliraUserMessage(content=[TextContent("hi")])]
     if streaming:
-        stream = await bot.stream(
-            messages, tools=[] if protocol == "ollama" else [weather]
-        )
+        stream = await bot.stream(messages, tools=[weather])
         async with stream:
             events = [event async for event in stream]
-        assert all("choices" in event for event in events)
-        result = AliraAiMessage.from_chat(stream.result)
+        assert all(isinstance(event, MessageEvent) for event in events)
+        result = AliraAiMessage.from_middleware(stream.result)
     else:
-        result = await bot.invoke(
-            messages, tools=[] if protocol == "ollama" else [weather]
-        )
-    assert result.content == "hello"
+        result = await bot.invoke(messages, tools=[weather])
+    assert result.content[0].text == "hello"
     assert clients and all(not client.is_closed for client in clients)
     await bot.aclose()
     assert all(client.is_closed for client in clients)
     body = json.loads(requests[0].content)
     assert "hi" in str(body)
-    if protocol != "ollama":
-        assert "weather" in str(body)
+    assert "weather" in str(body)
     assert "message_uid" not in str(body) and "extensions" not in str(body)
 
 
@@ -280,7 +222,7 @@ async def test_sdk_tool_round_trip_is_standard_and_executable(monkeypatch):
     bot = make_profile_bot(
         provider=ProviderProfile(
             protocol=Config(default_value="openai_chat"),
-            api_key=Parameter(
+            api_key=InputParameter(
                 path="$.api_key",
                 default_value="test",
             ),
@@ -290,14 +232,14 @@ async def test_sdk_tool_round_trip_is_standard_and_executable(monkeypatch):
             supports_function_calling=Config(default_value=True),
         ),
     ).bind_tools([weather])
-    prompt = AliraUserMessage(content="weather?")
+    prompt = AliraUserMessage(content=[TextContent("weather?")])
     first = await bot.invoke([prompt])
     output = await ToolNode(weather).execute({"messages": [first]})
     tool_result = output.update["messages"][0]
-    assert tool_result.content == "sunny in Tokyo"
-    assert tool_result.to_chat()["tool_call_id"] == "c1"
+    assert tool_result.content[0].text == "sunny in Tokyo"
+    assert tool_result.call_id == "c1"
     final = await bot.invoke([prompt, first, tool_result])
-    assert final.content == "sunny"
+    assert final.content[0].text == "sunny"
     assert json.loads(
         calls[1]["messages"][1]["tool_calls"][0]["function"]["arguments"]
     ) == {"city": "Tokyo"}
@@ -317,7 +259,7 @@ async def test_bot_context_closes_shared_clients_on_application_error(monkeypatc
     bot = make_profile_bot(
         provider=ProviderProfile(
             protocol=Config(default_value="openai_chat"),
-            api_key=Parameter(
+            api_key=InputParameter(
                 path="$.api_key",
                 default_value="test",
             ),
@@ -327,7 +269,7 @@ async def test_bot_context_closes_shared_clients_on_application_error(monkeypatc
     with pytest.raises(ValueError, match="application error"):
         async with bot as active:
             assert active is bot
-            await bot.invoke([{"role": "user", "content": "hi"}])
+            await bot.invoke([UserMessage(role="user", content=[TextContent("hi")])])
             assert clients and not clients[0].is_closed
             raise ValueError("application error")
     assert all(client.is_closed for client in clients)
@@ -367,27 +309,27 @@ async def test_early_exit_and_missing_terminal_close_bodies_and_reuse_client(
     bot = make_profile_bot(
         provider=ProviderProfile(
             protocol=Config(default_value="openai_chat"),
-            api_key=Parameter(
+            api_key=InputParameter(
                 path="$.api_key",
                 default_value="test",
             ),
         ),
         model=ModelProfile(model=Attribute(default_value="test")),
     )
-    stream = await bot.stream([{"role": "user", "content": "hi"}])
+    stream = await bot.stream([UserMessage(role="user", content=[TextContent("hi")])])
     async with stream:
         await anext(stream)
     assert bodies[-1].closed
     assert not clients[-1].is_closed
     with pytest.raises(IncompleteStreamError):
-        await bot.invoke([{"role": "user", "content": "hi"}])
+        await bot.invoke([UserMessage(role="user", content=[TextContent("hi")])])
     assert all(body.closed for body in bodies)
     assert len(clients) == 1 and not clients[0].is_closed
     await bot.aclose()
     await bot.aclose()  # Library shutdown is idempotent.
     assert clients[0].is_closed
     with pytest.raises(RuntimeError, match="closed"):
-        await bot.invoke([{"role": "user", "content": "hi"}])
+        await bot.invoke([UserMessage(role="user", content=[TextContent("hi")])])
 
 
 async def test_cancelling_one_request_closes_its_body_and_preserves_concurrent_stream(
@@ -431,7 +373,7 @@ async def test_cancelling_one_request_closes_its_body_and_preserves_concurrent_s
     bot = make_profile_bot(
         provider=ProviderProfile(
             protocol=Config(default_value="openai_chat"),
-            api_key=Parameter(
+            api_key=InputParameter(
                 path="$.api_key",
                 default_value="test",
             ),
@@ -440,10 +382,12 @@ async def test_cancelling_one_request_closes_its_body_and_preserves_concurrent_s
     )
 
     async def consume(label):
-        stream = await bot.stream([{"role": "user", "content": label}])
+        stream = await bot.stream(
+            [UserMessage(role="user", content=[TextContent(label)])]
+        )
         async with stream:
             async for event in stream:
-                if any(choice["delta"].get("content") for choice in event["choices"]):
+                if event.type == "delta" and event.field == "text":
                     await ready.wait()
         return stream.result
 
@@ -457,7 +401,7 @@ async def test_cancelling_one_request_closes_its_body_and_preserves_concurrent_s
         assert bodies["first"].closed
         assert not bodies["second"].closed
         release.set()
-        assert (await asyncio.wait_for(second, 3))["content"] == "second"
+        assert (await asyncio.wait_for(second, 3)).content[0].text == "second"
         assert bodies["second"].closed
         assert len(clients) == 1 and not clients[0].is_closed
     finally:
@@ -467,17 +411,3 @@ async def test_cancelling_one_request_closes_its_body_and_preserves_concurrent_s
         await asyncio.gather(first, second, return_exceptions=True)
         await bot.aclose()
     assert all(client.is_closed for client in clients)
-
-
-async def test_ollama_schema_constraint_rejection_is_not_silently_weakened():
-    from my_llm import SemanticLossError
-
-    bot = make_profile_bot(
-        provider=ProviderProfile(protocol=Config(default_value="ollama")),
-        model=ModelProfile(
-            model=Attribute(default_value="test"),
-            supports_function_calling=Config(default_value=True),
-        ),
-    )
-    with pytest.raises(SemanticLossError, match="schema constraints"):
-        await bot.invoke([{"role": "user", "content": "hi"}], tools=[weather])

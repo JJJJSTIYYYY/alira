@@ -11,9 +11,9 @@ from uuid import uuid4
 
 from apixis.core.event import EventType, get_event_pipe, wait_for_event
 from apixis.core.event.base import suspend_process
+from my_llm import ToolCall
 
 from alira.agent.core.tool.base import BaseTool
-from alira.agent.core.utils.message import ToolCall
 
 
 @dataclass(kw_only=True, slots=True)

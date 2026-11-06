@@ -1,56 +1,47 @@
-"""OpenAI Chat messages with application identity, metadata and business extensions.
-
-Protocol fields stay at the top level. ``info`` is a storage-only business event;
-it is never sent to the model. Streaming uses my_llm.MessageStream directly.
-"""
+"""Middleware messages with application identity and business extensions."""
 
 from __future__ import annotations
 
-from copy import deepcopy
-from dataclasses import asdict, dataclass, field
-from typing import Any, ClassVar, Literal, TypeAlias
+from dataclasses import dataclass, field, fields
+from typing import Any, Literal, TypeAlias
 from uuid import uuid4
 
-from openai.types.chat import ChatCompletionMessageFunctionToolCallParam
-
-ToolCall: TypeAlias = ChatCompletionMessageFunctionToolCallParam
-MessageRole = Literal["system", "user", "assistant", "tool"]
-ContentPart: TypeAlias = dict[str, Any]
-MessageContent: TypeAlias = str | list[ContentPart] | None
-
-CHAT_OPTIONAL_FIELDS = (
-    "tool_calls",
-    "refusal",
-    "reasoning_content",
-    "audio",
-    "annotations",
-    "function_call",
+from my_llm import (
+    AssistantMessage,
+    InstructionMessage,
+    Message,
+    ToolMessage,
+    UserMessage,
 )
 
+from alira.common.utils.message import message_record
 
-@dataclass(slots=True, kw_only=True)
-class AliraMessageBase:
-    role: ClassVar[MessageRole]
-    content: MessageContent = None
-    name: str | None = None
+
+@dataclass(kw_only=True)
+class AliraMessageBase(Message):
+    role: str = "user"
     message_uid: str = field(default_factory=lambda: uuid4().hex)
+    generation_id: str = ""
+    node_id: str = ""
+    parent_id: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     extensions: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        """Return an independent complete message, including application fields."""
-        return {"role": self.role, **asdict(self)}
-
-    def to_chat(self) -> dict[str, Any]:
-        """Return Chat fields without application storage/context attributes."""
-        values = self.to_dict()
-        for key in ("message_uid", "metadata", "extensions"):
-            values.pop(key)
-        if self.role == "tool":
-            values.pop("name", None)
+        """Project flat middleware fields and application fields for storage."""
         return {
-            key: value for key, value in values.items()
-            if value is not None or key == "content"
+            **message_record(self),
+            **{
+                key: getattr(self, key)
+                for key in (
+                    "message_uid",
+                    "generation_id",
+                    "node_id",
+                    "parent_id",
+                    "metadata",
+                    "extensions",
+                )
+            },
         }
 
     @property
@@ -117,51 +108,37 @@ class AliraMessageBase:
         self.extensions["system_instruction"] = value
 
 
-@dataclass(slots=True, kw_only=True)
-class AliraAiMessage(AliraMessageBase):
-    role: ClassVar[Literal["assistant"]] = "assistant"
-    tool_calls: list[ToolCall] = field(default_factory=list)
-    refusal: str | None = None
-    audio: dict[str, Any] | None = None
-    annotations: list[dict[str, Any]] | None = None
-    function_call: dict[str, Any] | None = None
-    # Provider extension used by Chat-compatible reasoning models.
-    reasoning_content: str | None = None
+@dataclass(kw_only=True)
+class AliraAiMessage(AliraMessageBase, AssistantMessage):
+    role: str = "assistant"
 
     @classmethod
-    def from_chat(cls, message: dict[str, Any], **application_fields: Any) -> AliraAiMessage:
-        """Attach application fields to a completed standard assistant message."""
-        values = deepcopy(message)
-        if values.pop("role", None) != "assistant":
-            raise ValueError("expected an assistant Chat message")
-        return cls(**values, **application_fields)
+    def from_middleware(
+        cls, message: AssistantMessage, **application_fields: Any
+    ) -> AliraAiMessage:
+        """Attach business fields to the library's completed assistant message."""
+        return cls(
+            **{f.name: getattr(message, f.name) for f in fields(Message)},
+            **application_fields,
+        )
 
 
-@dataclass(slots=True, kw_only=True)
-class AliraSystemMessage(AliraMessageBase):
-    role: ClassVar[Literal["system"]] = "system"
-    content: str | list[ContentPart] = ""
+@dataclass(kw_only=True)
+class AliraSystemMessage(AliraMessageBase, InstructionMessage):
+    role: str = "system"
 
 
-@dataclass(slots=True, kw_only=True)
-class AliraToolMessage(AliraMessageBase):
-    role: ClassVar[Literal["tool"]] = "tool"
-    tool_call_id: str
-    content: str | list[ContentPart] = ""
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.tool_call_id, str) or not self.tool_call_id:
-            raise ValueError("tool_call_id cannot be empty")
+@dataclass(kw_only=True)
+class AliraToolMessage(AliraMessageBase, ToolMessage):
+    role: Literal["tool"] = "tool"
 
 
-@dataclass(slots=True, kw_only=True)
-class AliraUserMessage(AliraMessageBase):
-    role: ClassVar[Literal["user"]] = "user"
-    content: str | list[ContentPart] = ""
+@dataclass(kw_only=True)
+class AliraUserMessage(AliraMessageBase, UserMessage):
+    role: str = "user"
 
 
 CompleteMessage: TypeAlias = (
-    AliraUserMessage | AliraAiMessage | AliraToolMessage
-    | AliraSystemMessage
+    AliraUserMessage | AliraAiMessage | AliraToolMessage | AliraSystemMessage
 )
 AnyMessage: TypeAlias = CompleteMessage

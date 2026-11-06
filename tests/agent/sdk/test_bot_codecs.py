@@ -1,12 +1,29 @@
-"""No application codec or custom stream accumulator is needed."""
+"""Application messages extend middleware without rebuilding provider codecs."""
+
+from my_llm import (
+    AssistantMessage,
+    ItemIdentity,
+    ReasoningContent,
+    TextContent,
+    ToolCall,
+)
+
 from alira.agent.core.utils.message import AliraAiMessage
 
 
-def test_completed_library_message_keeps_chat_protocol_fields():
-    value = {"role": "assistant", "content": None, "refusal": "no",
-             "audio": {"id": "a1"}, "annotations": [],
-             "reasoning_content": "why", "tool_calls": []}
-    message = AliraAiMessage.from_chat(value, extensions={"todo_list": []})
-    assert message.to_chat() == value
-    value["audio"]["id"] = "changed"
-    assert message.audio == {"id": "a1"}
+def test_completed_library_message_keeps_ordered_middleware_content():
+    value = AssistantMessage(
+        role="assistant",
+        protocol="openai_responses",
+        item=ItemIdentity("m1"),
+        content=[
+            ReasoningContent("why", feedback_item={"encrypted_content": "opaque"}),
+            TextContent("answer"),
+            ToolCall("c1", "search", {"q": "alira"}),
+        ],
+    )
+    message = AliraAiMessage.from_middleware(value, extensions={"todo_list": []})
+    assert message.to_wire() == value.to_wire()
+    assert message.content is value.content
+    assert message.content[0].feedback_item == {"encrypted_content": "opaque"}
+    assert "extensions" not in message.to_wire()

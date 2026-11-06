@@ -1,6 +1,14 @@
-"""DeepSeek Chat presets. Field evidence: docs/provider-presets.md."""
+"""DeepSeek Responses presets. Field evidence: docs/provider-presets.md."""
 
-from my_llm import Attribute, Config, ModelProfile, Parameter, ProviderProfile, omit
+from my_llm import (
+    Attribute,
+    Config,
+    InputParameter,
+    ModelProfile,
+    OutputParameter,
+    ProviderProfile,
+    omit,
+)
 
 from alira.agent.core.bot.provider.base import BaseProvider
 
@@ -10,33 +18,38 @@ class DeepseekProvider(BaseProvider):
         super().__init__(
             "deepseek",
             ProviderProfile(
-                protocol=Config(default_value="openai_chat"),
+                protocol=None,
                 base_url=Config(default_value="https://api.deepseek.com"),
-                api_key=Parameter(path="$.api_key", default_value=omit, supports=True),
+                api_key=InputParameter(path="$.api_key", default_value=omit, supports=True),
                 timeout=Config(default_value=None),
                 max_retries=Config(default_value=None),
                 supports_stream=Config(default_value=True),
                 usage_mode=Config(default_value="none"),
                 extra_headers=Config(default_value={}),
-                extra_body=Config(default_value={}),
-                max_tokens=Parameter(path="$.max_tokens", default_value=omit, supports=True),
-                content=Parameter(
-                    path="$.choices[0].delta.content",
+                extra_body=Config(default_value={"reasoning": {"effort": "high"}}),
+                max_tokens=InputParameter(
+                    path="$.max_output_tokens", default_value=omit, supports=True
+                ),
+                content=OutputParameter(
+                    path="$.delta",
                     default_value=omit,
                     supports=True,
                 ),
-                reasoning_content=Parameter(
-                    path="$.choices[0].delta.reasoning_content",
+                reasoning_content=OutputParameter(
+                    path="$.delta",
                     default_value=omit,
                     supports=True,
                 ),
-                reasoning_enable=Parameter(
-                    path="$.extra_body.thinking",
-                    default_value={"type": "enabled"},
+                feedback_reasoning_item=OutputParameter(
+                    path="$.item", default_value=omit, supports=True
+                ),
+                reasoning_enable=InputParameter(
+                    path="$.reasoning.effort",
+                    default_value="high",
                     supports=True,
                 ),
-                reasoning_effort=Parameter(
-                    path="$.reasoning_effort",
+                reasoning_effort=InputParameter(
+                    path="$.reasoning.effort",
                     default_value=omit,
                     supports=True,
                 ),
@@ -50,26 +63,29 @@ class DeepseekProvider(BaseProvider):
                         "max": None,
                     },
                 ),
-                feedback_reasoning_content=Config(default_value="always"),
+                should_feedback_reasoning_item=Config(default_value="always"),
                 models=Attribute(
                     default_value=[
                         ModelProfile(
+                            protocol=Config(default_value="openai_responses"),
                             model=Attribute(default_value="deepseek-flash"),
                             max_context_window=Attribute(default_value=1_048_576),
                             supports_function_calling=Config(default_value=True),
-                            supports_vision=Config(default_value=False),
+                            supports_vision=Config(default_value=True),
                             supports_message_name=Config(default_value=True),
                             extra_headers=None,
                             extra_body=None,
                             max_tokens=None,
                             content=None,
                             reasoning_content=None,
+                            feedback_reasoning_item=None,
                             reasoning_enable=None,
                             reasoning_effort=None,
                             reasoning_effort_mapping=None,
-                            feedback_reasoning_content=None,
+                            should_feedback_reasoning_item=None,
                         ),
                         ModelProfile(
+                            protocol=Config(default_value="openai_responses"),
                             model=Attribute(default_value="deepseek-v4-pro"),
                             max_context_window=Attribute(default_value=1_048_576),
                             supports_function_calling=Config(default_value=True),
@@ -80,10 +96,11 @@ class DeepseekProvider(BaseProvider):
                             max_tokens=None,
                             content=None,
                             reasoning_content=None,
+                            feedback_reasoning_item=None,
                             reasoning_enable=None,
                             reasoning_effort=None,
                             reasoning_effort_mapping=None,
-                            feedback_reasoning_content=None,
+                            should_feedback_reasoning_item=None,
                         ),
                     ],
                 ),

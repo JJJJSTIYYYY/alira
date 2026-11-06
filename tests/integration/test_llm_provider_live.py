@@ -3,7 +3,7 @@
 import os
 
 import pytest
-from my_llm import Attribute, Config, Parameter
+from my_llm import Attribute, Config, InputParameter, MessageEvent, TextContent
 
 from alira.agent.core.bot import (
     AliraBot,
@@ -30,8 +30,6 @@ async def test_live_chat(streaming):
         "openai_chat": "$.max_completion_tokens",
         "openai_responses": "$.max_output_tokens",
         "anthropic": "$.max_tokens",
-        "gemini": "$.config.max_output_tokens",
-        "ollama": "$.options.num_predict",
     }
     endpoint = os.environ.get("ALIRA_LIVE_ENDPOINT")
     BaseProvider.register(
@@ -46,7 +44,7 @@ async def test_live_chat(streaming):
                             model=Attribute(
                                 default_value=os.environ["ALIRA_LIVE_MODEL"]
                             ),
-                            max_tokens=Parameter(
+                            max_tokens=InputParameter(
                                 path=token_paths[protocol],
                                 default_value=100,
                             ),
@@ -63,12 +61,12 @@ async def test_live_chat(streaming):
         api_key=os.environ["ALIRA_LIVE_API_KEY"],
     )
     async with bot:
-        history = [AliraUserMessage(content="Reply with exactly: OK")]
+        history = [AliraUserMessage(content=[TextContent("Reply with exactly: OK")])]
         if streaming:
             stream = await bot.stream(history)
             async with stream:
                 async for event in stream:
-                    assert "choices" in event
-            assert stream.result["content"]
+                    assert isinstance(event, MessageEvent)
+            assert stream.result.content
         else:
             assert (await bot.invoke(history)).content

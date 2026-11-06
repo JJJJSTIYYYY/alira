@@ -1,7 +1,8 @@
+from my_llm import ToolCall
+
 """Resident tool services stay usable across bounded graph request lifetimes."""
 
 import asyncio
-import json
 from typing import Annotated, TypedDict
 
 import pytest
@@ -47,15 +48,8 @@ def _state(name: str, *, value: str = "ok", call_id: str = "call") -> dict:
     return {
         "messages": [
             AliraAiMessage(
-                tool_calls=[
-                    {
-                        "id": call_id,
-                        "type": "function",
-                        "function": {
-                            "name": name,
-                            "arguments": json.dumps({"value": value}),
-                        },
-                    }
+                content=[
+                    ToolCall(call_id=call_id, name=name, arguments={"value": value})
                 ]
             )
         ]
@@ -74,14 +68,14 @@ async def test_nested_tool_requests_complete_at_small_runtime_capacities():
 
     async def outer(value: str) -> str:
         command = await inner_node.execute(_state("inner", value=value))
-        return f"outer:{command.update['messages'][0].content}"
+        return f"outer:{command.update['messages'][0].content[0].text}"
 
     manager = FunctionToolManager([outer])
     result = await asyncio.wait_for(
         _graph(ToolNode(manager)).invoke(_state("outer")), 2
     )
 
-    assert result["messages"][-1].content == "outer:inner:ok"
+    assert result["messages"][-1].content[0].text == "outer:inner:ok"
 
 
 async def test_tools_in_one_batch_can_wait_for_each_other():
@@ -100,13 +94,16 @@ async def test_tools_in_one_batch_can_wait_for_each_other():
 
     manager = FunctionToolManager([first, second])
     state = _state("first", value="one", call_id="first-call")
-    state["messages"][0].tool_calls.extend(
-        _state("second", value="two", call_id="second-call")["messages"][0].tool_calls
+    state["messages"][0].content.extend(
+        _state("second", value="two", call_id="second-call")["messages"][0].content
     )
     result = await asyncio.wait_for(_graph(ToolNode(manager)).invoke(state), 2)
 
     assert completed == ["second", "first"]
-    assert [message.content for message in result["messages"][1:]] == ["one", "two"]
+    assert [message.content[0].text for message in result["messages"][1:]] == [
+        "one",
+        "two",
+    ]
 
 
 async def test_graph_cancellation_preserves_service_and_independent_active_work():
@@ -137,7 +134,7 @@ async def test_graph_cancellation_preserves_service_and_independent_active_work(
         # The resident manager accepts a new graph's work in the meantime.
         assert not completed.is_set()
         result = await asyncio.wait_for(graph.invoke(_state("work", value="next")), 2)
-        assert result["messages"][-1].content == "next"
+        assert result["messages"][-1].content[0].text == "next"
     finally:
         release.set()
         await asyncio.wait_for(completed.wait(), 2)
@@ -176,7 +173,7 @@ async def test_tool_node_cancellation_joins_asynchronous_tool_cleanup():
             await asyncio.wait_for(task, 2)
     assert cleaned.is_set()
     result = await asyncio.wait_for(node.execute(_state("work", value="next")), 2)
-    assert result.update["messages"][0].content == "next"
+    assert result.update["messages"][0].content[0].text == "next"
 
 
 async def test_graph_timeout_cleans_request_and_preserves_service():
@@ -198,7 +195,7 @@ async def test_graph_timeout_cleans_request_and_preserves_service():
 
     assert cancelled.is_set()
     result = await asyncio.wait_for(graph.invoke(_state("work", value="next")), 2)
-    assert result["messages"][-1].content == "next"
+    assert result["messages"][-1].content[0].text == "next"
 
 
 async def test_service_stop_finishes_active_request_cleanup_and_can_restart():
@@ -238,7 +235,7 @@ async def test_service_stop_finishes_active_request_cleanup_and_can_restart():
 
     await manager.start()
     result = await asyncio.wait_for(node.execute(_state("work", value="restart")), 2)
-    assert result.update["messages"][0].content == "restart"
+    assert result.update["messages"][0].content[0].text == "restart"
 
 
 async def test_cancelled_queued_request_never_executes(event_runtime_capacity):
@@ -316,7 +313,7 @@ async def test_failed_manager_start_removes_partial_registration(monkeypatch):
     result = await asyncio.wait_for(
         ToolNode(manager).execute(_state("<lambda>", value="recovered")), 2
     )
-    assert result.update["messages"][0].content == "recovered"
+    assert result.update["messages"][0].content[0].text == "recovered"
 
 
 async def test_stopped_manager_rejects_queued_calls_after_restart(
@@ -370,7 +367,7 @@ async def test_stopped_manager_rejects_queued_calls_after_restart(
 
     assert observed == []
     result = await asyncio.wait_for(node.execute(_state("work", value="new")), 2)
-    assert result.update["messages"][0].content == "new"
+    assert result.update["messages"][0].content[0].text == "new"
     assert observed == ["new"]
 
 
@@ -411,4 +408,4 @@ async def test_cancelled_stop_wait_keeps_owned_shutdown_and_allows_restart():
     assert completed.is_set()
     await manager.start()
     result = await asyncio.wait_for(node.execute(_state("work", value="new")), 2)
-    assert result.update["messages"][0].content == "new"
+    assert result.update["messages"][0].content[0].text == "new"

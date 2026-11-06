@@ -6,12 +6,13 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
+from my_llm import FunctionTool, ToolCall
+
 from alira.agent.core.tool.base import BaseTool
 from alira.agent.core.tool.mcp.base import (
     McpMetaSchema,
     _get_model_value,
 )
-from alira.agent.core.utils.message import ToolCall
 from alira.common.type.identiity import ConversationIdentity
 
 if TYPE_CHECKING:
@@ -49,14 +50,11 @@ class MCPTool(BaseTool):
         self.mcp_name = mcp_meta["mcp_name"]
         self._manager = manager
         self._identity_key = manager.identity_key(identity)
-        self.schema = {
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "description": self.description,
-                "parameters": deepcopy(dict(input_schema)),
-            },
-        }
+        self.schema = FunctionTool(
+            name=self.name,
+            description=self.description,
+            parameters=deepcopy(dict(input_schema)),
+        )
 
     @property
     def manager(self) -> MCPToolManager:

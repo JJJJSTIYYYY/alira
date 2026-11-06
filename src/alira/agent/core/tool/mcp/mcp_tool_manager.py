@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
@@ -15,6 +14,7 @@ from fastmcp.client.transports import (
     StdioTransport,
     StreamableHttpTransport,
 )
+from my_llm import ToolCall
 
 from alira.agent.core.tool.base import BaseTool
 from alira.agent.core.tool.mcp.base import McpMetaSchema
@@ -22,11 +22,10 @@ from alira.agent.core.tool.mcp.mcp_tool import MCPTool
 from alira.agent.core.tool.mcp.mcp_tool_runtime import MCPToolRuntime
 from alira.agent.core.tool.utils.manager import ToolManager
 from alira.agent.core.tool.utils.request import ToolRequest
-from alira.agent.core.utils.message import ToolCall
-from alira.database import query_store
-from alira.lifespan import auto_init
 from alira.common.type.identiity import AliraIdentity, ConversationIdentity
 from alira.common.utils import logger
+from alira.database import query_store
+from alira.lifespan import auto_init
 
 IdentityKey = tuple[str, str, str]
 UserKey = tuple[str, str]
@@ -157,11 +156,7 @@ class MCPToolManager(ToolManager):
             )
         if arguments is not None and not isinstance(arguments, dict):
             raise TypeError("MCP tool arguments must be a dictionary.")
-        call: ToolCall = {
-            "id": uuid4().hex,
-            "type": "function",
-            "function": {"name": tool_name, "arguments": json.dumps(arguments or {})},
-        }
+        call = ToolCall(call_id=uuid4().hex, name=tool_name, arguments=arguments or {})
         return await self.execute_tool(tool, {"target": deepcopy(identity)}, call)
 
     async def get_mcp_meta(self, user_uid: str) -> list[McpMetaSchema]:

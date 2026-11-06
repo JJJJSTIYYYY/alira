@@ -1,12 +1,29 @@
+from my_llm import FunctionTool, TextContent, ToolCall
+
 """Complex graph/tool integration tests that simulate a full Agent turn."""
-import json
 
 import asyncio
 from dataclasses import dataclass, field
 from typing import Annotated, Any, TypedDict
 
 import pytest
+from apixis.core.event import (
+    ApixEvent,
+    get_event_registry,
+    get_handler_meta,
+    get_unmatched_subscriptions,
+    subscribe,
+    unsubscribe,
+)
+from apixis.core.graph import (
+    AutoMerge,
+    Command,
+    GraphManager,
+    KeepRef,
+    get_graph_dispatch_name,
+)
 
+from alira.agent.core.graph import AgentGraphCreator
 from alira.agent.core.tool import (
     AutoInjection,
     ToolInjectionContext,
@@ -18,23 +35,6 @@ from alira.agent.core.utils.message import (
     AliraToolMessage,
     AliraUserMessage,
 )
-from apixis.core.event import (
-    get_event_registry,
-    ApixEvent,
-    unsubscribe,
-    get_handler_meta,
-    get_unmatched_subscriptions,
-    subscribe,
-)
-from apixis.core.graph import (
-    AutoMerge,
-    Command,
-    GraphManager,
-    KeepRef,
-)
-from apixis.core.graph import get_graph_dispatch_name
-from alira.agent.core.graph import AgentGraphCreator
-
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -79,15 +79,17 @@ class CompleteAgentState(TypedDict, total=False):
     calculation: int
 
 
-def _call(tool_name: str, call_id: str, args: dict[str, Any]) -> dict[str, Any]:
-    return {"id": call_id, "type": "function", "function": {"name": tool_name, "arguments": json.dumps(args if args is not None else {})}}
+def _call(tool_name: str, call_id: str, args: dict[str, Any]) -> ToolCall:
+    return ToolCall(
+        call_id=call_id, name=tool_name, arguments=args if args is not None else {}
+    )
 
 
 class ScriptedBot:
     """Deterministic stand-in for a model provider in an Agent loop."""
 
     def __init__(self) -> None:
-        self.tool_schemas: list[dict[str, Any]] = []
+        self.tool_schemas: list[FunctionTool] = []
         self.requests: list[list[Any]] = []
 
     def bind_tools(self, tool_node: ToolNode) -> "ScriptedBot":
@@ -104,24 +106,23 @@ class ScriptedBot:
         if not tool_messages:
             return AliraAiMessage(
                 name="Alice",
-                content="",
-
-                tool_calls=[
+                content=[
                     _call("lookup_weather", "call-weather", {"city": "Tokyo"}),
                     _call("add", "call-add", {"left": 19, "right": 23}),
                     _call("remember", "call-memory", {"note": "Tokyo is warm"}),
                 ],
             )
 
-        outputs = {message.name: message.content for message in tool_messages}
+        outputs = {message.name: message.content[0].text for message in tool_messages}
         return AliraAiMessage(
             name="Alice",
             content=(
-                f"{outputs['lookup_weather']}; "
-                f"sum={outputs['add']}; "
-                f"memory={outputs['remember']}"
+                [
+                    TextContent(
+                        f"{outputs['lookup_weather']}; sum={outputs['add']}; memory={outputs['remember']}"
+                    )
+                ]
             ),
-
         )
 
 
@@ -192,7 +193,11 @@ async def test_full_agent_model_tool_model_loop_with_shared_runtime_state():
         ]
         latest = state["messages"][-1]
         if isinstance(latest, AliraAiMessage):
-            next_node = tool_node.name if latest.tool_calls else None
+            next_node = (
+                tool_node.name
+                if any(isinstance(part, ToolCall) for part in latest.content)
+                else None
+            )
         else:
             next_node = "prepare_context"
 
@@ -202,7 +207,7 @@ async def test_full_agent_model_tool_model_loop_with_shared_runtime_state():
         }
         for message in pending_messages:
             if isinstance(message, AliraToolMessage) and message.name == "add":
-                update["calculation"] = int(message.content)
+                update["calculation"] = int(message.content[0].text)
                 update["audit"] = ["calculated:19+23"]
         return Command(update=update, goto=next_node)
 
@@ -217,7 +222,7 @@ async def test_full_agent_model_tool_model_loop_with_shared_runtime_state():
 
     memory = AgentMemory()
     message_store = InMemoryMessageStore()
-    user_message = AliraUserMessage(content="Tokyo weather and 19 + 23?")
+    user_message = AliraUserMessage(content=[TextContent("Tokyo weather and 19 + 23?")])
     initial_state = {
         "messages": [user_message],
         "audit": [],
@@ -230,12 +235,12 @@ async def test_full_agent_model_tool_model_loop_with_shared_runtime_state():
 
     result = await asyncio.wait_for(graph.invoke(initial_state), timeout=1)
 
-    assert [schema["function"]["name"] for schema in bot.tool_schemas] == [
+    assert [schema.name for schema in bot.tool_schemas] == [
         "lookup_weather",
         "add",
         "remember",
     ]
-    remember_parameters = bot.tool_schemas[2]["function"]["parameters"]
+    remember_parameters = bot.tool_schemas[2].parameters
     assert set(remember_parameters["properties"]) == {"note"}
     assert remember_parameters["required"] == ["note"]
 
@@ -244,7 +249,9 @@ async def test_full_agent_model_tool_model_loop_with_shared_runtime_state():
     assert len(bot.requests) == 2
     assert [len(request) for request in bot.requests] == [1, 5]
     assert isinstance(bot.requests[0][0], AliraUserMessage)
-    assert all(isinstance(message, AliraToolMessage) for message in bot.requests[1][-3:])
+    assert all(
+        isinstance(message, AliraToolMessage) for message in bot.requests[1][-3:]
+    )
     assert result["model_calls"] == 2
     assert result["context_preparations"] == 2
     assert result["calculation"] == 42
@@ -287,15 +294,17 @@ async def test_full_agent_model_tool_model_loop_with_shared_runtime_state():
         "add",
         "remember",
     ]
-    assert [message.tool_call_id for message in messages[2:5]] == [
+    assert [message.call_id for message in messages[2:5]] == [
         "call-weather",
         "call-add",
         "call-memory",
     ]
     assert all(message.metadata["duration"] >= 0 for message in messages[2:5])
     assert isinstance(messages[-1], AliraAiMessage)
-    assert messages[-1].tool_calls == []
-    assert messages[-1].content == ("weather:Tokyo:sunny; sum=42; memory=stored")
+    assert not any(isinstance(part, ToolCall) for part in messages[-1].content)
+    assert messages[-1].content[0].text == (
+        "weather:Tokyo:sunny; sum=42; memory=stored"
+    )
 
     # Ordinary input was isolated, while the explicitly marked resource was
     # intentionally shared back to its caller.

@@ -1,8 +1,9 @@
+from my_llm import FunctionTool, TextContent, ToolCall
+
 """Tests for agent tool wrapping and ToolNode execution."""
 import asyncio
 import importlib
 import inspect
-import json
 import typing
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -93,14 +94,16 @@ def _tool_call(
     tool_name: str,
     call_id: str,
     args: dict | None = None,
-) -> dict:
-    return {"id": call_id, "type": "function", "function": {"name": tool_name, "arguments": json.dumps(args if args is not None else {})}}
+) -> ToolCall:
+    return ToolCall(
+        call_id=call_id, name=tool_name, arguments=args if args is not None else {}
+    )
 
 
-def _state_with_calls(*calls: dict) -> dict:
+def _state_with_calls(*calls: ToolCall) -> dict:
     return {
         "messages": [
-            AliraAiMessage(tool_calls=list(calls)),
+            AliraAiMessage(content=list(calls)),
         ]
     }
 
@@ -153,43 +156,32 @@ def test_tool_builds_openai_function_calling_schema():
     ) -> str:
         return location
 
-    assert weather.schema == {
-        "type": "function",
-        "function": {
-            "name": "weather",
-            "description": "Get the weather forecast.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {
-                        "type": "string",
-                        "description": "City and country.",
-                    },
-                    "days": {"type": "integer"},
-                    "units": {
-                        "enum": ["celsius", "fahrenheit"],
-                        "type": "string",
-                        "default": "celsius",
-                    },
-                    "options": {
-                        "anyOf": [
-                            {
-                                "type": "object",
-                                "additionalProperties": {
-                                    "type": "boolean",
-                                },
-                            },
-                            {"type": "null"},
-                        ],
-                        "default": None,
-                    },
+    assert weather.schema == FunctionTool(
+        name="weather",
+        description="Get the weather forecast.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "location": {"type": "string", "description": "City and country."},
+                "days": {"type": "integer"},
+                "units": {
+                    "enum": ["celsius", "fahrenheit"],
+                    "type": "string",
+                    "default": "celsius",
                 },
-                "required": ["location", "days"],
-                "additionalProperties": False,
+                "options": {
+                    "anyOf": [
+                        {"type": "object", "additionalProperties": {"type": "boolean"}},
+                        {"type": "null"},
+                    ],
+                    "default": None,
+                },
             },
+            "required": ["location", "days"],
+            "additionalProperties": False,
         },
-    }
-    assert "runtime" not in (weather.schema["function"]["parameters"]["properties"])
+    )
+    assert "runtime" not in (weather.schema.parameters["properties"])
     assert not hasattr(weather, "prompt")
 
 
@@ -205,12 +197,13 @@ def test_tool_schema_accessors_return_independent_copies_in_order():
         return str(count)
 
     schema = first.get_schema()
-    schema["function"]["name"] = "changed"
+    schema.name = "changed"
 
-    assert first.schema["function"]["name"] == "first"
-    assert [
-        item["function"]["name"] for item in ToolNode([first, second]).get_schemas()
-    ] == ["first", "second"]
+    assert first.schema.name == "first"
+    assert [item.name for item in ToolNode([first, second]).get_schemas()] == [
+        "first",
+        "second",
+    ]
 
 
 def test_tool_rejects_variadic_parameters_not_supported_by_json_schema():
@@ -256,8 +249,11 @@ async def test_tool_node_executes_concurrently_but_returns_call_order():
     assert completion_order == ["second", "first"]
     assert isinstance(command, Command)
     assert command.goto == "model"
-    assert [m.content for m in command.update["messages"]] == ["first:a", "second:b"]
-    assert [m.tool_call_id for m in command.update["messages"]] == ["call-1", "call-2"]
+    assert [m.content[0].text for m in command.update["messages"]] == [
+        "first:a",
+        "second:b",
+    ]
+    assert [m.call_id for m in command.update["messages"]] == ["call-1", "call-2"]
 
 
 @pytest.mark.asyncio
@@ -275,9 +271,9 @@ async def test_plain_dict_result_is_stringified_into_tool_message():
     )
 
     message = _message_from(command)
-    assert message.content == "{'answer': 42}"
+    assert message.content[0].text == "{'answer': 42}"
     assert message.name == "payload"
-    assert message.tool_call_id == "call-payload"
+    assert message.call_id == "call-payload"
 
 
 @pytest.mark.asyncio
@@ -296,11 +292,11 @@ async def test_string_result_creates_tool_message_with_runtime_metadata():
 
     assert isinstance(command, Command)
     message = _message_from(command)
-    assert message.content == "finished"
+    assert message.content[0].text == "finished"
     assert message.name == "text"
-    assert message.tool_call_id == "call-text"
+    assert message.call_id == "call-text"
     assert message.metadata["duration"] >= 0
-    assert message.tool_call_id == "call-text"
+    assert message.call_id == "call-text"
     assert "tool_call_id" not in message.extensions
 
 
@@ -308,10 +304,10 @@ async def test_string_result_creates_tool_message_with_runtime_metadata():
 async def test_tool_message_result_is_stringified_without_mutation():
     """Returned message objects are plain values, with no special treatment."""
     returned_message = AliraToolMessage(
-        content="finished",
+        content=[TextContent("finished")],
         name="stale-name",
         metadata={"stale": True},
-        tool_call_id="stale-call",
+        call_id="stale-call",
     )
     expected = str(returned_message)
 
@@ -325,12 +321,12 @@ async def test_tool_message_result_is_stringified_without_mutation():
     )
     output = _message_from(command)
     assert output is not returned_message
-    assert output.content == expected
+    assert output.content[0].text == expected
     assert output.name == "message"
-    assert output.tool_call_id == "call-message"
+    assert output.call_id == "call-message"
     assert output.metadata["duration"] >= 0
     assert returned_message.name == "stale-name"
-    assert returned_message.tool_call_id == "stale-call"
+    assert returned_message.call_id == "stale-call"
     assert returned_message.metadata == {"stale": True}
 
 
@@ -351,7 +347,7 @@ async def test_command_looking_dict_result_is_still_plain_tool_output():
         )
     )
 
-    assert _message_from(command).content == (
+    assert _message_from(command).content[0].text == (
         "{'update': {'value': 3}, 'goto': 'next'}"
     )
     assert command.goto is None
@@ -374,7 +370,7 @@ async def test_command_result_is_text_and_cannot_update_state_or_route():
     )
     assert command.goto == "model"
     assert set(command.update) == {"messages"}
-    assert _message_from(command).content == str(returned)
+    assert _message_from(command).content[0].text == str(returned)
     assert returned.update == {"value": 3}
     assert returned.goto == "wrong-node"
 
@@ -393,7 +389,7 @@ async def test_invalid_command_shape_is_stringified():
         )
     )
 
-    assert _message_from(command).content == "{'update': []}"
+    assert _message_from(command).content[0].text == "{'update': []}"
 
 
 @pytest.mark.asyncio
@@ -402,7 +398,7 @@ async def test_invalid_command_shape_is_stringified():
     [
         {},
         {"messages": []},
-        {"messages": [AliraToolMessage(content="old", tool_call_id="old")]},
+        {"messages": [AliraToolMessage(content=[TextContent("old")], call_id="old")]},
         {"messages": [AliraAiMessage()]},
     ],
 )
@@ -663,7 +659,7 @@ def test_non_json_default_is_omitted_from_schema():
         return value
 
     wrapped = Tool(opaque)
-    value_schema = wrapped.schema["function"]["parameters"]["properties"]["value"]
+    value_schema = wrapped.schema.parameters["properties"]["value"]
 
     assert value_schema == {}
     assert Tool._json_default(sentinel) is inspect.Signature.empty
@@ -691,7 +687,7 @@ def test_unresolved_forward_reference_falls_back_to_unconstrained_schema():
     wrapped = Tool(unresolved)
 
     assert wrapped._type_hints == {}
-    assert wrapped.schema["function"]["parameters"]["properties"]["value"] == {}
+    assert wrapped.schema.parameters["properties"]["value"] == {}
 
 
 def test_auto_injection_rejects_unsupported_value_type():
@@ -827,30 +823,30 @@ async def test_tool_execute_validates_state_name_and_bound_arguments():
 @pytest.mark.parametrize(
     ("tool_call", "error", "match"),
     [
-        ([], TypeError, "compatible dictionary"),
-        ({}, ValueError, "missing required fields"),
+        ([], TypeError, "middleware ToolCall"),
+        ({}, TypeError, "middleware ToolCall"),
         (
-            {"id": "", "type": "function", "function": {"name": "tool", "arguments": '{}'}},
-            TypeError,
+            ToolCall(call_id="", name="tool", arguments={}),
+            ValueError,
             "id",
         ),
         (
-            {"id": 1, "type": "function", "function": {"name": "tool", "arguments": '{}'}},
-            TypeError,
+            ToolCall(call_id=1, name="tool", arguments={}),
+            ValueError,
             "id",
         ),
         (
-            {"id": "id", "type": "function", "function": {"name": "", "arguments": '{}'}},
-            TypeError,
+            ToolCall(call_id="id", name="", arguments={}),
+            ValueError,
             "name",
         ),
         (
-            {"id": "id", "type": "function", "function": {"name": 1, "arguments": '{}'}},
-            TypeError,
+            ToolCall(call_id="id", name=1, arguments={}),
+            ValueError,
             "name",
         ),
         (
-            {"id": "id", "type": "function", "function": {"name": "tool", "arguments": '[]'}},
+            ToolCall(call_id="id", name="tool", arguments=[]),
             TypeError,
             "arguments",
         ),
@@ -892,7 +888,7 @@ async def test_tool_output_uses_configured_messages_key():
         {
             "history": [
                 AliraAiMessage(
-                    tool_calls=[
+                    content=[
                         _tool_call("<lambda>", "call-history"),
                     ]
                 )
@@ -903,8 +899,8 @@ async def test_tool_output_uses_configured_messages_key():
     assert command.goto == "model"
     message = command.update["history"][0]
     assert isinstance(message, AliraToolMessage)
-    assert message.content == "finished"
-    assert message.tool_call_id == "call-history"
+    assert message.content[0].text == "finished"
+    assert message.call_id == "call-history"
 
 
 @pytest.mark.asyncio
@@ -914,8 +910,10 @@ async def test_tool_node_execute_rejects_invalid_state_and_messages():
         await node.execute([])
     with pytest.raises(ValueError, match="must be a message list"):
         await node.execute({"messages": "invalid"})
-    with pytest.raises(ValueError, match="missing required fields"):
-        await node.execute({"messages": [AliraAiMessage(tool_calls=[{}])]})
+    with pytest.raises(ValueError, match="call_id"):
+        await node.execute(
+            {"messages": [AliraAiMessage(content=[ToolCall("", "<lambda>")])]}
+        )
 
 
 @pytest.mark.asyncio
@@ -993,8 +991,8 @@ async def test_every_tool_result_is_stringified(value):
             _tool_call("output", "call-output"),
         )
     )
-    assert _message_from(command).content == str(value)
-    assert isinstance(_message_from(command).content, str)
+    assert _message_from(command).content[0].text == str(value)
+    assert isinstance(_message_from(command).content[0].text, str)
     assert command.goto is None
 
 
@@ -1020,8 +1018,10 @@ async def test_invalid_later_call_prevents_execution_of_entire_batch():
         return "done"
 
     node = ToolNode(valid)
-    with pytest.raises(ValueError, match="missing required fields"):
-        await node.execute(_state_with_calls(_tool_call("valid", "valid-call"), {}))
+    with pytest.raises(ValueError, match="call_id"):
+        await node.execute(
+            _state_with_calls(_tool_call("valid", "valid-call"), ToolCall("", "valid"))
+        )
     assert executed == []
 
 
@@ -1051,3 +1051,13 @@ async def test_caller_cancellation_waits_for_all_running_tools():
     with pytest.raises(asyncio.CancelledError):
         await task
     assert cancelled == [True, True]
+
+
+async def test_tool_mutation_does_not_rewrite_generated_call_history():
+    @tool
+    def consume(values: list[str]) -> str:
+        return values.pop()
+
+    call = ToolCall("c1", "consume", {"values": ["original"]})
+    assert await consume.execute({}, call) == "original"
+    assert call.arguments == {"values": ["original"]}

@@ -4,12 +4,13 @@ import asyncio
 from typing import Any
 
 from apixis.core.graph import BaseNode, Command
+from my_llm import AssistantMessage, FunctionTool, TextContent, ToolCall
 
 from alira.agent.core.tool.base import BaseTool, ToolFunction
 from alira.agent.core.tool.function import FunctionToolManager, Tool
 from alira.agent.core.tool.utils.manager import ToolManager
 from alira.agent.core.tool.utils.request import ToolRequest
-from alira.agent.core.utils.message import AliraAiMessage, AliraToolMessage, ToolCall
+from alira.agent.core.utils.message import AliraToolMessage
 from alira.common.type.identiity import ConversationIdentity
 
 
@@ -95,7 +96,7 @@ class ToolNode(BaseNode):
         self._llm_node_name = llm_node
         return self
 
-    def get_schemas(self, filter_names: set[str] | None = None) -> list[dict[str, Any]]:
+    def get_schemas(self, filter_names: set[str] | None = None) -> list[FunctionTool]:
         return [
             registered_tool.get_schema()
             for registered_tool in self.tool_set
@@ -112,25 +113,21 @@ class ToolNode(BaseNode):
             raise ValueError(
                 f"`{self.messages_key}` must be a message list, got {type(messages).__name__}."
             )
-        if not messages or not isinstance(messages[-1], AliraAiMessage):
+        if not messages or not isinstance(messages[-1], AssistantMessage):
             return []
-        tool_calls = messages[-1].tool_calls
-        if tool_calls is None:
-            return []
-        if not isinstance(tool_calls, list):
-            raise TypeError(
-                "AliraAiMessage.tool_calls must be a list of valid ToolCall objects."
-            )
+        tool_calls = [
+            part for part in messages[-1].content if isinstance(part, ToolCall)
+        ]
         for call in tool_calls:
             BaseTool._validate_tool_call(call)
-            if call["function"]["name"] not in self._tools_by_name:
+            if call.name not in self._tools_by_name:
                 raise ValueError(
-                    f"Tool {call['function']['name']!r} is not registered in node {self.name!r}."
+                    f"Tool {call.name!r} is not registered in node {self.name!r}."
                 )
         return tool_calls
 
     async def _request_call(self, state: dict[str, Any], call: ToolCall) -> ToolRequest:
-        name = call["function"]["name"]
+        name = call.name
         manager = self._managers_by_name[name]
         request = ToolRequest(
             self._tools_by_name[name],
@@ -157,9 +154,9 @@ class ToolNode(BaseNode):
             raise
         messages = [
             AliraToolMessage(
-                content=str(result.result),
-                name=call["function"]["name"],
-                tool_call_id=call["id"],
+                content=[TextContent(str(result.result))],
+                name=call.name,
+                call_id=call.call_id,
                 metadata={"duration": result.duration},
             )
             for call, result in zip(calls, results, strict=True)

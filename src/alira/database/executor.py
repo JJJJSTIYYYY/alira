@@ -6,13 +6,13 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from uuid import uuid4
 
+from alira.common.utils.logger import logger
 from alira.database.services.cache import CacheService
 from alira.database.services.data import DataService
 from alira.database.services.files import FileService
 from alira.database.utils.handlers import store_action
 from alira.database.utils.message_tree import MessageNodeTree
 from alira.database.utils.serialization import decode_message_row
-from alira.common.utils.logger import logger
 
 
 class StoreExecutor:
@@ -184,6 +184,8 @@ class StoreExecutor:
             return result
 
         message.update(result["messages"])
+        message["user_uid"] = write_payload["user_uid"]
+        message["conversation_uid"] = write_payload["conversation_uid"]
         message["is_deleted"] = False
         await self._cache_call(self.cache_store.append_message, write_payload)
         await self._cache_call(
@@ -287,7 +289,7 @@ class StoreExecutor:
         """List model-visible messages through the selected node."""
         return await self._list_messages(
             payload,
-            allow_roles=("user", "assistant", "system", "tool", "info"),
+            allow_roles=("user", "assistant", "system", "developer", "tool"),
             guess_children=False,
         )
 
@@ -296,7 +298,7 @@ class StoreExecutor:
         """List user-visible messages, extending the selected branch to its leaf."""
         return await self._list_messages(
             payload,
-            allow_roles=("user", "assistant", "info", "tool"),
+            allow_roles=("user", "assistant", "tool"),
             guess_children=True,
         )
 

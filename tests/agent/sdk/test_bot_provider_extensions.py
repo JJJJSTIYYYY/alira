@@ -3,7 +3,16 @@
 from unittest.mock import AsyncMock
 
 import pytest
-from my_llm import Attribute, Config, ModelProfile, Parameter, ProviderProfile
+from my_llm import (
+    AssistantMessage,
+    Attribute,
+    Config,
+    InputParameter,
+    ModelProfile,
+    ProviderProfile,
+    TextContent,
+    UserMessage,
+)
 
 from tests.agent.sdk.test_bot import make_profile_bot
 
@@ -15,25 +24,27 @@ async def test_provider_options_pass_to_library_without_native_request_translati
     bot = make_profile_bot(
         provider=ProviderProfile(
             protocol=Config(default_value="openai_chat"),
-            api_key=Parameter(
+            api_key=InputParameter(
                 path="$.api_key",
                 default_value="test",
             ),
-            reasoning_enable=Parameter(
+            reasoning_enable=InputParameter(
                 path="$.extra_body.thinking",
                 default_value={"type": "enabled"},
             ),
-            feedback_reasoning_content=Config(default_value="when_tool_calls"),
+            should_feedback_reasoning_item=Config(default_value="when_tool_calls"),
         ),
         model=ModelProfile(
             model=Attribute(default_value="test"),
             supports_function_calling=Config(default_value=True),
         ),
     )
-    generate = AsyncMock(return_value={"role": "assistant", "content": "answer"})
+    generate = AsyncMock(
+        return_value=AssistantMessage(role="assistant", content=[TextContent("answer")])
+    )
     monkeypatch.setattr(bot.llm, "generate", generate)
     await bot.invoke(
-        [{"role": "user", "content": "hi"}],
+        [UserMessage(role="user", content=[TextContent("hi")])],
         reasoning=True,
         extra_body={"temperature": 0.2},
     )

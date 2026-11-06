@@ -24,30 +24,31 @@ from typing import (
 )
 from uuid import UUID
 
+from my_llm import FunctionTool, ToolCall
+
 from alira.agent.core.tool.base import BaseTool, ToolFunction
 from alira.agent.core.tool.function.tool_context import (
     AutoInjection,
     ToolInjectionContext,
 )
 from alira.agent.core.utils.exception import InvalidToolArgsError
-from alira.agent.core.utils.message import ToolCall
 
 
 class Tool(BaseTool):
-    """An executable tool with an OpenAI Function Calling schema.
+    """An executable tool with a middleware FunctionTool schema.
 
-    Tool functions receive arguments from ``ToolCall.function.arguments``. A function may
+    Tool functions receive arguments from ``ToolCall.arguments``. A function may
     declare at most one runtime-injected argument:
 
         injection: Annotated[ToolInjectionContext, AutoInjection()]
 
     The injected argument is excluded from the model-facing schema and cannot be
-    supplied through ``ToolCall.function.arguments``.
+    supplied through ``ToolCall.arguments``.
     """
 
     name: str
     func: Callable[..., Awaitable[Any]]
-    schema: dict[str, Any]
+    schema: FunctionTool
     description: str
 
     def __init__(
@@ -215,7 +216,7 @@ class Tool(BaseTool):
             }:
                 raise TypeError(
                     f"Tool {self.name!r} contains variadic parameter "
-                    f"{parameter.name!r}. OpenAI Function Calling schemas "
+                    f"{parameter.name!r}. middleware FunctionTool schemas "
                     "require explicitly declared named parameters."
                 )
 
@@ -524,24 +525,21 @@ class Tool(BaseTool):
 
         return parameters
 
-    def _build_schema(self) -> dict[str, Any]:
-        """Build an OpenAI Chat Completions function tool definition."""
-        return {
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "description": self.description,
-                "parameters": self._build_parameters_schema(),
-            },
-        }
+    def _build_schema(self) -> FunctionTool:
+        """Build a middleware function definition."""
+        return FunctionTool(
+            name=self.name,
+            description=self.description,
+            parameters=self._build_parameters_schema(),
+        )
 
     def _build_arguments(
         self,
         state: dict[str, Any],
         tool_call: ToolCall,
     ) -> dict[str, Any]:
-        """Build function keyword arguments for a tool call."""
-        arguments = self._tool_arguments(tool_call)
+        """Own function arguments so local mutations cannot rewrite call history."""
+        arguments = deepcopy(tool_call.arguments)
 
         injection_parameter = self._injection_parameter
 
@@ -554,7 +552,7 @@ class Tool(BaseTool):
             raise TypeError(
                 f"Argument {injection_name!r} of tool "
                 f"{self.name!r} is automatically injected and "
-                "must not be supplied through ToolCall.function.arguments."
+                "must not be supplied through ToolCall.arguments."
             )
 
         arguments[injection_name] = ToolInjectionContext(

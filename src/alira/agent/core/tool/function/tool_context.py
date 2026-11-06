@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Any
 
-from alira.agent.core.utils.message import ToolCall
+from my_llm import ToolCall
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +26,7 @@ class ToolInjectionContext:
 
     @property
     def tool_call_id(self) -> str:
-        return self.tool_call["id"]
+        return self.tool_call.call_id
 
 
 # Examples:

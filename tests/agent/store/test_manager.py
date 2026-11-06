@@ -96,7 +96,7 @@ async def test_query_store_round_trip_cache_isolation_and_restart(
             "node_id": "node-1",
             "parent_id": "-",
             "role": "assistant",
-            "content": "null",
+            "content": [{"type": "text", "text": "null"}],
             "metadata": {"usage": {"total": 2}},
         }
         await query_store("append_message", {**payload, "message": message})
@@ -220,7 +220,7 @@ async def test_synchronous_message_work_does_not_block_the_caller_loop(
                 "node_id": "n1",
                 "parent_id": "-",
                 "role": "user",
-                "content": "hello",
+                "content": [{"type": "text", "text": "hello"}],
             },
         },
     )
@@ -248,7 +248,9 @@ async def test_synchronous_message_work_does_not_block_the_caller_loop(
         assert executed_on[0] != threading.get_ident()
     finally:
         release.set()
-    assert (await query)["messages"][0]["content"] == "hello"
+    assert (await query)["messages"][0]["content"] == [
+        {"type": "text", "text": "hello"}
+    ]
 
 
 async def test_one_manager_accepts_queries_from_distinct_caller_event_loops(manager):
@@ -650,3 +652,53 @@ async def test_stop_waits_for_active_driver_io_and_rolls_back_before_restart(
             },
         )
     )["success"]
+
+
+async def test_tool_role_survives_branch_filter_cache_and_restart(manager):
+    from my_llm import TextContent, ToolCall
+    from my_llm.middleware.protocol import generation_input
+
+    from alira.agent.core.utils.message import (
+        AliraAiMessage,
+        AliraSystemMessage,
+        AliraToolMessage,
+        AliraUserMessage,
+    )
+    from alira.common.utils.message import message_from_record
+
+    payload = await create_conversation(manager)
+    original = [
+        AliraSystemMessage(role="developer", content=[TextContent("rules")]),
+        AliraUserMessage(content=[TextContent("question")]),
+        AliraAiMessage(content=[ToolCall("c1", "lookup", {})]),
+        AliraToolMessage(call_id="c1", content=[TextContent("result")]),
+        AliraAiMessage(content=[TextContent("answer")]),
+    ]
+    for index, message in enumerate(original):
+        message.node_id = f"n{index}"
+        message.parent_id = f"n{index - 1}" if index else "-"
+        await manager.query("append_message", {**payload, "message": message.to_dict()})
+    request = {**payload, "current_node_id": "n4"}
+    cold = await manager.query("list_messages", request)
+    assert not cold.get("cache_hit", False)
+    assert [row["role"] for row in cold["messages"]] == [
+        "developer",
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+    restored = [message_from_record(row) for row in cold["messages"]]
+    assert generation_input(restored, None).messages[3].role == "tool"
+    hot = await manager.query("list_messages", request)
+    assert hot["cache_hit"] and hot["messages"] == cold["messages"]
+    await manager.stop()
+    restarted = await manager.query("list_messages", request)
+    assert restarted["cache_hit"] and restarted["messages"] == cold["messages"]
+    visible = await manager.query("list_user_messages", request)
+    assert [row["role"] for row in visible["messages"]] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]

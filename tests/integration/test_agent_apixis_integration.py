@@ -1,3 +1,5 @@
+from my_llm import ToolCall
+
 """Application contracts at the Apixis runtime boundary."""
 
 import asyncio
@@ -158,19 +160,13 @@ async def test_custom_messages_key_reaches_tool_node():
         {
             "conversation": [
                 AliraAiMessage(
-                    tool_calls=[
-                        {
-                            "id": "hello-1",
-                            "type": "function",
-                            "function": {"name": "hello", "arguments": "{}"},
-                        }
-                    ]
+                    content=[ToolCall(call_id="hello-1", name="hello", arguments={})]
                 )
             ]
         }
     )
     assert isinstance(result["conversation"][-1], AliraToolMessage)
-    assert result["conversation"][-1].content == "hello"
+    assert result["conversation"][-1].content[0].text == "hello"
 
 
 async def test_server_lifespan_can_restart_with_local_events_and_health_check(
@@ -235,7 +231,7 @@ async def test_add_tools_forwards_llm_binding_with_custom_messages_key():
 
     def model(state):
         assert len(state["conversation"]) == 2
-        return {"observed": state["conversation"][-1].content}
+        return {"observed": state["conversation"][-1].content[0].text}
 
     graph = (
         AgentGraphCreator(CustomState, messages_key="conversation")
@@ -247,13 +243,7 @@ async def test_add_tools_forwards_llm_binding_with_custom_messages_key():
         {
             "conversation": [
                 AliraAiMessage(
-                    tool_calls=[
-                        {
-                            "id": "hello-1",
-                            "type": "function",
-                            "function": {"name": "hello", "arguments": "{}"},
-                        }
-                    ]
+                    content=[ToolCall(call_id="hello-1", name="hello", arguments={})]
                 )
             ]
         }

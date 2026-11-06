@@ -9,12 +9,16 @@ import json
 import re
 from typing import Any
 
-JSON_MESSAGE_FIELDS = ("tool_calls", "audio", "annotations", "function_call")
+from alira.common.utils.serialization import json_default
+
+JSON_MESSAGE_FIELDS = ("item", "origin")
 
 
 def encode_json(value: Any, *, default: Any = None) -> str:
     """Encode a native value; strings are data rather than pre-encoded JSON."""
-    return json.dumps(default if value is None else value, ensure_ascii=False)
+    return json.dumps(
+        default if value is None else value, ensure_ascii=False, default=json_default
+    )
 
 
 def encode_optional_json(value: Any) -> str | None:

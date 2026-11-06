@@ -141,31 +141,27 @@ messages = Table(
     Column(
         "role",
         Text,
-        CheckConstraint("role IN ('user', 'assistant', 'system', 'tool', 'info')"),
+        CheckConstraint("role IN ('user', 'assistant', 'system', 'developer', 'tool')"),
         nullable=False,
     ),
     Column("name", Text),
-    Column("content", Text, CheckConstraint("content IS NULL OR json_valid(content)")),
     Column(
-        "tool_calls",
+        "content",
         Text,
-        CheckConstraint("tool_calls IS NULL OR json_type(tool_calls) = 'array'"),
+        CheckConstraint("json_valid(content) AND json_type(content) = 'array'"),
+        nullable=False,
     ),
-    Column("tool_call_id", Text),
-    Column("refusal", Text),
-    Column("reasoning_content", Text),
+    Column("protocol", Text),
+    Column("item", Text, CheckConstraint("item IS NULL OR json_type(item) = 'object'")),
     Column(
-        "audio", Text, CheckConstraint("audio IS NULL OR json_type(audio) = 'object'")
-    ),
-    Column(
-        "annotations",
+        "origin",
         Text,
-        CheckConstraint("annotations IS NULL OR json_type(annotations) = 'array'"),
+        CheckConstraint("origin IS NULL OR json_type(origin) = 'object'"),
     ),
-    Column(
-        "function_call",
-        Text,
-        CheckConstraint("function_call IS NULL OR json_type(function_call) = 'object'"),
+    Column("call_id", Text),
+    CheckConstraint(
+        "(role = 'tool' AND call_id IS NOT NULL AND length(call_id) > 0) "
+        "OR (role != 'tool' AND call_id IS NULL)"
     ),
     Column(
         "metadata", Text, CheckConstraint("metadata IS NULL OR json_valid(metadata)")
@@ -345,9 +341,17 @@ Index(
     messages.c.conversation_uid,
     messages.c.msg_cursor,
 )
-Index("idx_messages_conversation_node", messages.c.conversation_id, messages.c.node_id)
 Index(
-    "idx_messages_conversation_parent", messages.c.conversation_id, messages.c.parent_id
+    "idx_messages_user_conversation_node",
+    messages.c.user_uid,
+    messages.c.conversation_uid,
+    messages.c.node_id,
+)
+Index(
+    "idx_messages_conversation_search",
+    messages.c.conversation_id,
+    messages.c.is_deleted,
+    messages.c.id.desc(),
 )
 Index(
     "idx_agent_skills_user_active",

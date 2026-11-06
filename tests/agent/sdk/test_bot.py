@@ -6,7 +6,18 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from my_llm import Attribute, Config, ModelProfile, Parameter, ProviderProfile
+from my_llm import (
+    AssistantMessage,
+    Attribute,
+    Config,
+    InputParameter,
+    ModelProfile,
+    ProviderProfile,
+    ReasoningContent,
+    TextContent,
+    ToolCall,
+    UserMessage,
+)
 
 from alira.agent.core.bot import AliraBot, BaseProvider, CustomProvider
 from alira.agent.core.tool import ToolNode, tool
@@ -41,7 +52,7 @@ def make_bot(**kwargs):
     return make_profile_bot(
         provider=ProviderProfile(
             protocol=Config(default_value="openai_chat"),
-            api_key=Parameter(
+            api_key=InputParameter(
                 path="$.api_key",
                 default_value="test",
             ),
@@ -56,7 +67,7 @@ def make_bot(**kwargs):
 
 def test_profiles_are_library_types_and_stdio_is_explicit():
     bot = make_bot()
-    assert bot.llm.stdio_protocol == "openai_chat"
+    assert bot.llm.stdio_protocol == "middleware"
     assert bot.model == "test"
     assert isinstance(bot.provider, CustomProvider)
 
@@ -65,7 +76,7 @@ def test_tool_binding_filters_copies_replaces_and_rejects_duplicate_names():
     bot = make_bot()
     assert bot.bind_tools([weather]) is bot
     schemas = bot.tool_schemas
-    schemas[0]["function"]["name"] = "changed"
+    schemas[0].name = "changed"
     assert bot.tool_schemas == [weather.get_schema()]
     bot.bind_tools(ToolNode(weather), tool_permission_set=set())
     assert bot.tool_schemas == []
@@ -84,36 +95,33 @@ async def test_invoke_orders_context_and_delegates_standard_messages_and_options
     bot = make_bot(role_schema=role).bind_tools([weather])
     role["name"] = "changed"
     assert bot.name == "Alice"
-    call = {
-        "id": "c1",
-        "type": "function",
-        "function": {"name": "weather", "arguments": '{"city":"Tokyo"}'},
-    }
-    response = {
-        "role": "assistant",
-        "content": None,
-        "tool_calls": [call],
-        "reasoning_content": "why",
-    }
+    call = ToolCall("c1", "weather", {"city": "Tokyo"})
+    response = AssistantMessage(
+        role="assistant", content=[ReasoningContent("why"), call]
+    )
     generate = AsyncMock(return_value=deepcopy(response))
     monkeypatch.setattr(bot.llm, "generate", generate)
     result = await bot.invoke(
-        [AliraUserMessage(content="weather", extensions={"active_file": "notes"})],
-        [AliraSystemMessage(content="global")],
+        [
+            AliraUserMessage(
+                content=[TextContent("weather")], extensions={"active_file": "notes"}
+            )
+        ],
+        [AliraSystemMessage(content=[TextContent("global")])],
         reasoning=True,
         max_tokens=40,
     )
     sent = generate.await_args.kwargs
-    assert sent["messages"][0] == {"role": "system", "content": "global"}
-    assert "Your name: Alice" in sent["messages"][1]["content"]
-    assert sent["messages"][2] == {"role": "user", "content": "weather"}
+    assert sent["messages"][0].content[0].text == "global"
+    assert "Your name: Alice" in sent["messages"][1].content[0].text
+    assert sent["messages"][2].content[0].text == "weather"
     assert sent["tools"] == [weather.get_schema()]
     assert sent["reasoning"] is True and sent["max_tokens"] == 40
     assert isinstance(result, AliraAiMessage)
-    assert result.tool_calls == [call]
-    assert result.reasoning_content == "why"
+    assert result.content[1] == call
+    assert result.content[0].reasoning == "why"
     assert result.extensions == {}
-    await bot.invoke([{"role": "user", "content": "hi"}], tools=[])
+    await bot.invoke([UserMessage(role="user", content=[TextContent("hi")])], tools=[])
     assert generate.await_args.kwargs["tools"] == []
     assert bot.tool_schemas
 
@@ -124,7 +132,10 @@ async def test_stream_returns_library_object_without_wrapping(monkeypatch):
     stream = object()
     generate = AsyncMock(return_value=stream)
     monkeypatch.setattr(bot.llm, "generate", generate)
-    assert await bot.stream([{"role": "user", "content": "hi"}]) is stream
+    assert (
+        await bot.stream([UserMessage(role="user", content=[TextContent("hi")])])
+        is stream
+    )
     assert generate.await_args.kwargs["stream"] is True
 
 

@@ -207,8 +207,8 @@ class MCPToolRuntime:
     async def _invoke(self, request: ToolRequest) -> str:
         assert self._client is not None
         result = await self._client.call_tool(
-            request.call["function"]["name"],
-            request.tool._tool_arguments(request.call),
+            request.call.name,
+            request.call.arguments,
             raise_on_error=False,
         )
         return _convert_call_tool_result(result)

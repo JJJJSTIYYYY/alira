@@ -130,7 +130,7 @@ async def test_message_projection_decodes_rows_without_changing_cached_values():
         ),
     ]
     rows[2]["content"] = "null"
-    rows[2]["tool_calls"] = '[{"id":"call-1"}]'
+    rows[2]["item"] = '{"id":"item-1"}'
     cache = CacheService()
     await cache.set_messages({**payload, "messages": rows})
 
@@ -143,7 +143,7 @@ async def test_message_projection_decodes_rows_without_changing_cached_values():
     assert result["messages"][1]["metadata"] == {"score": 1}
     assert result["messages"][1]["extensions"] == {}
     assert result["messages"][1]["content"] == "null"
-    assert result["messages"][1]["tool_calls"] == [{"id": "call-1"}]
+    assert result["messages"][1]["item"] == {"id": "item-1"}
     assert result["current_chain"] == ["node-a", "node-c"]
     assert result["branches"]["-"] == [
         {"node_id": "node-a", "cursor": 1},
@@ -463,6 +463,8 @@ async def test_append_message_persists_and_caches_a_private_snapshot():
     assert cached_payload["message"] is not payload["message"]
     assert cached_payload["message"] == {
         **original["message"],
+        "user_uid": "user-1",
+        "conversation_uid": "conversation-1",
         "msg_cursor": 3,
         "timestamp": "2026-01-01T00:00:00",
         "is_deleted": False,
@@ -681,10 +683,10 @@ async def test_delete_messages_normalizes_outer_exception():
     [
         (
             "list_messages",
-            ("user", "assistant", "system", "tool", "info"),
+            ("user", "assistant", "system", "developer", "tool"),
             False,
         ),
-        ("list_user_messages", ("user", "assistant", "info", "tool"), True),
+        ("list_user_messages", ("user", "assistant", "tool"), True),
     ],
 )
 async def test_list_messages_uses_cached_chain_and_recent_messages(

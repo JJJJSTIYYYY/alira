@@ -1,3 +1,5 @@
+from my_llm import ToolCall
+
 """Resident MCP clients, event execution and identity isolation without a server."""
 
 import asyncio
@@ -62,12 +64,8 @@ def state(*names, identity=None):
         "target": dict(IDENTITY if identity is None else identity),
         "messages": [
             AliraAiMessage(
-                tool_calls=[
-                    {
-                        "id": f"call-{index}",
-                        "type": "function",
-                        "function": {"name": name, "arguments": "{}"},
-                    }
+                content=[
+                    ToolCall(call_id=f"call-{index}", name=name, arguments={})
                     for index, name in enumerate(names)
                 ]
             ),
@@ -76,11 +74,7 @@ def state(*names, identity=None):
 
 
 def call(name="first"):
-    return {
-        "id": "call",
-        "type": "function",
-        "function": {"name": name, "arguments": "{}"},
-    }
+    return ToolCall(call_id="call", name=name, arguments={})
 
 
 @pytest_asyncio.fixture
@@ -143,7 +137,7 @@ async def test_one_graph_node_routes_function_and_mcp_managers(manager):
         .compile_agent("tools")
     )
     result = await graph.invoke(state("first", "local", "second"))
-    assert [message.content for message in result["messages"][1:]] == [
+    assert [message.content[0].text for message in result["messages"][1:]] == [
         "output:first",
         "local-result",
         "output:second",
@@ -151,7 +145,7 @@ async def test_one_graph_node_routes_function_and_mcp_managers(manager):
     assert functions.is_started and manager.is_started
     assert not manager.clients[0].closed
     schemas = AliraBot._schemas([*functions.tool_set, *mcp_tools])
-    assert [schema["function"]["name"] for schema in schemas] == [
+    assert [schema.name for schema in schemas] == [
         "local",
         "first",
         "second",
@@ -167,7 +161,7 @@ async def test_clients_survive_tool_node_batches_and_graph_boundaries(manager):
     assert not hasattr(first, "func")
     node = ToolNode(manager, identity=IDENTITY, bind_llm_node="model")
     result = await node.execute(state("first", "second", "first"))
-    assert [message.content for message in result.update["messages"]] == [
+    assert [message.content[0].text for message in result.update["messages"]] == [
         "output:first",
         "output:second",
         "output:first",
@@ -448,9 +442,9 @@ def test_mcp_definition_snapshots_identity_metadata_and_schema():
     definition["inputSchema"]["properties"]["changed"] = {}
     identity["id"] = "changed"
     schema = tool.get_schema()
-    assert schema["function"]["parameters"]["properties"] == {}
-    schema["function"]["description"] = "changed"
-    assert tool.get_schema()["function"]["description"] == "description"
+    assert schema.parameters["properties"] == {}
+    schema.description = "changed"
+    assert tool.get_schema().description == "description"
     assert tool.manager is manager
 
 
@@ -559,27 +553,24 @@ async def test_real_in_process_mcp_protocol_persists_across_agent_graph_invocati
         tools = await manager.get_mcp_tools(META, IDENTITY)
         assert tools[0].name == "multiply"
         assert (
-            tools[0].get_schema()["function"]["parameters"]["properties"]["left"][
-                "type"
-            ]
-            == "integer"
+            tools[0].get_schema().parameters["properties"]["left"]["type"] == "integer"
         )
         graph = (
             AgentGraphCreator(State).add_node(ToolNode(tools)).compile_agent("tools")
         )
         for value in (2, 5):
             request = call("multiply")
-            request["function"]["arguments"] = json.dumps({"left": value, "right": 3})
+            request.arguments = {"left": value, "right": 3}
             result = await asyncio.wait_for(
                 graph.invoke(
                     {
                         "target": IDENTITY,
-                        "messages": [AliraAiMessage(tool_calls=[request])],
+                        "messages": [AliraAiMessage(content=[request])],
                     }
                 ),
                 3,
             )
-            assert result["messages"][-1].content == str(value * 3)
+            assert result["messages"][-1].content[0].text == str(value * 3)
             assert len(created) == 1 and created[0].is_connected()
         assert calls == [(2, 3), (5, 3)]
         assert (

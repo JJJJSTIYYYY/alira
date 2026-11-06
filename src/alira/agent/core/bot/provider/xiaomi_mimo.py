@@ -1,6 +1,14 @@
-"""MiMo V2.6 Chat presets. Field evidence: docs/provider-presets.md."""
+"""MiMo V2.6 Responses presets. Field evidence: docs/provider-presets.md."""
 
-from my_llm import Attribute, Config, ModelProfile, Parameter, ProviderProfile, omit
+from my_llm import (
+    Attribute,
+    Config,
+    InputParameter,
+    ModelProfile,
+    OutputParameter,
+    ProviderProfile,
+    omit,
+)
 
 from alira.agent.core.bot.provider.base import BaseProvider
 
@@ -10,37 +18,40 @@ class XiaomiMiMOProvider(BaseProvider):
         super().__init__(
             "mimo",
             ProviderProfile(
-                protocol=Config(default_value="openai_chat"),
+                protocol=None,
                 base_url=Config(default_value="https://api.xiaomimimo.com/v1"),
-                api_key=Parameter(path="$.api_key", default_value=omit, supports=True),
+                api_key=InputParameter(path="$.api_key", default_value=omit, supports=True),
                 timeout=Config(default_value=None),
                 max_retries=Config(default_value=None),
                 supports_stream=Config(default_value=True),
                 usage_mode=Config(default_value="none"),
                 extra_headers=Config(default_value={}),
-                extra_body=Config(default_value={}),
-                max_tokens=Parameter(
-                    path="$.max_completion_tokens",
+                extra_body=Config(default_value={"reasoning": {"effort": "medium"}}),
+                max_tokens=InputParameter(
+                    path="$.max_output_tokens",
                     default_value=omit,
                     supports=True,
                 ),
-                content=Parameter(
-                    path="$.choices[0].delta.content",
+                content=OutputParameter(
+                    path="$.delta",
                     default_value=omit,
                     supports=True,
                 ),
-                reasoning_content=Parameter(
-                    path="$.choices[0].delta.reasoning_content",
+                reasoning_content=OutputParameter(
+                    path="$.delta",
                     default_value=omit,
                     supports=True,
                 ),
-                reasoning_enable=Parameter(
-                    path="$.extra_body.thinking",
-                    default_value={"type": "enabled"},
+                feedback_reasoning_item=OutputParameter(
+                    path="$.item", default_value=omit, supports=True
+                ),
+                reasoning_enable=InputParameter(
+                    path="$.reasoning.effort",
+                    default_value="medium",
                     supports=True,
                 ),
-                reasoning_effort=Parameter(
-                    path="$.reasoning_effort",
+                reasoning_effort=InputParameter(
+                    path="$.reasoning.effort",
                     default_value=omit,
                     supports=False,
                 ),
@@ -54,11 +65,12 @@ class XiaomiMiMOProvider(BaseProvider):
                         "max": "max",
                     },
                 ),
-                feedback_reasoning_content=Config(default_value="when_tool_calls"),
+                should_feedback_reasoning_item=Config(default_value="when_tool_calls"),
                 models=Attribute(
                     default_value=[
                         ModelProfile(
                             model=Attribute(default_value="mimo-v2.6-pro"),
+                            protocol=Config(default_value="openai_responses"),
                             max_context_window=Attribute(default_value=1_048_576),
                             supports_function_calling=Config(default_value=True),
                             supports_vision=Config(default_value=False),
@@ -68,13 +80,15 @@ class XiaomiMiMOProvider(BaseProvider):
                             max_tokens=None,
                             content=None,
                             reasoning_content=None,
+                            feedback_reasoning_item=None,
                             reasoning_enable=None,
                             reasoning_effort=None,
                             reasoning_effort_mapping=None,
-                            feedback_reasoning_content=None,
+                            should_feedback_reasoning_item=None,
                         ),
                         ModelProfile(
                             model=Attribute(default_value="mimo-v2.6-pro-ultraspeed"),
+                            protocol=Config(default_value="openai_responses"),
                             max_context_window=Attribute(default_value=1_048_576),
                             supports_function_calling=Config(default_value=True),
                             supports_vision=Config(default_value=False),
@@ -84,13 +98,15 @@ class XiaomiMiMOProvider(BaseProvider):
                             max_tokens=None,
                             content=None,
                             reasoning_content=None,
+                            feedback_reasoning_item=None,
                             reasoning_enable=None,
                             reasoning_effort=None,
                             reasoning_effort_mapping=None,
-                            feedback_reasoning_content=None,
+                            should_feedback_reasoning_item=None,
                         ),
                         ModelProfile(
                             model=Attribute(default_value="mimo-v2.6-flash"),
+                            protocol=Config(default_value="openai_responses"),
                             max_context_window=Attribute(default_value=1_048_576),
                             supports_function_calling=Config(default_value=True),
                             supports_vision=Config(default_value=False),
@@ -100,10 +116,11 @@ class XiaomiMiMOProvider(BaseProvider):
                             max_tokens=None,
                             content=None,
                             reasoning_content=None,
+                            feedback_reasoning_item=None,
                             reasoning_enable=None,
                             reasoning_effort=None,
                             reasoning_effort_mapping=None,
-                            feedback_reasoning_content=None,
+                            should_feedback_reasoning_item=None,
                         ),
                     ],
                 ),

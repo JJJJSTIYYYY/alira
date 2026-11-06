@@ -1,16 +1,11 @@
+from my_llm import ToolCall
+
 """End-to-end tests for ToolNode inside the compiled graph runtime."""
-import json
 
 import asyncio
 from typing import Annotated, Any, TypedDict
 
 import pytest
-
-from alira.agent.core.tool import ToolNode, tool
-from alira.agent.core.utils.message import (
-    AliraAiMessage,
-    AliraToolMessage,
-)
 from apixis.core.graph import (
     AutoMerge,
     Command,
@@ -19,6 +14,11 @@ from apixis.core.graph import (
     NodeGraph,
 )
 
+from alira.agent.core.tool import ToolNode, tool
+from alira.agent.core.utils.message import (
+    AliraAiMessage,
+    AliraToolMessage,
+)
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -35,8 +35,10 @@ def _tool_call(
     tool_name: str,
     call_id: str,
     args: dict | None = None,
-) -> dict:
-    return {"id": call_id, "type": "function", "function": {"name": tool_name, "arguments": json.dumps(args if args is not None else {})}}
+) -> ToolCall:
+    return ToolCall(
+        call_id=call_id, name=tool_name, arguments=args if args is not None else {}
+    )
 
 
 async def test_concurrent_tools_are_applied_in_tool_call_order():
@@ -63,7 +65,7 @@ async def test_concurrent_tools_are_applied_in_tool_call_order():
             update={
                 "messages": [
                     AliraAiMessage(
-                        tool_calls=[
+                        content=[
                             _tool_call(
                                 "first",
                                 "call-first",
@@ -88,8 +90,8 @@ async def test_concurrent_tools_are_applied_in_tool_call_order():
         ]
         return {
             "observed": {
-                "contents": [message.content for message in tool_messages],
-                "call_ids": [message.tool_call_id for message in tool_messages],
+                "contents": [message.content[0].text for message in tool_messages],
+                "call_ids": [message.call_id for message in tool_messages],
             }
         }
 
@@ -146,7 +148,7 @@ async def test_tool_node_binding_selects_next_node_once(bind_later):
             update={
                 "messages": [
                     AliraAiMessage(
-                        tool_calls=[
+                        content=[
                             _tool_call("choose_route", "call-1"),
                             _tool_call("choose_route", "call-2"),
                         ]
@@ -161,7 +163,7 @@ async def test_tool_node_binding_selects_next_node_once(bind_later):
 
     def selected(state: dict) -> dict:
         llm_calls.append(True)
-        assert [m.content for m in state["messages"][1:]] == [str(returned)] * 2
+        assert [m.content[0].text for m in state["messages"][1:]] == [str(returned)] * 2
         return {"route": "selected"}
 
     selected_node = Node(selected)
@@ -178,7 +180,7 @@ async def test_tool_node_binding_selects_next_node_once(bind_later):
     result = await graph.invoke({"messages": []})
     assert result["route"] == "selected"
     assert llm_calls == [True]
-    assert [m.tool_call_id for m in result["messages"][1:]] == ["call-1", "call-2"]
+    assert [m.call_id for m in result["messages"][1:]] == ["call-1", "call-2"]
 
 
 async def test_empty_tool_call_list_finishes_graph():
@@ -188,7 +190,7 @@ async def test_empty_tool_call_list_finishes_graph():
         return Command(
             update={
                 "messages": [
-                    AliraAiMessage(tool_calls=[]),
+                    AliraAiMessage(content=[]),
                 ]
             },
             goto="tools",
@@ -234,7 +236,7 @@ async def test_tool_exception_propagates_and_stops_downstream_node():
             update={
                 "messages": [
                     AliraAiMessage(
-                        tool_calls=[
+                        content=[
                             _tool_call(
                                 "explode",
                                 "call-explode",
@@ -288,7 +290,7 @@ async def test_graph_timeout_cancels_running_tool_node():
         .compile_graph(tool_node.name)
     )
     state = {
-        "messages": [AliraAiMessage(tool_calls=[_tool_call("slow_tool", "call-slow")])]
+        "messages": [AliraAiMessage(content=[_tool_call("slow_tool", "call-slow")])]
     }
 
     with pytest.raises(

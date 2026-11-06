@@ -1,6 +1,14 @@
 """OpenAI Responses presets. Field evidence: docs/provider-presets.md."""
 
-from my_llm import Attribute, Config, ModelProfile, Parameter, ProviderProfile, omit
+from my_llm import (
+    Attribute,
+    Config,
+    InputParameter,
+    ModelProfile,
+    OutputParameter,
+    ProviderProfile,
+    omit,
+)
 
 from alira.agent.core.bot.provider.base import BaseProvider
 
@@ -12,28 +20,33 @@ class OpenAIPorvider(BaseProvider):
         super().__init__(
             "openai",
             ProviderProfile(
-                protocol=Config(default_value="openai_responses"),
+                protocol=None,
                 base_url=Config(default_value="https://api.openai.com/v1"),
-                api_key=Parameter(path="$.api_key", default_value=omit, supports=True),
+                api_key=InputParameter(path="$.api_key", default_value=omit, supports=True),
                 timeout=Config(default_value=None),
                 max_retries=Config(default_value=None),
                 supports_stream=Config(default_value=True),
                 usage_mode=Config(default_value="native"),
                 extra_headers=Config(default_value={}),
-                extra_body=Config(default_value={}),
-                max_tokens=Parameter(
+                extra_body=Config(
+                    default_value={"reasoning": {"effort": "medium", "summary": "detailed"}}
+                ),
+                max_tokens=InputParameter(
                     path="$.max_output_tokens",
                     default_value=omit,
                     supports=True,
                 ),
-                content=Parameter(path="$.delta", default_value=omit, supports=True),
-                reasoning_content=Parameter(path="$.delta", default_value=omit, supports=True),
-                reasoning_enable=Parameter(
+                content=OutputParameter(path="$.delta", default_value=omit, supports=True),
+                reasoning_content=OutputParameter(path="$.delta", default_value=omit, supports=True),
+                feedback_reasoning_item=OutputParameter(
+                    path="$.item", default_value=omit, supports=True
+                ),
+                reasoning_enable=InputParameter(
                     path="$.reasoning",
                     default_value={"effort": "medium", "summary": "detailed"},
                     supports=True,
                 ),
-                reasoning_effort=Parameter(
+                reasoning_effort=InputParameter(
                     path="$.reasoning.effort",
                     default_value=omit,
                     supports=True,
@@ -48,10 +61,11 @@ class OpenAIPorvider(BaseProvider):
                         "max": "max",
                     },
                 ),
-                feedback_reasoning_content=Config(default_value="always"),
+                should_feedback_reasoning_item=Config(default_value="always"),
                 models=Attribute(
                     default_value=[
                         ModelProfile(
+                            protocol=Config(default_value="openai_responses"),
                             model=Attribute(default_value="gpt-6-astra"),
                             max_context_window=Attribute(default_value=1_050_000),
                             supports_function_calling=Config(default_value=True),
@@ -62,12 +76,14 @@ class OpenAIPorvider(BaseProvider):
                             max_tokens=None,
                             content=None,
                             reasoning_content=None,
+                            feedback_reasoning_item=None,
                             reasoning_enable=None,
                             reasoning_effort=None,
                             reasoning_effort_mapping=Config(default_value={"none": None}),
-                            feedback_reasoning_content=None,
+                            should_feedback_reasoning_item=None,
                         ),
                         ModelProfile(
+                            protocol=Config(default_value="openai_responses"),
                             model=Attribute(default_value="gpt-6.1-sol"),
                             max_context_window=Attribute(default_value=1_050_000),
                             supports_function_calling=Config(default_value=True),
@@ -78,12 +94,14 @@ class OpenAIPorvider(BaseProvider):
                             max_tokens=None,
                             content=None,
                             reasoning_content=None,
+                            feedback_reasoning_item=None,
                             reasoning_enable=None,
                             reasoning_effort=None,
                             reasoning_effort_mapping=Config(default_value={"none": None}),
-                            feedback_reasoning_content=None,
+                            should_feedback_reasoning_item=None,
                         ),
                         ModelProfile(
+                            protocol=Config(default_value="openai_responses"),
                             model=Attribute(default_value="gpt-6-sol"),
                             max_context_window=Attribute(default_value=1_050_000),
                             supports_function_calling=Config(default_value=True),
@@ -94,12 +112,14 @@ class OpenAIPorvider(BaseProvider):
                             max_tokens=None,
                             content=None,
                             reasoning_content=None,
+                            feedback_reasoning_item=None,
                             reasoning_enable=None,
                             reasoning_effort=None,
                             reasoning_effort_mapping=None,
-                            feedback_reasoning_content=None,
+                            should_feedback_reasoning_item=None,
                         ),
                         ModelProfile(
+                            protocol=Config(default_value="openai_responses"),
                             model=Attribute(default_value="gpt-6-luna"),
                             max_context_window=Attribute(default_value=1_050_000),
                             supports_function_calling=Config(default_value=True),
@@ -110,12 +130,14 @@ class OpenAIPorvider(BaseProvider):
                             max_tokens=None,
                             content=None,
                             reasoning_content=None,
+                            feedback_reasoning_item=None,
                             reasoning_enable=None,
                             reasoning_effort=None,
                             reasoning_effort_mapping=None,
-                            feedback_reasoning_content=None,
+                            should_feedback_reasoning_item=None,
                         ),
                         ModelProfile(
+                            protocol=Config(default_value="openai_responses"),
                             model=Attribute(default_value="gpt-5.4"),
                             max_context_window=Attribute(default_value=1_050_000),
                             supports_function_calling=Config(default_value=True),
@@ -126,12 +148,14 @@ class OpenAIPorvider(BaseProvider):
                             max_tokens=None,
                             content=None,
                             reasoning_content=None,
+                            feedback_reasoning_item=None,
                             reasoning_enable=None,
                             reasoning_effort=None,
                             reasoning_effort_mapping=Config(default_value={"max": None}),
-                            feedback_reasoning_content=None,
+                            should_feedback_reasoning_item=None,
                         ),
                         ModelProfile(
+                            protocol=Config(default_value="openai_responses"),
                             model=Attribute(default_value="gpt-5.4-pro"),
                             max_context_window=Attribute(default_value=1_050_000),
                             supports_function_calling=Config(default_value=True),
@@ -142,6 +166,7 @@ class OpenAIPorvider(BaseProvider):
                             max_tokens=None,
                             content=None,
                             reasoning_content=None,
+                            feedback_reasoning_item=None,
                             reasoning_enable=None,
                             reasoning_effort=None,
                             reasoning_effort_mapping=Config(
@@ -154,9 +179,10 @@ class OpenAIPorvider(BaseProvider):
                                     "max": None,
                                 },
                             ),
-                            feedback_reasoning_content=None,
+                            should_feedback_reasoning_item=None,
                         ),
                         ModelProfile(
+                            protocol=Config(default_value="openai_responses"),
                             model=Attribute(default_value="gpt-5.4-mini"),
                             max_context_window=Attribute(default_value=400_000),
                             supports_function_calling=Config(default_value=True),
@@ -167,10 +193,11 @@ class OpenAIPorvider(BaseProvider):
                             max_tokens=None,
                             content=None,
                             reasoning_content=None,
+                            feedback_reasoning_item=None,
                             reasoning_enable=None,
                             reasoning_effort=None,
                             reasoning_effort_mapping=Config(default_value={"max": None}),
-                            feedback_reasoning_content=None,
+                            should_feedback_reasoning_item=None,
                         ),
                     ],
                 ),

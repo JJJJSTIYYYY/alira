@@ -11,6 +11,7 @@ from my_llm import (
     ProviderProfile,
     resolve_profiles,
 )
+from my_llm.codec.openai.chat.prebuilt import chat_semantic_loss_hook
 
 
 class BaseProvider:
@@ -100,4 +101,15 @@ class BaseProvider:
                 profile = replace(
                     profile, api_key=replace(binding, default_value=api_key)
                 )
-        return MyLLM(provider=profile, model=selected, stdio_protocol="openai_chat")
+        llm = MyLLM(
+            provider=profile,
+            model=selected,
+            stdio_protocol="middleware",
+            semantic_loss_protocol="ignore",
+        )
+        if llm.resolved_profile.protocol == "openai_chat":
+            llm.set_semantic_loss_policy(
+                semantic_loss_protocol="hook",
+                input_semantic_loss_hook=chat_semantic_loss_hook,
+            )
+        return llm

@@ -1,6 +1,6 @@
 """User-supplied native profiles, registered and selected through string names."""
 
-from my_llm import Attribute, ProviderProfile
+from my_llm import ProviderProfile
 
 from alira.agent.core.bot.provider.base import BaseProvider
 
@@ -18,7 +18,4 @@ class CustomProvider(BaseProvider):
         name: str = "custom",
         profile: ProviderProfile | None = None,
     ) -> None:
-        super().__init__(
-            name,
-            profile
-        )
+        super().__init__(name, ProviderProfile() if profile is None else profile)
