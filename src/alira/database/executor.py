@@ -3,7 +3,6 @@
 import copy
 import inspect
 from collections.abc import Awaitable, Callable
-from datetime import datetime
 from uuid import uuid4
 
 from alira.database.services.cache import CacheService
@@ -392,76 +391,21 @@ class StoreExecutor:
 
     @store_action
     async def create_skills(self, payload: dict) -> dict:
-        """Import skill packages, persist their metadata, and return visible fields."""
+        """Import skill archives without persisting database metadata.
+
+        Args:
+            payload: Required ``user_uid`` and ``file_path`` list of ZIP paths.
+
+        Returns:
+            Success: ``{"success": True, "messages": skills}``, containing each
+                archive's skill identity, frontmatter metadata, package_path,
+                package_size and package_sha256.
+            Failure: The user check or file import failure result.
+        """
         res = await self.data_store.ensure_user_exists(payload)
         if not res.get("success"):
             return res
-
-        file_res = await self.file_store.import_skill_packages(payload)
-        if not file_res.get("success"):
-            return file_res
-
-        skill_payload = {
-            "user_uid": payload["user_uid"],
-            "skills": file_res.get("messages", []),
-        }
-        store_result = await self._write_resource(
-            skill_payload,
-            self.data_store.create_skills,
-            {"cache_group": f"skills:{payload.get('user_uid') or '-'}"},
-        )
-        if not store_result.get("success"):
-            return store_result
-
-        skill_info_list = file_res.get("messages", [])
-        visible_skill_info_list = []
-
-        for skill_info in skill_info_list:
-            visible_skill_info = {
-                "skill_id": skill_info.get("skill_id"),
-                "skill_name": skill_info.get("skill_name"),
-                "skill_description": skill_info.get("skill_description"),
-                "skill_version": skill_info.get("skill_version"),
-                "package_size": skill_info.get("package_size"),
-                "is_active": False,
-                "upload_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            }
-            visible_skill_info_list.append(visible_skill_info)
-
-        return {
-            "success": True,
-            "messages": visible_skill_info_list,
-        }
-
-    @store_action
-    async def update_skill(self, payload: dict) -> dict:
-        """Update a skill's active or deleted status."""
-        return await self._write_resource(
-            payload,
-            self.data_store.update_skill,
-            {"cache_group": f"skills:{payload.get('user_uid') or '-'}"},
-        )
-
-    @store_action
-    async def list_skills(self, payload: dict) -> dict:
-        """List metadata for skills uploaded by the user."""
-        limit = int(payload.get("limit", 5))
-        return await self._read_through_resource(
-            payload,
-            cache_group=f"skills:{payload.get('user_uid') or '-'}",
-            cache_key=f"list:{limit}",
-            reader=self.data_store.list_skills,
-        )
-
-    @store_action
-    async def get_skill(self, payload: dict) -> dict:
-        """Get metadata for one uploaded skill."""
-        return await self._read_through_resource(
-            payload,
-            cache_group=f"skills:{payload.get('user_uid') or '-'}",
-            cache_key=f"item:{payload.get('skill_id') or '-'}",
-            reader=self.data_store.get_skill,
-        )
+        return await self.file_store.import_skill_packages(payload)
 
     # --------------------------------------------------
     # Memory
@@ -486,41 +430,6 @@ class StoreExecutor:
             {
                 "cache_group": f"shortterm-memory:{payload.get('user_uid') or '-'}",
                 "cache_key": payload.get("conversation_uid") or "-",
-            },
-        )
-
-    @store_action
-    async def list_longterm_memories(self, payload: dict) -> dict:
-        """Fetch active long-term memories for a user."""
-        return await self._read_through_resource(
-            payload,
-            cache_group="longterm-memory",
-            cache_key=payload.get("user_uid") or "-",
-            reader=self.data_store.list_longterm_memories,
-        )
-
-    @store_action
-    async def create_longterm_memory(self, payload: dict) -> dict:
-        """Create a long-term memory with an application-level id."""
-        write_payload = {**payload, "memory_id": uuid4().hex}
-        return await self._write_resource(
-            write_payload,
-            self.data_store.create_longterm_memory,
-            {
-                "cache_group": "longterm-memory",
-                "cache_key": write_payload.get("user_uid") or "-",
-            },
-        )
-
-    @store_action
-    async def update_longterm_memory(self, payload: dict) -> dict:
-        """Partially update or soft-delete a long-term memory."""
-        return await self._write_resource(
-            payload,
-            self.data_store.update_longterm_memory,
-            {
-                "cache_group": "longterm-memory",
-                "cache_key": payload.get("user_uid") or "-",
             },
         )
 

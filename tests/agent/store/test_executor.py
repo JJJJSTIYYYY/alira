@@ -229,16 +229,6 @@ async def test_cached_branch_copies_only_selected_records_and_isolates_nested_va
             "data_store",
             "create_shortterm_memory",
         ),
-        (
-            "list_longterm_memories",
-            "data_store",
-            "list_longterm_memories",
-        ),
-        (
-            "update_longterm_memory",
-            "data_store",
-            "update_longterm_memory",
-        ),
         ("update_llm_provider", "data_store", "update_llm_provider"),
         ("update_mcp_server", "data_store", "update_mcp_server"),
         ("update_cron_task", "data_store", "update_cron_task"),
@@ -250,15 +240,7 @@ async def test_simple_handlers_forward_payload(
     store_method,
 ):
     payload = {"value": 1}
-    messages = (
-        []
-        if executor_method
-        in {
-            "list_shortterm_memories",
-            "list_longterm_memories",
-        }
-        else "ok"
-    )
+    messages = [] if executor_method == "list_shortterm_memories" else "ok"
     expected = {"success": True, "messages": messages}
     handler = AsyncMock(return_value=expected)
     service = SimpleNamespace(**{store_method: handler})
@@ -303,16 +285,6 @@ async def test_simple_handlers_forward_payload(
             "create_shortterm_memory",
             "data_store",
             "create_shortterm_memory",
-        ),
-        (
-            "list_longterm_memories",
-            "data_store",
-            "list_longterm_memories",
-        ),
-        (
-            "update_longterm_memory",
-            "data_store",
-            "update_longterm_memory",
         ),
         ("update_llm_provider", "data_store", "update_llm_provider"),
         ("update_mcp_server", "data_store", "update_mcp_server"),
@@ -993,107 +965,12 @@ async def test_message_readers_normalize_branch_assembly_exception(
 
 
 @pytest.mark.asyncio
-async def test_create_skills_returns_database_metadata_failure():
-    failure = {"success": False, "messages": "metadata failed"}
-    executor = _executor(
-        data_store=SimpleNamespace(
-            ensure_user_exists=AsyncMock(return_value={"success": True}),
-            create_skills=AsyncMock(return_value=failure),
-        ),
-        file_store=SimpleNamespace(
-            import_skill_packages=AsyncMock(
-                return_value={
-                    "success": True,
-                    "messages": [{"skill_id": "skill-1"}],
-                }
-            )
-        ),
-    )
-
-    assert await executor.create_skills({"user_uid": "user-1"}) == failure
-
-
-@pytest.mark.asyncio
-async def test_create_skills_invalidates_cache_only_after_metadata_is_persisted(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        execute_module,
-        "datetime",
-        SimpleNamespace(
-            now=lambda: SimpleNamespace(strftime=lambda _: "2026-07-29 12:00:00")
-        ),
-    )
-    call_order = []
-    skill_info = {
-        "skill_id": "skill-1",
-        "skill_name": "Search",
-        "skill_description": "Search things",
-        "skill_version": "1.0.0",
-        "package_path": "/skills/search.zip",
-        "package_size": 123,
-    }
-
-    async def persist(payload):
-        call_order.append(("data_store", payload))
-        return {"success": True, "messages": "success"}
-
-    async def invalidate(payload):
-        call_order.append(("cache", payload))
-        return {"success": True, "messages": "success"}
-
-    executor = _executor(
-        data_store=SimpleNamespace(
-            ensure_user_exists=AsyncMock(return_value={"success": True}),
-            create_skills=AsyncMock(side_effect=persist),
-        ),
-        file_store=SimpleNamespace(
-            import_skill_packages=AsyncMock(
-                return_value={
-                    "success": True,
-                    "messages": [skill_info],
-                }
-            )
-        ),
-        cache_store=SimpleNamespace(delete_resources=AsyncMock(side_effect=invalidate)),
-    )
-
-    result = await executor.create_skills({"user_uid": "user-1"})
-
-    assert result == {
-        "success": True,
-        "messages": [
-            {
-                "skill_id": "skill-1",
-                "skill_name": "Search",
-                "skill_description": "Search things",
-                "skill_version": "1.0.0",
-                "package_size": 123,
-                "is_active": False,
-                "upload_at": "2026-07-29 12:00:00",
-            }
-        ],
-    }
-    assert call_order == [
-        (
-            "data_store",
-            {
-                "user_uid": "user-1",
-                "skills": [skill_info],
-            },
-        ),
-        ("cache", {"cache_group": "skills:user-1"}),
-    ]
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method_name", "store_method", "id_key"),
     [
         ("create_llm_provider", "create_llm_provider", "provider_id"),
         ("create_mcp_server", "create_mcp_server", "mcp_id"),
         ("create_cron_task", "create_cron_task", "task_id"),
-        ("create_longterm_memory", "create_longterm_memory", "memory_id"),
     ],
 )
 async def test_create_metadata_handlers_generate_ids(
@@ -1167,17 +1044,6 @@ async def test_create_metadata_handlers_normalize_exceptions(
             "create_mcp_server",
             "mcp_id",
             ({"cache_group": "mcp:user-1"},),
-        ),
-        (
-            "create_longterm_memory",
-            "create_longterm_memory",
-            "memory_id",
-            (
-                {
-                    "cache_group": "longterm-memory",
-                    "cache_key": "user-1",
-                },
-            ),
         ),
     ],
 )
@@ -1329,24 +1195,6 @@ async def test_mcp_readers_return_store_failure_and_exception(
     ("method_name", "payload", "store_method", "expected_cache"),
     [
         (
-            "list_skills",
-            {"user_uid": "user-1", "limit": 10},
-            "list_skills",
-            {
-                "cache_group": "skills:user-1",
-                "cache_key": "list:10",
-            },
-        ),
-        (
-            "get_skill",
-            {"user_uid": "user-1", "skill_id": "skill-1"},
-            "get_skill",
-            {
-                "cache_group": "skills:user-1",
-                "cache_key": "item:skill-1",
-            },
-        ),
-        (
             "list_llm_providers",
             {"user_uid": "user-1"},
             "list_llm_providers",
@@ -1392,15 +1240,6 @@ async def test_mcp_readers_return_store_failure_and_exception(
             {
                 "cache_group": "shortterm-memory:user-1",
                 "cache_key": "conversation-1",
-            },
-        ),
-        (
-            "list_longterm_memories",
-            {"user_uid": "user-1"},
-            "list_longterm_memories",
-            {
-                "cache_group": "longterm-memory",
-                "cache_key": "user-1",
             },
         ),
     ],
@@ -1449,17 +1288,6 @@ async def test_resource_readers_use_cache_hits_without_querying_data_store(
     ),
     [
         (
-            "list_skills",
-            {"user_uid": "user-1"},
-            "list_skills",
-            [{"skill_id": "skill-1"}],
-            [{"skill_id": "skill-1"}],
-            {
-                "cache_group": "skills:user-1",
-                "cache_key": "list:5",
-            },
-        ),
-        (
             "list_llm_providers",
             {"user_uid": "user-1"},
             "list_llm_providers",
@@ -1507,33 +1335,6 @@ async def test_resource_readers_use_cache_hits_without_querying_data_store(
                 "cache_key": "conversation-1",
             },
         ),
-        (
-            "list_longterm_memories",
-            {"user_uid": "user-1"},
-            "list_longterm_memories",
-            [
-                {
-                    "memory_id": "memory-1",
-                    "title": "Preference",
-                    "date": "2025-06-07",
-                    "content": "Long-lived context",
-                    "source": "conversation",
-                }
-            ],
-            [
-                {
-                    "memory_id": "memory-1",
-                    "title": "Preference",
-                    "date": "2025-06-07",
-                    "content": "Long-lived context",
-                    "source": "conversation",
-                }
-            ],
-            {
-                "cache_group": "longterm-memory",
-                "cache_key": "user-1",
-            },
-        ),
     ],
 )
 async def test_resource_readers_backfill_native_data_store_results(
@@ -1579,12 +1380,12 @@ async def test_resource_readers_backfill_native_data_store_results(
 
 @pytest.mark.asyncio
 async def test_resource_read_falls_back_and_ignores_cache_failures():
-    payload = {"user_uid": "user-1"}
+    payload = {"user_uid": "user-1", "conversation_uid": "conv-1"}
     data_store = SimpleNamespace(
-        list_skills=AsyncMock(
+        list_shortterm_memories=AsyncMock(
             return_value={
                 "success": True,
-                "messages": [{"skill_id": "skill-1"}],
+                "messages": [{"memory_id": "memory-1"}],
             }
         )
     )
@@ -1604,11 +1405,11 @@ async def test_resource_read_falls_back_and_ignores_cache_failures():
         cache_store=cache_store,
     )
 
-    assert await executor.list_skills(payload) == {
+    assert await executor.list_shortterm_memories(payload) == {
         "success": True,
-        "messages": [{"skill_id": "skill-1"}],
+        "messages": [{"memory_id": "memory-1"}],
     }
-    data_store.list_skills.assert_awaited_once_with(payload)
+    data_store.list_shortterm_memories.assert_awaited_once_with(payload)
 
     cache_store.get_resource.side_effect = None
     cache_store.get_resource.return_value = {
@@ -1620,20 +1421,14 @@ async def test_resource_read_falls_back_and_ignores_cache_failures():
         "success": False,
         "messages": "cache write down",
     }
-    assert (await executor.list_skills(payload))["success"] is True
-    assert data_store.list_skills.await_count == 2
+    assert (await executor.list_shortterm_memories(payload))["success"] is True
+    assert data_store.list_shortterm_memories.await_count == 2
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method_name", "store_method", "payload", "expected_targets"),
     [
-        (
-            "update_skill",
-            "update_skill",
-            {"user_uid": "user-1", "skill_id": "skill-1"},
-            ({"cache_group": "skills:user-1"},),
-        ),
         (
             "update_llm_provider",
             "update_llm_provider",
@@ -1668,17 +1463,6 @@ async def test_resource_read_falls_back_and_ignores_cache_failures():
                 {
                     "cache_group": "shortterm-memory:user-1",
                     "cache_key": "conversation-1",
-                },
-            ),
-        ),
-        (
-            "update_longterm_memory",
-            "update_longterm_memory",
-            {"user_uid": "user-1", "memory_id": "memory-1"},
-            (
-                {
-                    "cache_group": "longterm-memory",
-                    "cache_key": "user-1",
                 },
             ),
         ),
@@ -1717,11 +1501,6 @@ async def test_resource_mutations_persist_before_best_effort_invalidation(
     ("method_name", "store_method", "payload"),
     [
         (
-            "update_skill",
-            "update_skill",
-            {"user_uid": "user-1", "skill_id": "skill-1"},
-        ),
-        (
             "update_llm_provider",
             "update_llm_provider",
             {"user_uid": "user-1", "provider_id": "provider-1"},
@@ -1740,16 +1519,6 @@ async def test_resource_mutations_persist_before_best_effort_invalidation(
                 "memory_id": "message-1",
                 "content": "Recent context",
             },
-        ),
-        (
-            "update_longterm_memory",
-            "update_longterm_memory",
-            {"user_uid": "user-1", "memory_id": "memory-1"},
-        ),
-        (
-            "create_longterm_memory",
-            "create_longterm_memory",
-            {"user_uid": "user-1"},
         ),
     ],
 )

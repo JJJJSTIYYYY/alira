@@ -60,13 +60,14 @@ async def test_lifecycle_helpers_and_transaction_rollback(tmp_path):
             "users",
             "conversations",
             "messages",
-            "agent_skills",
             "shortterm_memory",
-            "longterm_memory",
             "llm_provider",
             "mcp_server",
             "cron_task",
         }
+        assert {"longterm_memory", "agent_skills"}.isdisjoint(
+            row["name"] for row in tables
+        )
         message_columns = [
             row["name"]
             for row in await service._fetch_all(text("PRAGMA table_info(messages)"))
@@ -551,51 +552,8 @@ async def test_users_conversations_and_messages(db, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_skills_and_shortterm_memory(db, monkeypatch):
+async def test_shortterm_memory(db, monkeypatch):
     await create_user_and_conversation(db, monkeypatch)
-
-    skills = [
-        {
-            "skill_id": "skill-1",
-            "skill_name": "Search",
-            "skill_description": "Search things",
-            "skill_version": "2.0",
-            "package_path": "/skills/search.zip",
-            "package_size": 123,
-            "package_sha256": "abc",
-        },
-        {
-            "skill_id": "skill-2",
-            "skill_name": "Write",
-            "skill_description": "Write things",
-            "package_path": "/skills/write.zip",
-            "package_size": 456,
-        },
-    ]
-    assert (await db.create_skills({"user_uid": "user-1", "skills": skills}))["success"]
-    assert (
-        len((await db.list_skills({"user_uid": "user-1", "limit": 1}))["messages"]) == 1
-    )
-    target = (await db.get_skill({"user_uid": "user-1", "skill_id": "skill-1"}))[
-        "messages"
-    ][0]
-    assert target["skill_version"] == "2.0"
-    assert await db.update_skill(
-        {
-            "user_uid": "user-1",
-            "skill_id": "skill-1",
-            "is_active": True,
-        }
-    ) == {"success": True, "messages": "success"}
-    assert (await db.get_skill({"user_uid": "user-1", "skill_id": "skill-1"}))[
-        "messages"
-    ][0]["is_active"] == 1
-    await db.update_skill(
-        {"user_uid": "user-1", "skill_id": "skill-1", "deleted": True}
-    )
-    assert (await db.get_skill({"user_uid": "user-1", "skill_id": "skill-1"}))[
-        "messages"
-    ] == []
 
     assert await db.create_shortterm_memory(
         {
@@ -626,139 +584,6 @@ async def test_skills_and_shortterm_memory(db, monkeypatch):
     assert (
         await db.delete_shortterm_memories(
             {"memory_ids": [], "user_uid": "user-1", "conversation_uid": "conv-1"}
-        )
-    )["success"]
-
-
-@pytest.mark.asyncio
-async def test_longterm_memory_crud_and_constraints(db):
-    assert (
-        await db.create_user(
-            {
-                "user_uid": "user-1",
-                "username": "alice",
-                "password": "secret",
-            }
-        )
-    )["success"]
-
-    assert await db.create_longterm_memory(
-        {
-            "memory_id": "memory-1",
-            "user_uid": "user-1",
-            "title": "First memory",
-            "date": "2025-06-07",
-            "content": "Remember this",
-            "source": "conversation",
-        }
-    ) == {
-        "success": True,
-        "messages": {"memory_id": "memory-1"},
-    }
-    assert (
-        await db.create_longterm_memory(
-            {
-                "memory_id": "memory-2",
-                "user_uid": "user-1",
-                "title": "Second memory",
-                "date": "2026-07-30",
-                "content": "Workspace preference",
-                "source": "workspace",
-            }
-        )
-    )["success"]
-
-    fetched = await db.list_longterm_memories({"user_uid": "user-1"})
-    assert fetched == {
-        "success": True,
-        "messages": [
-            {
-                "memory_id": "memory-2",
-                "title": "Second memory",
-                "date": "2026-07-30",
-                "content": "Workspace preference",
-                "source": "workspace",
-            },
-            {
-                "memory_id": "memory-1",
-                "title": "First memory",
-                "date": "2025-06-07",
-                "content": "Remember this",
-                "source": "conversation",
-            },
-        ],
-    }
-
-    assert await db.update_longterm_memory(
-        {
-            "memory_id": "memory-1",
-            "user_uid": "user-1",
-            "title": "Updated memory",
-            "date": "2027-01-02",
-            "content": "Updated content",
-            "source": "workspace",
-        }
-    ) == {"success": True, "messages": "success"}
-    updated = (await db.list_longterm_memories({"user_uid": "user-1"}))["messages"][0]
-    assert updated == {
-        "memory_id": "memory-1",
-        "title": "Updated memory",
-        "date": "2027-01-02",
-        "content": "Updated content",
-        "source": "workspace",
-    }
-
-    assert await db.update_longterm_memory(
-        {
-            "memory_id": "memory-1",
-            "user_uid": "user-1",
-            "is_deleted": True,
-        }
-    ) == {"success": True, "messages": "success"}
-    assert (await db.list_longterm_memories({"user_uid": "user-1"}))["messages"] == [
-        {
-            "memory_id": "memory-2",
-            "title": "Second memory",
-            "date": "2026-07-30",
-            "content": "Workspace preference",
-            "source": "workspace",
-        }
-    ]
-    deleted_row = (
-        await db._fetch_all(
-            text("""
-        SELECT is_deleted, deleted_at
-        FROM longterm_memory
-        WHERE memory_id = :memory_id
-        """),
-            {"memory_id": "memory-1"},
-        )
-    )[0]
-    assert deleted_row["is_deleted"] == 1
-    assert "T" in deleted_row["deleted_at"]
-
-    assert not (
-        await db.create_longterm_memory(
-            {
-                "memory_id": "invalid-source",
-                "user_uid": "user-1",
-                "title": "Invalid",
-                "date": "2025-06-07",
-                "content": "Invalid",
-                "source": "external",
-            }
-        )
-    )["success"]
-    assert not (
-        await db.create_longterm_memory(
-            {
-                "memory_id": "invalid-date",
-                "user_uid": "user-1",
-                "title": "Invalid",
-                "date": "not-a-date",
-                "content": "Invalid",
-                "source": "conversation",
-            }
         )
     )["success"]
 

@@ -77,45 +77,6 @@ shortterm_memory = Table(
     Column("is_deleted", Integer, nullable=False, server_default=text("0")),
 )
 
-longterm_memory = Table(
-    "longterm_memory",
-    metadata,
-    Column("id", Integer, primary_key=True),
-    Column("memory_id", Text, nullable=False, unique=True),
-    Column(
-        "user_uid",
-        Text,
-        ForeignKey("users.user_uid", ondelete="CASCADE"),
-        nullable=False,
-    ),
-    Column("title", Text, nullable=False),
-    Column(
-        "memory_date",
-        Text,
-        CheckConstraint(
-            "memory_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' "
-            "AND date(memory_date) IS NOT NULL "
-            "AND memory_date = date(memory_date)"
-        ),
-        nullable=False,
-    ),
-    Column("content", Text, nullable=False),
-    Column(
-        "source",
-        Text,
-        CheckConstraint("source IN ('conversation', 'workspace')"),
-        nullable=False,
-    ),
-    Column("is_deleted", Integer, nullable=False, server_default=text("0")),
-    Column(
-        "created_at", Text, nullable=False, server_default=text("CURRENT_TIMESTAMP")
-    ),
-    Column(
-        "updated_at", Text, nullable=False, server_default=text("CURRENT_TIMESTAMP")
-    ),
-    Column("deleted_at", Text),
-)
-
 messages = Table(
     "messages",
     metadata,
@@ -174,29 +135,6 @@ messages = Table(
     Column("timestamp", Text, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
     Column("is_deleted", Integer, nullable=False, server_default=text("0")),
     UniqueConstraint("conversation_id", "msg_cursor"),
-)
-
-agent_skills = Table(
-    "agent_skills",
-    metadata,
-    Column("id", Integer, primary_key=True),
-    Column("skill_id", Text, nullable=False, unique=True),
-    Column("skill_name", Text, nullable=False),
-    Column("skill_description", Text, nullable=False),
-    Column("skill_version", Text, nullable=False, server_default=text("'v1.0'")),
-    Column("package_path", Text, nullable=False),
-    Column("package_size", Integer, nullable=False),
-    Column("package_sha256", Text),
-    Column(
-        "user_uid",
-        Text,
-        ForeignKey("users.user_uid", ondelete="CASCADE"),
-        nullable=False,
-    ),
-    Column("is_active", Integer, nullable=False, server_default=text("0")),
-    Column("deleted", Integer, nullable=False, server_default=text("0")),
-    Column("upload_at", Text, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
-    Column("deleted_at", Text),
 )
 
 llm_provider = Table(
@@ -329,13 +267,6 @@ Index(
     shortterm_memory.c.created_timestamp.desc(),
 )
 Index(
-    "idx_longterm_memory_user_date",
-    longterm_memory.c.user_uid,
-    longterm_memory.c.is_deleted,
-    longterm_memory.c.memory_date.desc(),
-    longterm_memory.c.id.desc(),
-)
-Index(
     "idx_messages_user_conversation_cursor",
     messages.c.user_uid,
     messages.c.conversation_uid,
@@ -354,12 +285,6 @@ Index(
     messages.c.id.desc(),
 )
 Index(
-    "idx_agent_skills_user_active",
-    agent_skills.c.user_uid,
-    agent_skills.c.deleted,
-    agent_skills.c.upload_at.desc(),
-)
-Index(
     "idx_cron_task_user",
     cron_task.c.user_uid,
     cron_task.c.is_deleted,
@@ -373,11 +298,9 @@ Index(
 )
 
 __all__ = [
-    "agent_skills",
     "conversations",
     "cron_task",
     "llm_provider",
-    "longterm_memory",
     "mcp_server",
     "messages",
     "metadata",
