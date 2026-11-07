@@ -21,8 +21,8 @@ from my_llm import (
 
 from alira.agent.core.bot import AliraBot, BaseProvider, CustomProvider
 from alira.agent.core.tool import ToolNode, tool
-from alira.agent.core.utils.message import (
-    AliraAiMessage,
+from alira.utils.message import (
+    AliraAssistantMessage,
     AliraSystemMessage,
     AliraUserMessage,
 )
@@ -117,7 +117,7 @@ async def test_invoke_orders_context_and_delegates_standard_messages_and_options
     assert sent["messages"][2].content[0].text == "weather"
     assert sent["tools"] == [weather.get_schema()]
     assert sent["reasoning"] is True and sent["max_tokens"] == 40
-    assert isinstance(result, AliraAiMessage)
+    assert isinstance(result, AliraAssistantMessage)
     assert result.content[1] == call
     assert result.content[0].reasoning == "why"
     assert result.extensions == {}

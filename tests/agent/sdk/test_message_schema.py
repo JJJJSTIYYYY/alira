@@ -8,11 +8,11 @@ from my_llm import (
     ToolMessage,
 )
 
-from alira.agent.core.utils.message import AliraAiMessage, AliraToolMessage
+from alira.utils.message import AliraAssistantMessage, AliraToolMessage
 
 
 def test_message_object_keeps_application_fields_out_of_protocol():
-    message = AliraAiMessage(
+    message = AliraAssistantMessage(
         message_uid="message-1",
         name="assistant",
         generation_id="g1",
@@ -27,7 +27,7 @@ def test_message_object_keeps_application_fields_out_of_protocol():
     assert isinstance(message, AssistantMessage)
     assert message.uploaded_files == ["brief.pdf"]
     assert message.content[2].call_id == "call-1"
-    assert message.to_dict()["generation_id"] == "g1"
+    assert message.to_record()["generation_id"] == "g1"
     assert "generation_id" not in message.to_wire()
     assert not hasattr(message, "id")
     assert not hasattr(message, "timestamp")

@@ -3,17 +3,17 @@
 import asyncio
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from my_llm.middleware.validation import validate_messages
 from sqlalchemy import case, func, insert, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from sqlalchemy.sql import Executable
 
-from alira.common.utils.message import message_from_record, message_record
 from alira.config.base_config import SQLITE_DATABASE
 from alira.database.services.data.engine import (
     create_engine,
@@ -39,6 +39,11 @@ from alira.database.utils.serialization import (
     encode_json,
     encode_optional_json,
     normalize_row,
+)
+from alira.utils.message import message_wire_from_record
+
+MESSAGE_RECORD_COLUMNS = tuple(
+    column for column in messages.c if column.name not in {"id", "conversation_id"}
 )
 
 
@@ -118,13 +123,18 @@ class DataService:
         params: dict[str, Any] | None = None,
         *,
         json_fields: tuple[str, ...] = (),
+        row_decoder: Callable[[dict], dict] | None = None,
     ) -> list[dict[str, Any]]:
+        """Materialize, normalize and decode each row in one pass."""
         async with self._transaction() as connection:
             result = await database_io(connection.execute(statement, params))
-            return [
-                decode_json_fields(normalize_row(dict(row)), json_fields)
-                for row in result.mappings()
-            ]
+            rows = []
+            for row in result.mappings():
+                record = decode_json_fields(normalize_row(dict(row)), json_fields)
+                if row_decoder is not None:
+                    record = row_decoder(record)
+                rows.append(record)
+            return rows
 
     # --------------------------------------------------
     # Users
@@ -383,8 +393,8 @@ class DataService:
         for field in ("metadata", "extensions"):
             if message.get(field) is not None and not isinstance(message[field], dict):
                 raise TypeError(f"Message {field} must be an object")
-        protocol_fields = message_record(message_from_record(message))
-        role = protocol_fields["role"]
+        validate_messages([message_wire_from_record(message)])
+        role = message["role"]
         async with self._transaction() as connection:
             # Allocate the cursor with the first write. SQLite serializes this
             # UPDATE across engines, avoiding a read-then-write race.
@@ -421,12 +431,12 @@ class DataService:
                         node_id=message.get("node_id", ""),
                         parent_id=message.get("parent_id", ""),
                         role=role,
-                        name=protocol_fields["name"],
-                        content=encode_json(protocol_fields["content"]),
-                        protocol=protocol_fields["protocol"],
-                        item=encode_optional_json(protocol_fields["item"]),
-                        origin=encode_optional_json(protocol_fields["origin"]),
-                        call_id=protocol_fields["call_id"],
+                        name=message.get("name"),
+                        content=encode_json(message["content"]),
+                        protocol=message.get("protocol"),
+                        item=encode_optional_json(message.get("item")),
+                        origin=encode_optional_json(message.get("origin")),
+                        call_id=message.get("call_id"),
                         metadata=encode_json(message.get("metadata"), default={}),
                         extensions=encode_json(message.get("extensions"), default={}),
                     )
@@ -452,7 +462,7 @@ class DataService:
             payload: Required ``user_uid``, ``conversation_uid`` and nonempty
                 ``messages`` (a list of node IDs, not message IDs). Matches are
                 scoped to the user and conversation, including already deleted
-                messages. Repeated node IDs may repeat returned message IDs.
+                messages. The caller supplies distinct node IDs.
 
         Returns:
             Success: ``{"success": True, "messages": [{"message_uid": str}, ...]}``.
@@ -465,22 +475,20 @@ class DataService:
             raise ValueError("Messages list is empty")
         user_uid = payload["user_uid"]
         conversation_uid = payload["conversation_uid"]
-        deleted = []
         async with self._transaction() as connection:
-            for node_id in node_ids:
-                result = await database_io(
-                    connection.execute(
-                        update(messages)
-                        .where(
-                            messages.c.user_uid == user_uid,
-                            messages.c.conversation_uid == conversation_uid,
-                            messages.c.node_id == node_id,
-                        )
-                        .values(is_deleted=1)
-                        .returning(messages.c.message_uid)
+            result = await database_io(
+                connection.execute(
+                    update(messages)
+                    .where(
+                        messages.c.user_uid == user_uid,
+                        messages.c.conversation_uid == conversation_uid,
+                        messages.c.node_id.in_(node_ids),
                     )
+                    .values(is_deleted=1)
+                    .returning(messages.c.message_uid)
                 )
-                deleted.extend({"message_uid": uid} for uid in result.scalars() if uid)
+            )
+            deleted = [{"message_uid": uid} for uid in result.scalars() if uid]
         return {"success": True, "messages": deleted}
 
     @service_handler
@@ -509,35 +517,17 @@ class DataService:
         """
         after_cursor = max(int(payload.get("cursor", 0)), 0)
         rows = await self._fetch_all(
-            select(
-                messages.c.message_uid,
-                messages.c.msg_cursor,
-                messages.c.role,
-                messages.c.name,
-                messages.c.content,
-                messages.c.protocol,
-                messages.c.item,
-                messages.c.origin,
-                messages.c.call_id,
-                messages.c.user_uid,
-                messages.c.conversation_uid,
-                messages.c.metadata,
-                messages.c.extensions,
-                messages.c.timestamp,
-                messages.c.generation_id,
-                messages.c.node_id,
-                messages.c.parent_id,
-                messages.c.is_deleted,
-            )
+            select(*MESSAGE_RECORD_COLUMNS)
             .where(
                 messages.c.user_uid == payload["user_uid"],
                 messages.c.conversation_uid == payload["conversation_uid"],
                 messages.c.msg_cursor >= after_cursor,
             )
             .order_by(messages.c.msg_cursor)
-            .limit(int(payload.get("limit", 65535)))
+            .limit(int(payload.get("limit", 65535))),
+            json_fields=("content",),
+            row_decoder=decode_message_row,
         )
-        rows = [decode_message_row(row, content_json=True) for row in rows]
         return {
             "success": True,
             "messages": rows,
@@ -557,9 +547,9 @@ class DataService:
         Returns:
             Success: ``{"success": True, "messages": rows}``, at most 300 rows,
                 ordered by conversation activity descending, then message ID
-                descending. Each row has ``conversation_uid``, ``generation_id``,
-                ``role``, JSON-decoded ``content``, ``title`` and string
-                ``last_active_at``.
+                descending. Each row contains the complete flat message record
+                with decoded JSON, plus ``title`` and string ``last_active_at``.
+                Internal ``id`` and ``conversation_id`` are not returned.
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         keyword = payload["keyword"]
@@ -569,10 +559,7 @@ class DataService:
         keyword = re.sub(r"%+", "%", keyword).strip("%")
         rows = await self._fetch_all(
             select(
-                messages.c.conversation_uid,
-                messages.c.generation_id,
-                messages.c.role,
-                messages.c.content,
+                *MESSAGE_RECORD_COLUMNS,
                 conversations.c.title,
                 conversations.c.last_active_at,
             )
@@ -589,11 +576,13 @@ class DataService:
                 messages.c.content.like(f"%{keyword}%"),
             )
             .order_by(conversations.c.last_active_at.desc(), messages.c.id.desc())
-            .limit(300)
+            .limit(300),
+            json_fields=("content",),
+            row_decoder=decode_message_row,
         )
         return {
             "success": True,
-            "messages": [decode_message_row(row, content_json=True) for row in rows],
+            "messages": rows,
         }
 
     # --------------------------------------------------

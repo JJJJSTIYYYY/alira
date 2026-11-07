@@ -8,7 +8,7 @@ from my_llm import (
     ToolCall,
 )
 
-from alira.agent.core.utils.message import AliraAiMessage
+from alira.utils.message import AliraAssistantMessage
 
 
 def test_completed_library_message_keeps_ordered_middleware_content():
@@ -22,7 +22,7 @@ def test_completed_library_message_keeps_ordered_middleware_content():
             ToolCall("c1", "search", {"q": "alira"}),
         ],
     )
-    message = AliraAiMessage.from_middleware(value, extensions={"todo_list": []})
+    message = AliraAssistantMessage.from_middleware(value, extensions={"todo_list": []})
     assert message.to_wire() == value.to_wire()
     assert message.content is value.content
     assert message.content[0].feedback_item == {"encrypted_content": "opaque"}

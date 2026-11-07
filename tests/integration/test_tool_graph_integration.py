@@ -15,8 +15,8 @@ from apixis.core.graph import (
 )
 
 from alira.agent.core.tool import ToolNode, tool
-from alira.agent.core.utils.message import (
-    AliraAiMessage,
+from alira.utils.message import (
+    AliraAssistantMessage,
     AliraToolMessage,
 )
 
@@ -64,7 +64,7 @@ async def test_concurrent_tools_are_applied_in_tool_call_order():
             goto="tools",
             update={
                 "messages": [
-                    AliraAiMessage(
+                    AliraAssistantMessage(
                         content=[
                             _tool_call(
                                 "first",
@@ -127,7 +127,7 @@ async def test_concurrent_tools_are_applied_in_tool_call_order():
         "contents": ["first:a", "second:b"],
         "call_ids": ["call-first", "call-second"],
     }
-    assert isinstance(result["messages"][0], AliraAiMessage)
+    assert isinstance(result["messages"][0], AliraAssistantMessage)
     assert all(
         isinstance(message, AliraToolMessage) for message in result["messages"][1:]
     )
@@ -147,7 +147,7 @@ async def test_tool_node_binding_selects_next_node_once(bind_later):
         return Command(
             update={
                 "messages": [
-                    AliraAiMessage(
+                    AliraAssistantMessage(
                         content=[
                             _tool_call("choose_route", "call-1"),
                             _tool_call("choose_route", "call-2"),
@@ -190,7 +190,7 @@ async def test_empty_tool_call_list_finishes_graph():
         return Command(
             update={
                 "messages": [
-                    AliraAiMessage(content=[]),
+                    AliraAssistantMessage(content=[]),
                 ]
             },
             goto="tools",
@@ -219,7 +219,7 @@ async def test_empty_tool_call_list_finishes_graph():
 
     assert "route" not in result
     assert len(result["messages"]) == 1
-    assert isinstance(result["messages"][0], AliraAiMessage)
+    assert isinstance(result["messages"][0], AliraAssistantMessage)
 
 
 async def test_tool_exception_propagates_and_stops_downstream_node():
@@ -235,7 +235,7 @@ async def test_tool_exception_propagates_and_stops_downstream_node():
         return Command(
             update={
                 "messages": [
-                    AliraAiMessage(
+                    AliraAssistantMessage(
                         content=[
                             _tool_call(
                                 "explode",
@@ -290,7 +290,7 @@ async def test_graph_timeout_cancels_running_tool_node():
         .compile_graph(tool_node.name)
     )
     state = {
-        "messages": [AliraAiMessage(content=[_tool_call("slow_tool", "call-slow")])]
+        "messages": [AliraAssistantMessage(content=[_tool_call("slow_tool", "call-slow")])]
     }
 
     with pytest.raises(

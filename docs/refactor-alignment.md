@@ -23,8 +23,8 @@
 必填字段为空时抛出 `IdentityError`。
 
 预置上下文和存储适配器已删除，其专属测试随实现移除。消息模型测试直接验证
-`AliraMessageBase` 的应用字段与扩展属性；SQLite 持久化测试直接使用消息的
-`to_dict()` 和 `DataService`，验证协议字段、业务扩展、消息树标识及重启后的读取。
+`AliraMessageExtension` 的应用字段与扩展属性；SQLite 持久化测试直接使用消息的
+`to_record()` 和 `DataService`，验证协议字段、业务扩展、消息树标识及重启后的读取。
 
 ## Generation 上下文
 

@@ -185,12 +185,7 @@ class MessageNodeTree:
             if not children:
                 break
 
-            visible_children = [c for c in children if c.get("visible")]
-
-            if visible_children:
-                next_node = max(visible_children, key=lambda x: x["last_cursor"])
-            else:
-                next_node = max(children, key=lambda x: x["last_cursor"])
+            next_node = max(children, key=lambda x: x["last_cursor"])
 
             path.append(next_node)
             cur = next_node

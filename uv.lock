@@ -129,14 +129,14 @@ wheels = [
 
 [[package]]
 name = "apixis"
-version = "1.1.8"
+version = "1.1.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/61/1e/adcca8a41e69c404a879fcd6505f3da342bb725f107c195f7ad3f85d5bc8/apixis-1.1.8.tar.gz", hash = "sha256:1acdca00d0b3e35273522a175140eb014cae48a65c47ac07d7e630370cebd7fa", size = 253325, upload-time = "2026-11-01T08:17:45.926Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/72/e0/ab7f0a9f292dea7e063b9269e7ddbde5c4dbc729c7119a7590c261262f2f/apixis-1.1.9.tar.gz", hash = "sha256:c8ae99b5f9e1532f4d352b55f13164949dd999c4354bd94e89da6aecaaee86b9", size = 259818, upload-time = "2026-11-07T17:00:54.167Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e6/33/57ca74a1ce6372a8c9ca9b522aaff4da253d422cf80868fb1cadd331ef39/apixis-1.1.8-py3-none-any.whl", hash = "sha256:3398969013316dbee931322a83ef3e33e8b4ad8c2c285a771618ceaa2bc635a3", size = 69144, upload-time = "2026-11-01T08:17:44.076Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/9c/8a5ff9f0b91593b34235d7793451ac4f7d74505a7833f4c28a1db6c2982d/apixis-1.1.9-py3-none-any.whl", hash = "sha256:f161f6210cfe6b64df2fe94cda1608526eb57796c18d012b72a0103a99498909", size = 70618, upload-time = "2026-11-07T17:00:52.476Z" },
 ]
 
 [[package]]

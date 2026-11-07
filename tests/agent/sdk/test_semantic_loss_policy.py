@@ -107,10 +107,9 @@ async def test_sdk_reasoning_survives_database_and_cache_restart(
     tmp_path, monkeypatch, provider, model
 ):
     from alira.agent.core.bot import AliraBot
-    from alira.agent.core.utils.message import AliraUserMessage
-    from alira.common.utils.message import message_from_record
     from alira.database.services.cache import CacheService
     from alira.database.services.data import DataService
+    from alira.utils.message import AliraMessageExtension, AliraUserMessage
     from tests.agent.sdk.test_provider_presets import reasoning_wire
     from tests.agent.store.services.data.test_data_service import (
         create_user_and_conversation,
@@ -141,7 +140,7 @@ async def test_sdk_reasoning_survives_database_and_cache_restart(
         async with bot:
             user = AliraUserMessage(content=[TextContent("hi")])
             answer = await bot.invoke([user])
-            record = answer.to_dict()
+            record = answer.to_record()
             assert (await db.append_message({**payload, "message": record}))["success"]
             assert (await cache.set_messages({**payload, "messages": [record]}))[
                 "success"
@@ -152,9 +151,11 @@ async def test_sdk_reasoning_survives_database_and_cache_restart(
             await cache.start()
             row = (await db.list_messages(payload))["messages"][0]
             cached = (await cache.get_messages(payload))["messages"][0]
-            restored = message_from_record(row)
+            restored = AliraMessageExtension.from_record(row)
             assert restored.to_wire() == answer.to_wire()
-            assert message_from_record(cached).to_wire() == answer.to_wire()
+            assert (
+                AliraMessageExtension.from_record(cached).to_wire() == answer.to_wire()
+            )
             await bot.invoke(
                 [
                     user,

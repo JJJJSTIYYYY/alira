@@ -17,7 +17,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from alira.common.utils.logger import Logger, LogWriter
+from alira.utils.logger import Logger, LogWriter
 
 MESSAGE = "中文 " + "x" * 170
 

@@ -30,8 +30,8 @@ from alira.agent.core.tool import (
     ToolNode,
     tool,
 )
-from alira.agent.core.utils.message import (
-    AliraAiMessage,
+from alira.utils.message import (
+    AliraAssistantMessage,
     AliraToolMessage,
     AliraUserMessage,
 )
@@ -96,7 +96,7 @@ class ScriptedBot:
         self.tool_schemas = tool_node.get_schemas()
         return self
 
-    async def invoke(self, messages: list[Any]) -> AliraAiMessage:
+    async def invoke(self, messages: list[Any]) -> AliraAssistantMessage:
         self.requests.append(list(messages))
         await asyncio.sleep(0)
 
@@ -104,7 +104,7 @@ class ScriptedBot:
             message for message in messages if isinstance(message, AliraToolMessage)
         ]
         if not tool_messages:
-            return AliraAiMessage(
+            return AliraAssistantMessage(
                 name="Alice",
                 content=[
                     _call("lookup_weather", "call-weather", {"city": "Tokyo"}),
@@ -114,7 +114,7 @@ class ScriptedBot:
             )
 
         outputs = {message.name: message.content[0].text for message in tool_messages}
-        return AliraAiMessage(
+        return AliraAssistantMessage(
             name="Alice",
             content=(
                 [
@@ -192,7 +192,7 @@ async def test_full_agent_model_tool_model_loop_with_shared_runtime_state():
             if message.message_uid not in store.message_uids
         ]
         latest = state["messages"][-1]
-        if isinstance(latest, AliraAiMessage):
+        if isinstance(latest, AliraAssistantMessage):
             next_node = (
                 tool_node.name
                 if any(isinstance(part, ToolCall) for part in latest.content)
@@ -288,7 +288,7 @@ async def test_full_agent_model_tool_model_loop_with_shared_runtime_state():
     messages = result["messages"]
     assert messages[0] is not user_message
     assert isinstance(messages[0], AliraUserMessage)
-    assert isinstance(messages[1], AliraAiMessage)
+    assert isinstance(messages[1], AliraAssistantMessage)
     assert [message.name for message in messages[2:5]] == [
         "lookup_weather",
         "add",
@@ -300,7 +300,7 @@ async def test_full_agent_model_tool_model_loop_with_shared_runtime_state():
         "call-memory",
     ]
     assert all(message.metadata["duration"] >= 0 for message in messages[2:5])
-    assert isinstance(messages[-1], AliraAiMessage)
+    assert isinstance(messages[-1], AliraAssistantMessage)
     assert not any(isinstance(part, ToolCall) for part in messages[-1].content)
     assert messages[-1].content[0].text == (
         "weather:Tokyo:sunny; sum=42; memory=stored"

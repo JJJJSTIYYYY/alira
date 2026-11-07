@@ -20,7 +20,7 @@ from my_llm import (
 from alira.agent.core.bot.provider import BaseProvider
 from alira.agent.core.tool import BaseTool, ToolNode
 from alira.agent.core.utils.context import RoleSchema, to_prompt
-from alira.agent.core.utils.message import AliraAiMessage
+from alira.utils.message import AliraAssistantMessage
 
 
 class AliraBot:
@@ -177,7 +177,7 @@ class AliraBot:
         *,
         tools: Iterable[BaseTool] | ToolNode | None = None,
         **parameters: Any,
-    ) -> AliraAiMessage:
+    ) -> AliraAssistantMessage:
         """Generate a complete middleware assistant message without executing tools.
 
         ``parameters`` are my-llm-py generate options, including reasoning,
@@ -189,7 +189,7 @@ class AliraBot:
             stream=False,
             **parameters,
         )
-        return AliraAiMessage.from_middleware(response)
+        return AliraAssistantMessage.from_middleware(response)
 
     async def stream(
         self,

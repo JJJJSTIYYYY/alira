@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable
 from functools import wraps
 from typing import cast
 
-from alira.common.utils.logger import logger
+from alira.utils.logger import logger
 
 type TaskHandler = Callable[..., Awaitable[dict]]
 type FailureFactory = Callable[[Exception], dict]

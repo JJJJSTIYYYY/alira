@@ -9,7 +9,7 @@ import json
 import re
 from typing import Any
 
-from alira.common.utils.serialization import json_default
+from alira.utils.serialization import json_default
 
 JSON_MESSAGE_FIELDS = ("item", "origin")
 
@@ -48,11 +48,9 @@ def decode_json_object(value: Any) -> dict[str, Any]:
     return {}
 
 
-def decode_message_row(row: dict, *, content_json: bool = False) -> dict:
-    fields = JSON_MESSAGE_FIELDS
-    if content_json:
-        fields = ("content", *fields)
-    decode_json_fields(row, fields)
+def decode_message_row(row: dict) -> dict:
+    """Normalize optional JSON fields in a newly owned record."""
+    decode_json_fields(row, JSON_MESSAGE_FIELDS)
     for key in ("metadata", "extensions"):
         if key in row:
             row[key] = decode_json_object(row[key])

@@ -19,7 +19,7 @@ from my_llm import (
 from openai import AsyncOpenAI
 
 from alira.agent.core.tool import ToolNode
-from alira.agent.core.utils.message import AliraAiMessage, AliraUserMessage
+from alira.utils.message import AliraAssistantMessage, AliraUserMessage
 from tests.agent.sdk.test_bot import make_profile_bot, weather
 
 
@@ -164,7 +164,7 @@ async def test_sdk_protocols_keep_chat_input_and_output(
         async with stream:
             events = [event async for event in stream]
         assert all(isinstance(event, MessageEvent) for event in events)
-        result = AliraAiMessage.from_middleware(stream.result)
+        result = AliraAssistantMessage.from_middleware(stream.result)
     else:
         result = await bot.invoke(messages, tools=[weather])
     assert result.content[0].text == "hello"

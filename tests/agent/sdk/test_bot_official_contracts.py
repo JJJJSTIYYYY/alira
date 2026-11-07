@@ -3,8 +3,8 @@
 from my_llm import FunctionTool, Message, ProtocolMiddleWare, TextContent, ToolCall
 from my_llm.middleware.protocol import generation_input
 
-from alira.agent.core.utils.message import (
-    AliraAiMessage,
+from alira.utils.message import (
+    AliraAssistantMessage,
     AliraSystemMessage,
     AliraToolMessage,
     AliraUserMessage,
@@ -16,7 +16,7 @@ def test_messages_and_tools_use_library_middleware_contracts():
     messages = [
         AliraSystemMessage(content=[TextContent("rules")]),
         AliraUserMessage(content=[TextContent("look")]),
-        AliraAiMessage(content=[ToolCall("c1", "weather", {"city": "Tokyo"})]),
+        AliraAssistantMessage(content=[ToolCall("c1", "weather", {"city": "Tokyo"})]),
         AliraToolMessage(call_id="c1", content=[TextContent("")]),
     ]
     assert all(isinstance(message, Message) for message in messages)

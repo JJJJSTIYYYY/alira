@@ -2,7 +2,7 @@ from pathlib import Path
 import os
 import yaml
 
-from alira.common.utils.logger import logger
+from alira.utils.logger import logger
 
 # ==========================================================
 # Yaml

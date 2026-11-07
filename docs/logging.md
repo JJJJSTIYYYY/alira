@@ -1,6 +1,6 @@
 # 日志器
 
-应用通过 `alira.common.utils.logger.logger` 输出彩色控制台日志，同时按日志器名称将纯文本保存到 `SERVER.base_dir/<name>/YYYY-MM-DD_<HHMMSSmmm>[_index].log`。Apixis 自身的日志仍由依赖管理。
+应用通过 `alira.utils.logger.logger` 输出彩色控制台日志，同时按日志器名称将纯文本保存到 `SERVER.base_dir/<name>/YYYY-MM-DD_<HHMMSSmmm>[_index].log`。Apixis 自身的日志仍由依赖管理。
 
 `LogWriter.STARTUP_SUFFIX` 在进程加载日志模块时生成一次，取本地启动时间的时、分、秒和毫秒，格式为 `HHMMSSmmm`，不包含日期或毫秒之后的部分，供同一次启动中的所有日志器共享。例如 `2026-11-01_213045123.log` 表示启动时间为 21:30:45.123。重新启动进程会重新生成后缀；同一进程内的写入线程重启和跨天轮转沿用该后缀，轮转编号仍从 `_1` 递增。
 
@@ -20,7 +20,7 @@
 
 ```python
 import uvicorn
-from alira.common.utils.logger import get_uvicorn_log_config, logger
+from alira.utils.logger import get_uvicorn_log_config, logger
 
 with logger.file_logging():
     uvicorn.run(app, log_config=get_uvicorn_log_config())

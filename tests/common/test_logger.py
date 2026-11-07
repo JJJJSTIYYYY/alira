@@ -11,9 +11,9 @@ from threading import Event
 
 import pytest
 
-from alira.common.utils.logger import Logger, LogWriter
+from alira.utils.logger import Logger, LogWriter
 
-logging = importlib.import_module("alira.common.utils.logger")
+logging = importlib.import_module("alira.utils.logger")
 
 
 def lines(root, name="test"):
@@ -352,9 +352,9 @@ def test_process_starts_get_separate_files_and_loggers_share_suffix(tmp_path):
     script = """
 import sys
 from importlib import import_module
-from alira.common.utils.logger import Logger, LogWriter
+from alira.utils.logger import Logger, LogWriter
 
-module = import_module('alira.common.utils.logger')
+module = import_module('alira.utils.logger')
 module.DEBUG_LEVEL = 'DEBUG'
 Logger._writer = LogWriter(sys.argv[1], 100, 1024 * 1024)
 with Logger.file_logging():

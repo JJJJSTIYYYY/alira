@@ -9,7 +9,7 @@ from alira.database.executor import StoreExecutor
 from alira.database.services.cache import CacheService
 from alira.database.services.data import DataService
 from alira.database.services.files import FileService
-from alira.common.utils.logger import logger
+from alira.utils.logger import logger
 
 
 class _StoreRuntime:

@@ -4,7 +4,7 @@ from functools import wraps
 
 
 from alira.lifespan.auto_init import auto_init
-from alira.common.utils.logger import logger
+from alira.utils.logger import logger
 from alira.config.base_config import CACHE_CLEAN_INTERVAL
 
 

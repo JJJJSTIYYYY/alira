@@ -10,7 +10,7 @@ from alira.database.services.files.packages import (
     next_available_package_path,
 )
 from alira.database.utils.handlers import service_handler
-from alira.common.utils.logger import logger
+from alira.utils.logger import logger
 from alira.config.base_config import ALIRA_BASE_DIR
 
 

@@ -33,8 +33,8 @@ from alira.agent.core.tool import (
     tool,
 )
 from alira.agent.core.utils.exception import InvalidToolArgsError
-from alira.agent.core.utils.message import (
-    AliraAiMessage,
+from alira.utils.message import (
+    AliraAssistantMessage,
     AliraToolMessage,
 )
 
@@ -103,7 +103,7 @@ def _tool_call(
 def _state_with_calls(*calls: ToolCall) -> dict:
     return {
         "messages": [
-            AliraAiMessage(content=list(calls)),
+            AliraAssistantMessage(content=list(calls)),
         ]
     }
 
@@ -399,7 +399,7 @@ async def test_invalid_command_shape_is_stringified():
         {},
         {"messages": []},
         {"messages": [AliraToolMessage(content=[TextContent("old")], call_id="old")]},
-        {"messages": [AliraAiMessage()]},
+        {"messages": [AliraAssistantMessage()]},
     ],
 )
 async def test_tool_node_without_pending_calls_returns_empty_command_list(
@@ -887,7 +887,7 @@ async def test_tool_output_uses_configured_messages_key():
     command = await node.execute(
         {
             "history": [
-                AliraAiMessage(
+                AliraAssistantMessage(
                     content=[
                         _tool_call("<lambda>", "call-history"),
                     ]
@@ -912,7 +912,7 @@ async def test_tool_node_execute_rejects_invalid_state_and_messages():
         await node.execute({"messages": "invalid"})
     with pytest.raises(ValueError, match="call_id"):
         await node.execute(
-            {"messages": [AliraAiMessage(content=[ToolCall("", "<lambda>")])]}
+            {"messages": [AliraAssistantMessage(content=[ToolCall("", "<lambda>")])]}
         )
 
 

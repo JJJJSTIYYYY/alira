@@ -9,7 +9,7 @@ Alira 使用 `my-llm-py[all]>=2.0.1`。应用层统一传递 middleware 的 `Mes
 ```python
 from my_llm import TextContent
 from alira.agent.core.bot import AliraBot
-from alira.agent.core.utils.message import AliraAiMessage, AliraUserMessage
+from alira.utils.message import AliraAssistantMessage, AliraUserMessage
 
 async with AliraBot(provider="deepseek", model="deepseek-flash", api_key="...") as bot:
     history = [AliraUserMessage(content=[TextContent("你好")])]
@@ -22,12 +22,12 @@ async with AliraBot(provider="deepseek", model="deepseek-flash", api_key="...") 
             if event.type == "delta" and event.field == "text":
                 print(event.value, end="")
     # stream.result 是 MyLLM 累积完成的 AssistantMessage。
-    completed = AliraAiMessage.from_middleware(stream.result)
+    completed = AliraAssistantMessage.from_middleware(stream.result)
     usage = bot.llm.get_last_usage()
 ```
 
 `AliraBot` 固定使用 `stdio_protocol="middleware"`，同时接受原生 middleware 消息
-和 Alira 消息子类。`invoke()` 返回 `AliraAiMessage`；`stream()` 直接返回库的
+和 Alira 消息子类。`invoke()` 返回 `AliraAssistantMessage`；`stream()` 直接返回库的
 `MessageStream`，不另建累积器。调用方应完整消费流或使用 `async with` 关闭它。
 成功消费流后，通过 `get_last_usage()` 读取用量；非流调用不提供此用量接口。
 用量需要持久化时放入消息的业务 `metadata`。
@@ -42,7 +42,7 @@ async with AliraBot(provider="deepseek", model="deepseek-flash", api_key="...") 
 ```python
 from my_llm import ToolCall
 from alira.agent.core.tool import ToolNode, tool
-from alira.agent.core.utils.message import AliraAiMessage, AliraUserMessage
+from alira.utils.message import AliraAssistantMessage, AliraUserMessage
 
 @tool
 def weather(city: str) -> str:
@@ -107,9 +107,46 @@ Profile 使用库的 `Attribute`、`Config`、`InputParameter` 和 `OutputParame
 由业务调用方为这一整轮分配，不要每条消息重新生成。`metadata` 存用量等信息，
 `extensions` 存上传文件、任务等业务数据。
 
-`AliraMessageBase.to_dict()` 输出适合存储的平铺记录，`to_wire()` 则输出库的
-middleware 协议结构，不包含业务字段。恢复记录使用
-`alira.common.utils.message.message_from_record()`，不要直接把数据库行当厂商消息发送。
+业务消息统一定义在 `alira.utils.message`：`AliraSystemMessage`（含 developer）、
+`AliraUserMessage`、`AliraAssistantMessage` 和 `AliraToolMessage`，联合类型为
+`AliraMessage`，共享业务字段与扩展属性由 `AliraMessageExtension` 提供。
+各消息类均支持 `from_middleware()`，用于在对应的原生 middleware 消息上附加业务字段，
+直接复用原生内容和协议身份；工具消息同时保留 `call_id`。
+
+`to_record()` 输出包含业务字段的平铺存储记录，`to_wire()` 输出库的 middleware
+协议结构，不包含业务字段。`AliraMessageExtension.from_record()` 按角色恢复
+对应的 Alira 消息子类；具体消息类的 `from_record()` 和 `from_middleware()` 只接受
+匹配的角色。新消息自动分配 `message_uid`，尚未绑定的用户、会话、generation 和
+节点标识默认为空字符串。
+
+`query_store("append_message", payload)` 的 `message` 同时接受平铺记录字典和
+`Alira*Message`。`StoreExecutor` 创建独立的存储快照，数据库、缓存和消息树内部
+继续使用字典。`list_messages`、`list_user_messages` 和 `search_messages` 返回的
+`messages` 均为 `Alira*Message` 列表，可以直接传给 `AliraBot.invoke()`：
+
+```python
+from alira.database import query_store
+
+identity = {"user_uid": "user-1", "conversation_uid": "conversation-1"}
+message = AliraUserMessage(content=[TextContent("你好")], node_id="n1", parent_id="-")
+await query_store("append_message", {**identity, "message": message})
+result = await query_store("list_messages", {**identity, "current_node_id": "n1"})
+answer = await bot.invoke(result["messages"])
+```
+
+用户和会话需已存在。消息对象不包含 `id`、`conversation_id`、`msg_cursor`、
+`timestamp` 或 `is_deleted`；列表响应继续单独提供游标、分支和链信息。
+搜索响应的会话标题与活跃时间放在 `conversations[conversation_uid]` 中。
+
+写入时只创建一份独立消息快照，再将其所有权交给缓存；数据层直接校验记录结构，
+不再恢复消息对象后重新序列化。缓存默认读写仍复制数据，Executor 使用显式的所有权
+移交和只读记录快照，先筛选分支，再只复制选中的记录。记录的可选 JSON 字段在数据库
+读取、缓存写入或缓存文件恢复时归一化，查询返回时直接构造 Alira 消息。
+`delete_messages` 接受不重复的节点 ID 列表，通过一条更新语句完成软删除。
+
+MyLLM 的 `stdio_protocol="middleware"` 接受这些原生消息子类，保留输入对象上的
+业务字段，请求序列化通过原生 `to_wire()` 投影排除这些字段。SDK 请求测试覆盖
+Chat、Responses、Anthropic 的流式与非流式，以及消息缓存开启和关闭。
 
 索引分别覆盖用户/会话/游标列表、用户/会话/节点删除，以及内部会话/软删除/主键搜索。
 唯一约束覆盖 `message_uid` 和会话内游标。测试使用实际执行 SQL 的

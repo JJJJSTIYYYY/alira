@@ -10,6 +10,9 @@ import pytest
 from alira.database import executor as execute_module
 from alira.database.executor import StoreExecutor
 from alira.database.services.cache import CacheService
+from alira.utils.message import AliraMessageExtension, AliraUserMessage
+
+_PARSED_RECORD = {"message_uid": "parsed-1", "role": "user", "content": []}
 
 
 def _executor(
@@ -68,7 +71,8 @@ def _row(
         "is_deleted": deleted,
         "metadata": {} if metadata is None else metadata,
         "extensions": {} if extensions is None else extensions,
-        "content": f"{node_id}:{cursor}",
+        "content": [{"type": "text", "text": f"{node_id}:{cursor}"}],
+        "message_uid": f"{node_id}:{cursor}",
     }
 
 
@@ -129,27 +133,69 @@ async def test_message_projection_decodes_rows_without_changing_cached_values():
             extensions="invalid-json",
         ),
     ]
-    rows[2]["content"] = "null"
+    rows[2]["content"] = [{"type": "text", "text": "null"}]
     rows[2]["item"] = '{"id":"item-1"}'
     cache = CacheService()
     await cache.set_messages({**payload, "messages": rows})
+    cached_rows = (await cache.get_messages(payload))["messages"]
 
     result = await _executor(cache_store=cache).list_user_messages(payload)
 
     assert result["success"]
-    assert [row["node_id"] for row in result["messages"]] == ["node-a", "node-c"]
-    assert result["messages"][0]["metadata"] == {}
-    assert result["messages"][0]["extensions"] == {"source": "json"}
-    assert result["messages"][1]["metadata"] == {"score": 1}
-    assert result["messages"][1]["extensions"] == {}
-    assert result["messages"][1]["content"] == "null"
-    assert result["messages"][1]["item"] == {"id": "item-1"}
+    assert [row.node_id for row in result["messages"]] == ["node-a", "node-c"]
+    assert result["messages"][0].metadata == {}
+    assert result["messages"][0].extensions == {"source": "json"}
+    assert result["messages"][1].metadata == {"score": 1}
+    assert result["messages"][1].extensions == {}
+    assert result["messages"][1].content[0].text == "null"
+    assert result["messages"][1].item.id == "item-1"
     assert result["current_chain"] == ["node-a", "node-c"]
     assert result["branches"]["-"] == [
         {"node_id": "node-a", "cursor": 1},
         {"node_id": "node-b", "cursor": 2},
     ]
-    assert (await cache.get_messages(payload))["messages"] == rows
+    assert (await cache.get_messages(payload))["messages"] == cached_rows
+    assert rows[0]["metadata"] == "invalid-json"
+    assert rows[2]["item"] == '{"id":"item-1"}'
+
+
+@pytest.mark.asyncio
+async def test_cached_branch_copies_only_selected_records_and_isolates_nested_values():
+    copied = []
+
+    class TrackedRecord(dict):
+        def __deepcopy__(self, memo):
+            copied.append(self["message_uid"])
+            return deepcopy(dict(self), memo)
+
+    rows = [
+        TrackedRecord(
+            _row(
+                f"n{index}",
+                f"n{index - 1}" if index else "-",
+                index + 1,
+                "user",
+                metadata={"nested": {"value": index}},
+            )
+        )
+        for index in range(200)
+    ]
+    payload = {"user_uid": "user-1", "conversation_uid": "conversation-1"}
+    cache = CacheService()
+    await cache.set_messages({**payload, "messages": rows}, take_ownership=True)
+
+    result = await _executor(cache_store=cache).list_messages(
+        {**payload, "current_node_id": "n2"}
+    )
+
+    assert result["success"]
+    assert copied == ["n0:1", "n1:2", "n2:3"]
+    assert len(result["messages"]) == 3
+    first = result["messages"][0]
+    first.metadata["nested"]["value"] = "changed"
+    first.content[0].origin.value["text"] = "changed origin"
+    assert rows[0]["metadata"]["nested"]["value"] == 0
+    assert rows[0]["content"][0]["text"] == "n0:1"
 
 
 @pytest.mark.asyncio
@@ -167,11 +213,6 @@ async def test_message_projection_decodes_rows_without_changing_cached_values():
             "get_conversation",
             "data_store",
             "get_conversation",
-        ),
-        (
-            "search_messages",
-            "data_store",
-            "search_messages",
         ),
         (
             "get_branch_chain",
@@ -421,7 +462,8 @@ async def test_update_conversation_skips_cache_and_normalizes_failure():
 
 
 @pytest.mark.asyncio
-async def test_append_message_persists_and_caches_a_private_snapshot():
+@pytest.mark.parametrize("as_object", [False, True])
+async def test_append_message_persists_and_caches_a_private_snapshot(as_object):
     payload = {
         "user_uid": "user-1",
         "conversation_uid": "conversation-1",
@@ -433,7 +475,12 @@ async def test_append_message_persists_and_caches_a_private_snapshot():
             "content": [{"type": "text", "text": "hello"}],
         },
     }
+    if as_object:
+        payload["message"] = AliraUserMessage.from_record(payload["message"])
     original = deepcopy(payload)
+    original_record = (
+        original["message"].to_record() if as_object else original["message"]
+    )
     persisted = []
 
     async def persist(write_payload):
@@ -455,14 +502,14 @@ async def test_append_message_persists_and_caches_a_private_snapshot():
         "messages": "success",
     }
     assert payload == original
-    assert persisted == [original]
+    assert persisted == [{**original, "message": original_record}]
     write_payload = data_store.append_message.await_args.args[0]
     cached_payload = cache_store.append_message.await_args.args[0]
     assert cached_payload is write_payload
     assert cached_payload is not payload
     assert cached_payload["message"] is not payload["message"]
     assert cached_payload["message"] == {
-        **original["message"],
+        **original_record,
         "user_uid": "user-1",
         "conversation_uid": "conversation-1",
         "msg_cursor": 3,
@@ -480,20 +527,32 @@ async def test_append_message_persists_and_caches_a_private_snapshot():
 
 
 @pytest.mark.asyncio
-async def test_append_message_keeps_database_and_cache_snapshot_consistent_across_await():
+@pytest.mark.parametrize("as_object", [False, True])
+async def test_append_message_keeps_database_and_cache_snapshot_consistent_across_await(
+    as_object,
+):
     payload = {
         "user_uid": "user-1",
         "conversation_uid": "conversation-1",
-        "message": {"content": [{"text": "original"}]},
+        "message": {
+            "role": "user",
+            "content": [{"type": "text", "text": "original"}],
+        },
     }
+    if as_object:
+        payload["message"] = AliraUserMessage.from_record(payload["message"])
     entered = asyncio.Event()
     release = asyncio.Event()
 
     async def persist(write_payload):
-        assert write_payload["message"]["content"] == [{"text": "original"}]
+        assert write_payload["message"]["content"] == [
+            {"type": "text", "text": "original"}
+        ]
         entered.set()
         await release.wait()
-        assert write_payload["message"]["content"] == [{"text": "original"}]
+        assert write_payload["message"]["content"] == [
+            {"type": "text", "text": "original"}
+        ]
         return {"success": True, "messages": {"msg_cursor": 1}}
 
     cache_store = SimpleNamespace(
@@ -505,11 +564,14 @@ async def test_append_message_keeps_database_and_cache_snapshot_consistent_acros
     )
     task = asyncio.create_task(executor.append_message(payload))
     await entered.wait()
-    payload["message"]["content"][0]["text"] = "changed"
+    if as_object:
+        payload["message"].content[0].text = "changed"
+    else:
+        payload["message"]["content"][0]["text"] = "changed"
     release.set()
     assert (await task)["success"] is True
     assert cache_store.append_message.await_args.args[0]["message"]["content"] == [
-        {"text": "original"}
+        {"type": "text", "text": "original"}
     ]
 
 
@@ -722,7 +784,7 @@ async def test_list_messages_uses_cached_chain_and_recent_messages(
     executor = _executor(cache_store=cache_store)
     message_nodes.build_visible_messages = Mock(
         return_value=(
-            [{"parsed": True}],
+            [_PARSED_RECORD],
             {"-": [{"node_id": "branch"}]},
             ["-", "cached-leaf"],
         )
@@ -730,7 +792,7 @@ async def test_list_messages_uses_cached_chain_and_recent_messages(
 
     result = await getattr(executor, method_name)(payload)
 
-    assert result["messages"] == [{"parsed": True}]
+    assert result["messages"] == [AliraMessageExtension.from_record(_PARSED_RECORD)]
     assert result["branches"] == {"-": [{"node_id": "branch"}]}
     assert "node_id_chain" not in payload
     assert result["current_chain"] == ["-", "cached-leaf"]
@@ -791,13 +853,11 @@ async def test_list_messages_ignores_unusable_cached_chains(
         ),
     )
     executor = _executor(cache_store=cache_store)
-    message_nodes.build_visible_messages = Mock(
-        return_value=([{"parsed": True}], {}, [])
-    )
+    message_nodes.build_visible_messages = Mock(return_value=([_PARSED_RECORD], {}, []))
 
     result = await getattr(executor, method_name)(payload)
 
-    assert result["messages"] == [{"parsed": True}]
+    assert result["messages"] == [AliraMessageExtension.from_record(_PARSED_RECORD)]
     assert message_nodes.build_visible_messages.call_args.args[0] == "-"
 
 
@@ -842,7 +902,7 @@ async def test_list_messages_falls_back_to_database_and_tolerates_cache_errors(
     )
     message_nodes.build_visible_messages = Mock(
         return_value=(
-            [{"parsed": True}],
+            [_PARSED_RECORD],
             {},
             ["node-1"],
         )
@@ -850,7 +910,7 @@ async def test_list_messages_falls_back_to_database_and_tolerates_cache_errors(
 
     result = await getattr(executor, method_name)(payload)
 
-    assert result["messages"] == [{"parsed": True}]
+    assert result["messages"] == [AliraMessageExtension.from_record(_PARSED_RECORD)]
     assert "node_id_chain" not in payload
     assert result["current_chain"] == ["node-1"]
     data_store.list_messages.assert_awaited_once_with(
@@ -867,7 +927,8 @@ async def test_list_messages_falls_back_to_database_and_tolerates_cache_errors(
             "conversation_uid": "conversation-1",
             "current_node_id": "-",
             "messages": raw_messages,
-        }
+        },
+        take_ownership=True,
     )
 
 

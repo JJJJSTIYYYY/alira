@@ -19,7 +19,7 @@ from apixis.core.event import (
 from apixis.core.graph import AutoMerge, GraphManager
 
 from alira.agent.core.tool import FunctionToolManager, ToolNode
-from alira.agent.core.utils.message import AliraAiMessage
+from alira.utils.message import AliraAssistantMessage
 
 pytestmark = pytest.mark.parametrize(
     "event_runtime_capacity",
@@ -47,7 +47,7 @@ def event_runtime_capacity(request, monkeypatch):
 def _state(name: str, *, value: str = "ok", call_id: str = "call") -> dict:
     return {
         "messages": [
-            AliraAiMessage(
+            AliraAssistantMessage(
                 content=[
                     ToolCall(call_id=call_id, name=name, arguments={"value": value})
                 ]

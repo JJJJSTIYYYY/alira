@@ -6,13 +6,14 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from uuid import uuid4
 
-from alira.common.utils.logger import logger
 from alira.database.services.cache import CacheService
 from alira.database.services.data import DataService
 from alira.database.services.files import FileService
 from alira.database.utils.handlers import store_action
 from alira.database.utils.message_tree import MessageNodeTree
 from alira.database.utils.serialization import decode_message_row
+from alira.utils.logger import logger
+from alira.utils.message import AliraMessageExtension
 
 
 class StoreExecutor:
@@ -38,11 +39,12 @@ class StoreExecutor:
 
     async def _cache_call(
         self,
-        method: Callable[[dict], Awaitable[dict]],
+        method: Callable[..., Awaitable[dict]],
         payload: dict,
+        **options: bool,
     ) -> dict:
         """Observe structured cache failures while allowing data-store work to continue."""
-        result = await method(payload)
+        result = await method(payload, **options)
         if not result.get("success"):
             logger.warning(
                 "Cache operation %s failed: %s",
@@ -176,8 +178,11 @@ class StoreExecutor:
 
     @store_action
     async def append_message(self, payload: dict) -> dict:
-        """Persist and cache one private message snapshot without changing the request."""
-        message = copy.deepcopy(payload["message"])
+        """Snapshot an Alira message or record for persistence and caching."""
+        message = payload["message"]
+        if isinstance(message, AliraMessageExtension):
+            message = message.to_record()
+        message = copy.deepcopy(message)
         write_payload = {**payload, "message": message}
         result = await self.data_store.append_message(write_payload)
         if not result.get("success"):
@@ -187,7 +192,10 @@ class StoreExecutor:
         message["user_uid"] = write_payload["user_uid"]
         message["conversation_uid"] = write_payload["conversation_uid"]
         message["is_deleted"] = False
-        await self._cache_call(self.cache_store.append_message, write_payload)
+        decode_message_row(message)
+        await self._cache_call(
+            self.cache_store.append_message, write_payload, take_ownership=True
+        )
         await self._cache_call(
             self.cache_store.update_branch_chain,
             {
@@ -253,7 +261,9 @@ class StoreExecutor:
             if cached.get("success") and cached.get("cache_hit") and cached["messages"]:
                 current_node_id = cached["messages"][-1]
 
-        result = await self._cache_call(self.cache_store.get_messages, payload)
+        result = await self._cache_call(
+            self.cache_store.get_messages, payload, borrow_records=True
+        )
         if not (result.get("success") and result.get("cache_hit")):
             result = await self.data_store.list_messages({**payload, "cursor": 1})
             if not result.get("success"):
@@ -261,17 +271,20 @@ class StoreExecutor:
             await self._cache_call(
                 self.cache_store.set_messages,
                 {**payload, "messages": result["messages"]},
+                take_ownership=True,
             )
 
-        messages, branches, chain = MessageNodeTree(
+        records, branches, chain = MessageNodeTree(
             result["messages"]
         ).build_visible_messages(
             current_node_id,
             allow_roles=allow_roles,
             guess_children=guess_children,
         )
-        for message in messages:
-            decode_message_row(message)
+        messages = [
+            AliraMessageExtension.from_record(record)
+            for record in copy.deepcopy(records)
+        ]
         logger.info("Current node_id_chain: %s", chain)
         await self._cache_call(
             self.cache_store.set_branch_chain,
@@ -286,7 +299,7 @@ class StoreExecutor:
 
     @store_action
     async def list_messages(self, payload: dict) -> dict:
-        """List model-visible messages through the selected node."""
+        """Return model-visible Alira messages through the selected node."""
         return await self._list_messages(
             payload,
             allow_roles=("user", "assistant", "system", "developer", "tool"),
@@ -295,7 +308,7 @@ class StoreExecutor:
 
     @store_action
     async def list_user_messages(self, payload: dict) -> dict:
-        """List user-visible messages, extending the selected branch to its leaf."""
+        """Return user-visible Alira messages through the selected branch's leaf."""
         return await self._list_messages(
             payload,
             allow_roles=("user", "assistant", "tool"),
@@ -304,7 +317,19 @@ class StoreExecutor:
 
     @store_action
     async def search_messages(self, payload: dict) -> dict:
-        return await self.data_store.search_messages(payload)
+        """Return business messages with conversation details kept separately."""
+        result = await self.data_store.search_messages(payload)
+        if not result.get("success"):
+            return result
+        conversations = {}
+        messages = []
+        for row in result["messages"]:
+            conversations[row["conversation_uid"]] = {
+                "title": row["title"],
+                "last_active_at": row["last_active_at"],
+            }
+            messages.append(AliraMessageExtension.from_record(row))
+        return {**result, "messages": messages, "conversations": conversations}
 
     @store_action
     async def get_branch_chain(self, payload: dict) -> dict:

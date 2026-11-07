@@ -79,8 +79,9 @@ def test_public_surface_and_import_safe_lifecycle_owner():
 
 
 @pytest.mark.parametrize("worker_count", [1, 2])
+@pytest.mark.parametrize("as_object", [False, True])
 async def test_query_store_round_trip_cache_isolation_and_restart(
-    tmp_path, monkeypatch, worker_count
+    tmp_path, monkeypatch, worker_count, as_object
 ):
     manager = StoreManager(
         db_path=tmp_path / "store.sqlite3",
@@ -99,15 +100,31 @@ async def test_query_store_round_trip_cache_isolation_and_restart(
             "content": [{"type": "text", "text": "null"}],
             "metadata": {"usage": {"total": 2}},
         }
+        if as_object:
+            from alira.utils.message import AliraAssistantMessage
+
+            message = AliraAssistantMessage.from_record(message)
         await query_store("append_message", {**payload, "message": message})
         assert "msg_cursor" not in message
+        assert not hasattr(message, "msg_cursor")
         request = {**payload, "current_node_id": "node-1"}
         first = await query_store("list_messages", request)
         assert not first.get("cache_hit", False)
         cached = await query_store("list_messages", request)
         assert cached["cache_hit"]
         assert cached["messages"] == first["messages"]
-        cached["messages"][0]["metadata"]["usage"]["total"] = 999
+        assert cached["messages"][0].message_uid == "message-1"
+        assert all(
+            not hasattr(cached["messages"][0], key)
+            for key in (
+                "msg_cursor",
+                "timestamp",
+                "is_deleted",
+                "id",
+                "conversation_id",
+            )
+        )
+        cached["messages"][0].metadata["usage"]["total"] = 999
         state = manager._state
         await manager.stop()
         assert not state.thread.is_alive()
@@ -658,26 +675,26 @@ async def test_tool_role_survives_branch_filter_cache_and_restart(manager):
     from my_llm import TextContent, ToolCall
     from my_llm.middleware.protocol import generation_input
 
-    from alira.agent.core.utils.message import (
-        AliraAiMessage,
+    from alira.utils.message import (
+        AliraAssistantMessage,
+        AliraMessageExtension,
         AliraSystemMessage,
         AliraToolMessage,
         AliraUserMessage,
     )
-    from alira.common.utils.message import message_from_record
 
     payload = await create_conversation(manager)
     original = [
         AliraSystemMessage(role="developer", content=[TextContent("rules")]),
         AliraUserMessage(content=[TextContent("question")]),
-        AliraAiMessage(content=[ToolCall("c1", "lookup", {})]),
+        AliraAssistantMessage(content=[ToolCall("c1", "lookup", {})]),
         AliraToolMessage(call_id="c1", content=[TextContent("result")]),
-        AliraAiMessage(content=[TextContent("answer")]),
+        AliraAssistantMessage(content=[TextContent("answer")]),
     ]
     for index, message in enumerate(original):
         message.node_id = f"n{index}"
         message.parent_id = f"n{index - 1}" if index else "-"
-        await manager.query("append_message", {**payload, "message": message.to_dict()})
+        await manager.query("append_message", {**payload, "message": message})
     request = {**payload, "current_node_id": "n4"}
     cold = await manager.query("list_messages", request)
     assert not cold.get("cache_hit", False)
@@ -688,7 +705,8 @@ async def test_tool_role_survives_branch_filter_cache_and_restart(manager):
         "tool",
         "assistant",
     ]
-    restored = [message_from_record(row) for row in cold["messages"]]
+    restored = cold["messages"]
+    assert all(isinstance(message, AliraMessageExtension) for message in restored)
     assert generation_input(restored, None).messages[3].role == "tool"
     hot = await manager.query("list_messages", request)
     assert hot["cache_hit"] and hot["messages"] == cold["messages"]
@@ -702,3 +720,59 @@ async def test_tool_role_survives_branch_filter_cache_and_restart(manager):
         "tool",
         "assistant",
     ]
+
+
+async def test_search_returns_business_messages_and_separate_conversation_details(
+    manager,
+):
+    from my_llm import TextContent
+
+    from alira.utils.message import AliraAssistantMessage, AliraUserMessage
+
+    payload = await create_conversation(manager)
+    original = [
+        AliraUserMessage(
+            content=[TextContent("find this phrase")],
+            metadata={"source": "user"},
+            extensions={"uploaded_files": ["brief.pdf"]},
+        ),
+        AliraAssistantMessage(
+            content=[TextContent("find this answer")],
+            metadata={"usage": {"total": 2}},
+            extensions={"task": {"type": "review"}},
+        ),
+    ]
+    for index, message in enumerate(original):
+        message.generation_id = "generation-1"
+        message.node_id = f"n{index}"
+        message.parent_id = f"n{index - 1}" if index else "-"
+        incoming = message.to_record() if index == 0 else message
+        assert (
+            await manager.query("append_message", {**payload, "message": incoming})
+        )["success"]
+
+    result = await manager.query("search_messages", {**payload, "keyword": "find"})
+    assert result["success"]
+    assert len(result["messages"]) == 2
+    for found, message in zip(result["messages"], reversed(original), strict=True):
+        assert type(found) is type(message)
+        assert found.message_uid == message.message_uid
+        assert found.generation_id == message.generation_id
+        assert found.metadata == message.metadata
+        assert found.extensions == message.extensions
+        assert found.to_wire() == message.to_wire()
+        assert all(
+            not hasattr(found, key)
+            for key in (
+                "timestamp",
+                "msg_cursor",
+                "is_deleted",
+                "title",
+                "last_active_at",
+            )
+        )
+    conversation = result["conversations"][payload["conversation_uid"]]
+    assert conversation["title"] == "New Conversation..."
+    assert "T" in conversation["last_active_at"]
+    empty = await manager.query("search_messages", {**payload, "keyword": "missing"})
+    assert empty == {"success": True, "messages": [], "conversations": {}}

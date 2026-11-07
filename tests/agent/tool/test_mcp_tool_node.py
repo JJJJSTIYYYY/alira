@@ -14,7 +14,7 @@ import pytest_asyncio
 from alira.agent.core.tool import BaseTool, FunctionToolManager, Tool, ToolNode
 from alira.agent.core.tool.mcp import MCPTool, MCPToolError, MCPToolManager
 from alira.agent.core.tool.mcp.base import _convert_call_tool_result
-from alira.agent.core.utils.message import AliraAiMessage
+from alira.utils.message import AliraAssistantMessage
 
 META = {
     "mcp_id": "test-mcp",
@@ -63,7 +63,7 @@ def state(*names, identity=None):
     return {
         "target": dict(IDENTITY if identity is None else identity),
         "messages": [
-            AliraAiMessage(
+            AliraAssistantMessage(
                 content=[
                     ToolCall(call_id=f"call-{index}", name=name, arguments={})
                     for index, name in enumerate(names)
@@ -565,7 +565,7 @@ async def test_real_in_process_mcp_protocol_persists_across_agent_graph_invocati
                 graph.invoke(
                     {
                         "target": IDENTITY,
-                        "messages": [AliraAiMessage(content=[request])],
+                        "messages": [AliraAssistantMessage(content=[request])],
                     }
                 ),
                 3,

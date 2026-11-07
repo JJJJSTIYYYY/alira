@@ -18,7 +18,7 @@ from apixis.core.utils.exception import InvalidContextError
 from httpx import ASGITransport, AsyncClient
 
 from alira.agent.core.graph import AgentGraph, AgentGraphCreator
-from alira.agent.core.utils.message import AliraAiMessage, AliraToolMessage
+from alira.utils.message import AliraAssistantMessage, AliraToolMessage
 
 
 class State(TypedDict, total=False):
@@ -159,7 +159,7 @@ async def test_custom_messages_key_reaches_tool_node():
     result = await graph.invoke(
         {
             "conversation": [
-                AliraAiMessage(
+                AliraAssistantMessage(
                     content=[ToolCall(call_id="hello-1", name="hello", arguments={})]
                 )
             ]
@@ -242,7 +242,7 @@ async def test_add_tools_forwards_llm_binding_with_custom_messages_key():
     result = await graph.invoke(
         {
             "conversation": [
-                AliraAiMessage(
+                AliraAssistantMessage(
                     content=[ToolCall(call_id="hello-1", name="hello", arguments={})]
                 )
             ]

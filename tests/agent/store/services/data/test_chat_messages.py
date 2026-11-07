@@ -12,14 +12,14 @@ from my_llm import (
     ToolMessage,
 )
 
-from alira.agent.core.utils.message import (
-    AliraAiMessage,
+from alira.database.services.data import DataService
+from alira.utils.message import (
+    AliraAssistantMessage,
+    AliraMessageExtension,
     AliraSystemMessage,
     AliraToolMessage,
     AliraUserMessage,
 )
-from alira.common.utils.message import message_from_record
-from alira.database.services.data import DataService
 from tests.agent.store.services.data.test_data_service import (
     create_user_and_conversation,
 )
@@ -41,7 +41,7 @@ async def test_sqlite_content_and_protocol_fields_round_trip(
         }
         original = [
             AliraUserMessage(content=[TextContent(text)]),
-            AliraAiMessage(
+            AliraAssistantMessage(
                 protocol="openai_responses",
                 item=ItemIdentity("m1", "completed"),
                 origin=Origin("$.output", {"id": "m1"}),
@@ -63,28 +63,34 @@ async def test_sqlite_content_and_protocol_fields_round_trip(
                     ),
                 ],
             ),
-            AliraAiMessage(content=[TextContent("done")]),
+            AliraAssistantMessage(content=[TextContent("done")]),
         ]
         payload = {"user_uid": "user-1", "conversation_uid": "conv-1"}
         for index, message in enumerate(original):
+            message.user_uid = payload["user_uid"]
+            message.conversation_uid = payload["conversation_uid"]
             message.generation_id = "generation-1"
             message.node_id = f"node-{index}"
             message.parent_id = f"node-{index - 1}" if index else "-"
-            assert (await db.append_message({**payload, "message": message.to_dict()}))[
-                "success"
-            ]
+            assert (
+                await db.append_message({**payload, "message": message.to_record()})
+            )["success"]
         await db.stop()
         await db.start()
         result = await db.list_messages(payload)
         assert result["success"]
         for message, row in zip(original, result["messages"], strict=True):
-            assert {key: row[key] for key in message.to_dict()} == message.to_dict()
-            restored = message_from_record(row)
+            assert {key: row[key] for key in message.to_record()} == message.to_record()
+            restored = AliraMessageExtension.from_record(row)
+            assert type(restored) is type(message)
+            assert restored.to_record() == message.to_record()
             assert restored.to_wire() == message.to_wire()
             assert "id" not in row and "conversation_id" not in row
             assert row["conversation_uid"] == "conv-1" and row["user_uid"] == "user-1"
             assert row["generation_id"] == "generation-1"
-        assert isinstance(message_from_record(result["messages"][2]), ToolMessage)
+        assert isinstance(
+            AliraMessageExtension.from_record(result["messages"][2]), ToolMessage
+        )
         assert result["messages"][2]["call_id"] == "c1"
         assert result["messages"][2]["role"] == "tool"
     finally:
@@ -109,11 +115,11 @@ async def test_sqlite_preserves_multimodal_user_and_instruction_messages(
         ]
         payload = {"user_uid": "user-1", "conversation_uid": "conv-1"}
         for message in original:
-            assert (await db.append_message({**payload, "message": message.to_dict()}))[
-                "success"
-            ]
+            assert (
+                await db.append_message({**payload, "message": message.to_record()})
+            )["success"]
         rows = (await db.list_messages(payload))["messages"]
-        assert [message_from_record(row).to_wire() for row in rows] == [
+        assert [AliraMessageExtension.from_record(row).to_wire() for row in rows] == [
             message.to_wire() for message in original
         ]
     finally:
@@ -141,6 +147,41 @@ async def test_storage_rejects_mismatched_tool_identity(
             }
         )
         assert result["success"] is False
+        assert (await db.list_messages(payload))["messages"] == []
+        assert (await db.get_conversation(payload))["messages"][0]["latest_cursor"] == 0
+    finally:
+        await db.stop()
+
+
+@pytest.mark.parametrize(
+    "invalid_fields",
+    [
+        {"item": "invalid"},
+        {"item": {"unknown": "field"}},
+        {"origin": "invalid"},
+        {"origin": {"path": "$.output"}},
+    ],
+)
+async def test_invalid_record_identity_does_not_allocate_a_cursor(
+    tmp_path, monkeypatch, invalid_fields
+):
+    db = DataService(tmp_path / "invalid-identity.sqlite3")
+    await db.start()
+    try:
+        await create_user_and_conversation(db, monkeypatch)
+        payload = {"user_uid": "user-1", "conversation_uid": "conv-1"}
+        result = await db.append_message(
+            {
+                **payload,
+                "message": {
+                    "message_uid": "invalid",
+                    "role": "user",
+                    "content": [],
+                    **invalid_fields,
+                },
+            }
+        )
+        assert not result["success"]
         assert (await db.list_messages(payload))["messages"] == []
         assert (await db.get_conversation(payload))["messages"][0]["latest_cursor"] == 0
     finally:

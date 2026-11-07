@@ -10,14 +10,14 @@ import pytest
 import uvicorn
 from uvicorn.middleware.message_logger import MessageLoggerMiddleware
 
-from alira.common.utils.logger import (
+from alira.utils.logger import (
     AliraLogHandler,
     Logger,
     LogWriter,
     get_uvicorn_log_config,
 )
 
-application_logging = importlib.import_module("alira.common.utils.logger")
+application_logging = importlib.import_module("alira.utils.logger")
 
 
 @pytest.fixture

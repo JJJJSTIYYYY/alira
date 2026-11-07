@@ -8,8 +8,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from alira.common.utils.logger import logger
-from alira.common.utils.serialization import json_default
 from alira.config.base_config import (
     ALIRA_BASE_DIR,
     HOT_CACHE_DEFAULT_EXPIRE_SECONDS,
@@ -21,6 +19,9 @@ from alira.database.services.cache.keys import (
     build_resource_prefix,
 )
 from alira.database.utils.handlers import service_handler
+from alira.database.utils.serialization import decode_message_row
+from alira.utils.logger import logger
+from alira.utils.serialization import json_default
 
 
 class CacheService:
@@ -28,7 +29,8 @@ class CacheService:
 
     All payload methods return ``success`` and ``messages``. Failures return
     ``{"success": False, "messages": "fail: <error>"}``; ``cache_hit`` is
-    present only on successful reads. Reads return disposable deep copies.
+    present only on successful reads. Reads return disposable deep copies by
+    default; borrowed message snapshots expose read-only records to the executor.
     """
 
     def __init__(self, persistence_path: str | Path | None = None):
@@ -58,11 +60,14 @@ class CacheService:
                     raise TypeError("cache persistence content must be an object")
 
                 now = time.time()
-                restored = {
-                    key: item
-                    for key, item in stored_cache.items()
-                    if self._is_valid_item(key, item, now)
-                }
+                restored = {}
+                for key, item in stored_cache.items():
+                    if key in self._cache or not self._is_valid_item(key, item, now):
+                        continue
+                    if key.startswith("memo:"):
+                        for message in item["value"]:
+                            decode_message_row(message)
+                    restored[key] = item
                 self._cache = restored | self._cache
             except (OSError, ValueError, TypeError) as error:
                 logger.warning(f"Unable to restore builtin cache: {error}")
@@ -95,43 +100,58 @@ class CacheService:
                 raise
 
     @service_handler
-    async def append_message(self, payload: dict) -> dict:
+    async def append_message(
+        self, payload: dict, *, take_ownership: bool = False
+    ) -> dict:
         """Append to an existing conversation cache and refresh its hot TTL.
 
         Payload requires user_uid and conversation_uid; message defaults to {}.
-        Returns success with messages="success", including on a cache miss."""
+        Returns success with messages="success", including on a cache miss.
+        take_ownership consumes an exclusively owned, normalized record; its
+        caller must not modify that record after handing it to the cache."""
         key = build_conversation_key(payload)
         message = payload.get("message", {})
-        if not isinstance(message, dict):
+        if not take_ownership and not isinstance(message, dict):
             raise TypeError("Message must be an object")
         async with self._lock:
             item = self._get_item(key)
             if item is None:
                 logger.warning("Builtin cache key not exists.")
                 return {"success": True, "messages": "success"}
-            item["value"].append(copy.deepcopy(message))
+            if not take_ownership:
+                message = decode_message_row(copy.deepcopy(message))
+            item["value"].append(message)
             item["expires_at"] = time.time() + HOT_CACHE_DEFAULT_EXPIRE_SECONDS
         return {"success": True, "messages": "success"}
 
     @service_handler
-    async def set_messages(self, payload: dict) -> dict:
+    async def set_messages(
+        self, payload: dict, *, take_ownership: bool = False
+    ) -> dict:
         """Replace cached messages and refresh their hot TTL.
 
         Payload requires user_uid and conversation_uid; messages defaults to []
         and must be a list. An empty list removes the cache entry.
-        Returns success with messages="success"."""
+        Returns success with messages="success". take_ownership consumes an
+        exclusively owned list of normalized records; the caller subsequently
+        treats both that list and its records as read-only."""
         key = build_conversation_key(payload)
         messages = payload.get("messages", [])
-        if not isinstance(messages, list) or not all(
-            isinstance(message, dict) for message in messages
+        if not take_ownership and (
+            not isinstance(messages, list)
+            or not all(isinstance(message, dict) for message in messages)
         ):
             raise ValueError("Messages must be a list of objects")
         async with self._lock:
             # Empty message lists are treated as cache misses.
             if messages:
+                if not take_ownership:
+                    messages = copy.deepcopy(messages)
+                    for message in messages:
+                        decode_message_row(message)
                 self._set_item(
                     key,
-                    copy.deepcopy(messages),
+                    messages,
                     HOT_CACHE_DEFAULT_EXPIRE_SECONDS,
                 )
             else:
@@ -139,14 +159,18 @@ class CacheService:
         return {"success": True, "messages": "success"}
 
     @service_handler
-    async def get_messages(self, payload: dict) -> dict:
+    async def get_messages(
+        self, payload: dict, *, borrow_records: bool = False
+    ) -> dict:
         """Read all cached messages for user_uid and conversation_uid.
 
         Returns success, messages=list and cache_hit=bool. Missing, expired or
-        empty message caches return messages=[] and cache_hit=False."""
+        empty message caches return messages=[] and cache_hit=False.
+        borrow_records returns a new list containing read-only cache records,
+        allowing branch selection before copying the selected records."""
         key = build_conversation_key(payload)
         async with self._lock:
-            return self._read_result(key, empty_is_miss=True)
+            return self._read_result(key, empty_is_miss=True, deep=not borrow_records)
 
     @service_handler
     async def set_branch_chain(self, payload: dict) -> dict:
@@ -163,7 +187,7 @@ class CacheService:
         async with self._lock:
             self._set_item(
                 key,
-                copy.deepcopy(node_id_chain),
+                node_id_chain.copy(),
                 STATIC_CACHE_DEFAULT_EXPIRE_SECONDS,
             )
         return {"success": True, "messages": "success"}
@@ -210,7 +234,7 @@ class CacheService:
         chain is a cache hit; missing or expired chains return [] and False."""
         key = build_conversation_key(payload, prefix="chain")
         async with self._lock:
-            return self._read_result(key)
+            return self._read_result(key, deep=False)
 
     @service_handler
     async def set_messages_ttl(
@@ -300,14 +324,16 @@ class CacheService:
             return None
         return item
 
-    def _read_result(self, key: str, *, empty_is_miss: bool = False) -> dict:
+    def _read_result(
+        self, key: str, *, empty_is_miss: bool = False, deep: bool = True
+    ) -> dict:
         """Build a disposable list response while the caller holds the lock."""
         item = self._get_item(key)
         if item is None or (empty_is_miss and not item["value"]):
             return {"success": True, "messages": [], "cache_hit": False}
         return {
             "success": True,
-            "messages": copy.deepcopy(item["value"]),
+            "messages": copy.deepcopy(item["value"]) if deep else item["value"].copy(),
             "cache_hit": True,
         }
 
