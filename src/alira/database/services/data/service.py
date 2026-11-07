@@ -10,11 +10,30 @@ from typing import Any
 from uuid import uuid4
 
 from my_llm.middleware.validation import validate_messages
-from sqlalchemy import case, func, insert, literal, or_, select, update
+from sqlalchemy import (
+    Column,
+    Integer,
+    MetaData,
+    Table,
+    case,
+    delete,
+    func,
+    insert,
+    inspect,
+    literal,
+    or_,
+    select,
+    tuple_,
+    update,
+)
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
-from sqlalchemy.sql import Executable
+from sqlalchemy.sql import ColumnElement, Executable, Select
 
-from alira.shared.config import SQLITE_DATABASE
+from alira.database.services.data.embedding import (
+    MessageEmbedding,
+    configure_vector_engine,
+)
 from alira.database.services.data.engine import (
     create_engine,
     database_io,
@@ -40,7 +59,14 @@ from alira.database.utils.serialization import (
     encode_optional_json,
     normalize_row,
 )
+from alira.shared.config import (
+    SQLITE_DATABASE,
+    SQLITE_EMBEDDING_ENABLE,
+    SQLITE_EMBEDDING_MODEL,
+    VECTOR_DIMENSION,
+)
 from alira.shared.message import message_wire_from_record
+from alira.utils.logger import logger
 
 MESSAGE_RECORD_COLUMNS = tuple(
     column for column in messages.c if column.name not in {"id", "conversation_id"}
@@ -51,11 +77,12 @@ class DataService:
     """SQLite persistence using SQLAlchemy Core and the aiosqlite driver.
 
     Call ``start()`` before use and ``stop()`` to release the engine. Each
-    operation owns a transaction; operations and lifecycle changes are serialized
-    within the service, including for an in-memory database. Storage methods
+    database operation owns a transaction; transactions and lifecycle changes are
+    serialized within the service, including for an in-memory database. Storage methods
     return result dictionaries; lifecycle errors propagate to the caller.
 
-    Tables, constraints and indexes are defined in ``data/schema.py``. Row
+    Business tables are defined in ``data/schema.py``; model-specific vector
+    tables are defined in ``data/embedding.py``. Row
     flags remain integers, time strings use a ``T`` separator, and public reads
     return decoded JSON values.
     """
@@ -70,12 +97,16 @@ class DataService:
         )
         self._engine: AsyncEngine | None = None
         self._lock = asyncio.Lock()
+        self._embedding: MessageEmbedding | None = None
+        self._embedding_tasks: set[asyncio.Task[None]] = set()
+        self._embedding_sync_task: asyncio.Task[None] | None = None
+        self._embedding_sync_status: dict[str, Any] | None = None
 
     def _new_conversation_id(self) -> str:
         return str(uuid4())
 
     async def start(self) -> None:
-        """Open the database and initialize its tables; repeated calls are safe."""
+        """Initialize tables without backfilling embeddings; repeated calls are safe."""
         async with self._lock:
             if self._engine is not None:
                 return
@@ -83,20 +114,57 @@ class DataService:
                 Path(self._db_path).resolve().parent.mkdir(parents=True, exist_ok=True)
             engine = create_engine(self._db_path)
             try:
+                embedding = (
+                    MessageEmbedding(SQLITE_EMBEDDING_MODEL, VECTOR_DIMENSION)
+                    if SQLITE_EMBEDDING_ENABLE
+                    else None
+                )
+                if embedding is not None:
+                    configure_vector_engine(engine)
                 await initialize_schema(engine)
+                if embedding is not None:
+                    async with engine_transaction(engine) as connection:
+                        await database_io(
+                            connection.run_sync(embedding.table.create, checkfirst=True)
+                        )
             except BaseException:
                 await database_io(engine.dispose())
                 raise
             self._engine = engine
+            self._embedding = embedding
+            self._embedding_sync_task = None
+            self._embedding_sync_status = None
 
     async def stop(self) -> None:
-        """Wait for the active operation, then release connections; restartable."""
+        """Drain background indexing and release the engine/model; restartable."""
+        if self._embedding_sync_task is not None:
+            await database_io(self._embedding_sync_task)
+        await self._wait_for_embedding_tasks()
         async with self._lock:
             if self._engine is not None:
                 try:
                     await database_io(self._engine.dispose())
                 finally:
                     self._engine = None
+                    if self._embedding is not None:
+                        await self._embedding.close()
+                        self._embedding = None
+
+    async def _wait_for_embedding_tasks(self) -> None:
+        if self._embedding_tasks:
+            await database_io(
+                asyncio.gather(*self._embedding_tasks, return_exceptions=True)
+            )
+
+    def _schedule_embedding(self, message_id: int) -> None:
+        task = asyncio.create_task(self._index_message(message_id))
+        self._embedding_tasks.add(task)
+        task.add_done_callback(self._embedding_done)
+
+    def _embedding_done(self, task: asyncio.Task[None]) -> None:
+        self._embedding_tasks.discard(task)
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.error("Message embedding failed: %s", error)
 
     @asynccontextmanager
     async def _transaction(self) -> AsyncIterator[AsyncConnection]:
@@ -382,6 +450,8 @@ class DataService:
                 The timestamp uses a ``T`` separator. Updates ``latest_cursor``
                 and ``last_active_at``; ``has_new_message`` is zero for ordinary
                 user input and one for assistant, instruction and tool messages.
+                Enabled embeddings are maintained in the background after commit;
+                model inference and indexing failures do not delay this response.
             Failure: ``{"success": False, "messages": "fail: <error>"}``;
                 the insert and conversation update are rolled back together.
         """
@@ -440,10 +510,13 @@ class DataService:
                         metadata=encode_json(message.get("metadata"), default={}),
                         extensions=encode_json(message.get("extensions"), default={}),
                     )
-                    .returning(messages.c.timestamp)
+                    .returning(messages.c.id, messages.c.timestamp)
                 )
             )
-            timestamp = result.scalar_one()
+            inserted = result.mappings().one()
+            timestamp = inserted["timestamp"]
+        if self._embedding is not None and role in {"user", "assistant"}:
+            self._schedule_embedding(inserted["id"])
         return {
             "success": True,
             "messages": normalize_row(
@@ -468,6 +541,8 @@ class DataService:
             Success: ``{"success": True, "messages": [{"message_uid": str}, ...]}``.
                 Only truthy stored message IDs are returned. Unmatched node IDs
                 contribute no rows; empty input is a failure.
+                Matching vectors are physically removed from every model table
+                in the same transaction, including when embedding is disabled.
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         node_ids = payload["messages"]
@@ -485,10 +560,30 @@ class DataService:
                         messages.c.node_id.in_(node_ids),
                     )
                     .values(is_deleted=1)
-                    .returning(messages.c.message_uid)
+                    .returning(messages.c.id, messages.c.message_uid)
                 )
             )
-            deleted = [{"message_uid": uid} for uid in result.scalars() if uid]
+            deleted_rows = result.mappings().all()
+            if deleted_rows:
+                # Old model tables remain searchable after switching back, so
+                # deletions must also remove their entries while embedding is off.
+                table_names = await database_io(
+                    connection.run_sync(lambda conn: inspect(conn).get_table_names())
+                )
+                message_ids = [row["id"] for row in deleted_rows]
+                for name in table_names:
+                    if re.fullmatch(r"messages_embedding_[0-9a-f]{64}", name):
+                        table = Table(name, MetaData(), Column("message_id", Integer))
+                        await database_io(
+                            connection.execute(
+                                delete(table).where(table.c.message_id.in_(message_ids))
+                            )
+                        )
+            deleted = [
+                {"message_uid": row["message_uid"]}
+                for row in deleted_rows
+                if row["message_uid"]
+            ]
         return {"success": True, "messages": deleted}
 
     @service_handler
@@ -543,47 +638,273 @@ class DataService:
                 Whitespace, underscores and backslashes become LIKE wildcards;
                 percent signs remain wildcards. A keyword containing only those
                 characters returns an empty success without querying the database.
+                Optional ``conversation_uid`` scopes the search. Pass the previous
+                ``next_cursor`` as ``cursor`` to fetch the next page.
 
         Returns:
-            Success: ``{"success": True, "messages": rows}``, at most 300 rows,
-                ordered by conversation activity descending, then message ID
-                descending. Each row contains the complete flat message record
-                with decoded JSON, plus ``title`` and string ``last_active_at``.
-                Internal ``id`` and ``conversation_id`` are not returned.
+            Success: ``{"success": True, "messages": rows, "next_cursor": dict | None}``.
+                At most 20 nodes, newest matching message per conversation/node,
+                ordered by timestamp, msg_cursor and conversation_uid descending.
+                Empty node IDs are treated as separate messages. Rows contain the
+                complete flat message record plus title and last_active_at.
+                The cursor contains timestamp, msg_cursor and conversation_uid;
+                fewer than 20 rows returns None. A full final page may be followed
+                by an empty page. Internal database IDs are not returned.
             Failure: ``{"success": False, "messages": "fail: <error>"}``.
         """
         keyword = payload["keyword"]
         if not re.sub(r"[%_\\\s]+", "", keyword):
-            return {"success": True, "messages": []}
+            return {"success": True, "messages": [], "next_cursor": None}
         keyword = re.sub(r"[_\\\s]+", "%", keyword)
         keyword = re.sub(r"%+", "%", keyword).strip("%")
-        rows = await self._fetch_all(
+        return await self._search_messages_page(
+            payload, messages.c.content.like(f"%{keyword}%")
+        )
+
+    @service_handler
+    async def search_messages_vec(self, payload: dict) -> dict:
+        """Search message bodies by cosine similarity, then paginate by time.
+
+        Uses the same payload, node grouping, ordering and cursor as
+        ``search_messages``. Optional ``min_similarity`` defaults to 0.5 and must
+        be between -1 and 1. Each row also includes ``similarity``. Joining live
+        messages and conversations excludes stale vectors before the page limit.
+        Disabled embedding delegates directly to keyword search.
+        """
+        if self._embedding is None:
+            return await self.search_messages(payload)
+        keyword = payload["keyword"].strip()
+        if not keyword:
+            return {"success": True, "messages": [], "next_cursor": None}
+        minimum = float(payload.get("min_similarity", 0.5))
+        if not -1 <= minimum <= 1:
+            raise ValueError("min_similarity must be between -1 and 1")
+        vector = (await self._embedding.encode([keyword], query=True))[0]
+        table = self._embedding.table
+        similarity = 1 - func.vec_distance_cosine(table.c.embedding, vector)
+        return await self._search_messages_page(
+            payload, similarity >= minimum, similarity=similarity
+        )
+
+    async def _search_messages_page(
+        self,
+        payload: dict,
+        predicate: ColumnElement[bool],
+        *,
+        similarity: ColumnElement[float] | None = None,
+    ) -> dict:
+        source = messages.join(
+            conversations, conversations.c.id == messages.c.conversation_id
+        )
+        extra_columns = []
+        if similarity is not None:
+            table = self._embedding.table
+            source = source.join(table, table.c.message_id == messages.c.id)
+            extra_columns.append(similarity.label("similarity"))
+        matches = (
             select(
                 *MESSAGE_RECORD_COLUMNS,
                 conversations.c.title,
                 conversations.c.last_active_at,
-            )
-            .select_from(
-                messages.join(
-                    conversations, conversations.c.id == messages.c.conversation_id
+                *extra_columns,
+                func.row_number()
+                .over(
+                    partition_by=(
+                        messages.c.conversation_id,
+                        messages.c.node_id,
+                        case(
+                            (messages.c.node_id == "", messages.c.message_uid),
+                            else_="",
+                        ),
+                    ),
+                    order_by=(
+                        messages.c.timestamp.desc(),
+                        messages.c.msg_cursor.desc(),
+                    ),
                 )
+                .label("node_rank"),
             )
+            .select_from(source)
             .where(
                 conversations.c.user_uid == payload["user_uid"],
                 conversations.c.is_deleted == 0,
                 messages.c.is_deleted == 0,
                 messages.c.role.in_(["user", "assistant"]),
-                messages.c.content.like(f"%{keyword}%"),
+                predicate,
             )
-            .order_by(conversations.c.last_active_at.desc(), messages.c.id.desc())
-            .limit(300),
+        )
+        if payload.get("conversation_uid") is not None:
+            matches = matches.where(
+                conversations.c.conversation_uid == payload["conversation_uid"]
+            )
+        grouped = matches.subquery()
+        page = select(*(c for c in grouped.c if c.name != "node_rank")).where(
+            grouped.c.node_rank == 1
+        )
+        if cursor := payload.get("cursor"):
+            page = page.where(
+                tuple_(
+                    grouped.c.timestamp,
+                    grouped.c.msg_cursor,
+                    grouped.c.conversation_uid,
+                )
+                < tuple_(
+                    cursor["timestamp"].replace("T", " "),
+                    int(cursor["msg_cursor"]),
+                    cursor["conversation_uid"],
+                )
+            )
+        rows = await self._fetch_all(
+            page.order_by(
+                grouped.c.timestamp.desc(),
+                grouped.c.msg_cursor.desc(),
+                grouped.c.conversation_uid.desc(),
+            ).limit(20),
             json_fields=("content",),
             row_decoder=decode_message_row,
         )
         return {
             "success": True,
             "messages": rows,
+            "next_cursor": {
+                key: rows[-1][key]
+                for key in ("timestamp", "msg_cursor", "conversation_uid")
+            }
+            if len(rows) == 20
+            else None,
         }
+
+    def _unindexed_messages(self) -> Select:
+        table = self._embedding.table
+        return select(messages.c.id, messages.c.content).where(
+            messages.c.is_deleted == 0,
+            messages.c.role.in_(["user", "assistant"]),
+            ~select(table.c.message_id)
+            .where(table.c.message_id == messages.c.id)
+            .exists(),
+        )
+
+    async def _embed_message_rows(self, rows: list[dict]) -> int:
+        bodies = []
+        for row in rows:
+            body = "\n".join(
+                block["text"] for block in row["content"] if block["type"] == "text"
+            )
+            if body.strip():
+                bodies.append((row["id"], body))
+        if not bodies:
+            return 0
+        vectors = await self._embedding.encode([body for _, body in bodies])
+        return await self._execute(
+            sqlite_insert(self._embedding.table).on_conflict_do_nothing(
+                index_elements=["message_id"]
+            ),
+            [
+                {"message_id": message_id, "embedding": vector}
+                for (message_id, _), vector in zip(bodies, vectors, strict=True)
+            ],
+        )
+
+    async def _index_message(self, message_id: int) -> None:
+        rows = await self._fetch_all(
+            self._unindexed_messages().where(messages.c.id == message_id),
+            json_fields=("content",),
+        )
+        await self._embed_message_rows(rows)
+
+    @service_handler
+    async def sync_messages_embedding(self, payload: dict | None = None) -> dict:
+        """Submit a background reconciliation of the current model's index.
+
+        Args:
+            payload: Optional unused dictionary; pass ``{}`` through the store
+                action. Requires an initialized service with embedding enabled.
+
+        Returns:
+            Success: ``{"success": True, "messages": {"task_id": str}}``.
+                Returns immediately. While a sync is active, repeated calls
+                return the same task ID without starting or queuing another sync.
+                Caller cancellation does not cancel the submitted task. Use
+                ``get_messages_embedding_sync_status`` to query its progress.
+                After completion or failure, another call starts a new task.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``, including
+                when embedding is disabled. Background failures are recorded in
+                task status instead of being returned by this submission call.
+        """
+        if self._embedding is None:
+            raise RuntimeError("SQLite message embedding is disabled")
+        # Admission has no await: calls on the store loop share one active task.
+        if self._embedding_sync_task is None or self._embedding_sync_task.done():
+            self._embedding_sync_status = {
+                "task_id": str(uuid4()),
+                "status": "running",
+                "inserted": 0,
+                "deleted": 0,
+                "error": None,
+            }
+            self._embedding_sync_task = asyncio.create_task(
+                self._sync_messages_embedding(self._embedding_sync_status)
+            )
+        return {
+            "success": True,
+            "messages": {"task_id": self._embedding_sync_status["task_id"]},
+        }
+
+    @service_handler
+    async def get_messages_embedding_sync_status(
+        self, payload: dict | None = None
+    ) -> dict:
+        """Get a snapshot of the current model's most recent sync task.
+
+        Args:
+            payload: Optional dictionary with ``task_id`` to identify the task.
+                Omit it or pass ``{}`` to query the most recent task.
+
+        Returns:
+            Success: ``{"success": True, "messages": status}``. Status contains
+                ``task_id``, ``status`` (running/completed/failed), ``inserted``
+                and ``deleted`` committed record counts, and nullable ``error``.
+                Only the most recent task is retained; restarting the service
+                clears this in-memory status.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``, when
+                no task exists or ``task_id`` does not identify the retained task.
+        """
+        status = self._embedding_sync_status
+        if status is None:
+            raise ValueError("No message embedding sync task has been submitted")
+        if payload and payload.get("task_id", status["task_id"]) != status["task_id"]:
+            raise ValueError("Message embedding sync task not found")
+        return {"success": True, "messages": dict(status)}
+
+    async def _sync_messages_embedding(self, status: dict[str, Any]) -> None:
+        """Reconcile missing and stale vectors, recording committed progress."""
+        try:
+            await self._wait_for_embedding_tasks()
+            table = self._embedding.table
+            status["deleted"] = await self._execute(
+                delete(table).where(
+                    ~select(messages.c.id)
+                    .where(
+                        messages.c.id == table.c.message_id, messages.c.is_deleted == 0
+                    )
+                    .exists()
+                )
+            )
+            last_id = 0
+            while rows := await self._fetch_all(
+                self._unindexed_messages()
+                .where(messages.c.id > last_id)
+                .order_by(messages.c.id)
+                .limit(64),
+                json_fields=("content",),
+            ):
+                status["inserted"] += await self._embed_message_rows(rows)
+                last_id = rows[-1]["id"]
+            status["status"] = "completed"
+        except Exception as exc:  # noqa: BLE001 - background task failure boundary
+            status["status"] = "failed"
+            status["error"] = f"{type(exc).__name__}: {exc}"
+            logger.exception("Message embedding sync failed: %s", exc)
 
     # --------------------------------------------------
     # Skills

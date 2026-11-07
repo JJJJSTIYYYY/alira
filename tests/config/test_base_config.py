@@ -28,6 +28,29 @@ def test_application_owns_storage_root_configuration(monkeypatch, base_dir):
     assert settings["SQLITE_DATABASE"] == os.path.join(
         settings["ALIRA_BASE_DIR"], "sqlite", "alira.sqlite3"
     )
+    assert settings["SQLITE_EMBEDDING_MODEL"] == ""
+    assert settings["SQLITE_EMBEDDING_ENABLE"] is False
+    assert settings["VECTOR_DIMENSION"] == 640
+
+
+def test_sqlite_embedding_configuration(monkeypatch):
+    monkeypatch.setattr(
+        shared_config,
+        "_config",
+        {
+            "DATABASE": {
+                "sqlite": {
+                    "embedding_model": "/models/embedding",
+                    "embedding_enable": True,
+                    "vector_dimension": 768,
+                }
+            }
+        },
+    )
+    settings = runpy.run_path(config.__file__)
+    assert settings["SQLITE_EMBEDDING_MODEL"] == "/models/embedding"
+    assert settings["SQLITE_EMBEDDING_ENABLE"] is True
+    assert settings["VECTOR_DIMENSION"] == 768
 
 
 @pytest.mark.parametrize("data_store", ["sqlite", "mysql"])

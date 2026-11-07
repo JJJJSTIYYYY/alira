@@ -521,6 +521,7 @@ async def test_users_conversations_and_messages(db, monkeypatch):
     assert await db.search_messages({"user_uid": "user-1", "keyword": "% _ \\"}) == {
         "success": True,
         "messages": [],
+        "next_cursor": None,
     }
 
     deleted = await db.delete_messages(

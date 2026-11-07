@@ -24,6 +24,12 @@ dependencies = [
     "my-llm-py[all]>=2.0.1",
 ]
 
+[project.optional-dependencies]
+embedding = [
+    "sentence-transformers>=5.7,<6",
+    "sqlite-vec>=0.1.6,<0.2",
+]
+
 [project.urls]
 Repository = "https://github.com/JJJJSTIYYYY/alira"
 Issues = "https://github.com/JJJJSTIYYYY/alira/issues"

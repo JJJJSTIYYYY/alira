@@ -12,8 +12,8 @@ from alira.database.services.files import FileService
 from alira.database.utils.handlers import store_action
 from alira.database.utils.message_tree import MessageNodeTree
 from alira.database.utils.serialization import decode_message_row
-from alira.utils.logger import logger
 from alira.shared.message import AliraMessageExtension
+from alira.utils.logger import logger
 
 
 class StoreExecutor:
@@ -315,10 +315,11 @@ class StoreExecutor:
             guess_children=True,
         )
 
-    @store_action
-    async def search_messages(self, payload: dict) -> dict:
+    async def _search_messages(
+        self, payload: dict, reader: Callable[[dict], Awaitable[dict]]
+    ) -> dict:
         """Return business messages with conversation details kept separately."""
-        result = await self.data_store.search_messages(payload)
+        result = await reader(payload)
         if not result.get("success"):
             return result
         conversations = {}
@@ -330,6 +331,44 @@ class StoreExecutor:
             }
             messages.append(AliraMessageExtension.from_record(row))
         return {**result, "messages": messages, "conversations": conversations}
+
+    @store_action
+    async def search_messages(self, payload: dict) -> dict:
+        """Search message nodes by keyword with a chronological cursor."""
+        return await self._search_messages(payload, self.data_store.search_messages)
+
+    @store_action
+    async def search_messages_vec(self, payload: dict) -> dict:
+        """Search message nodes by embedding, falling back to keyword search."""
+        return await self._search_messages(payload, self.data_store.search_messages_vec)
+
+    @store_action
+    async def sync_messages_embedding(self, payload: dict) -> dict:
+        """Submit or reuse the current model's background embedding sync.
+
+        Args:
+            payload: Unused dictionary; pass ``{}``.
+
+        Returns:
+            Success: ``{"success": True, "messages": {"task_id": str}}``.
+                First and repeated submissions share the same response contract.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
+        return await self.data_store.sync_messages_embedding(payload)
+
+    @store_action
+    async def get_messages_embedding_sync_status(self, payload: dict) -> dict:
+        """Read the current model's latest sync status.
+
+        Args:
+            payload: Optional ``task_id``; an empty dictionary selects the latest.
+
+        Returns:
+            Success: ``{"success": True, "messages": status}``, containing
+                task_id, status, inserted, deleted and error fields.
+            Failure: ``{"success": False, "messages": "fail: <error>"}``.
+        """
+        return await self.data_store.get_messages_embedding_sync_status(payload)
 
     @store_action
     async def get_branch_chain(self, payload: dict) -> dict:

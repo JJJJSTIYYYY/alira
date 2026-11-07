@@ -329,6 +329,103 @@ async def test_timeout_abandons_queued_work_without_losing_workers(
         await manager.stop()
 
 
+async def test_embedding_sync_survives_request_timeout_and_reuses_one_store_task(
+    tmp_path, monkeypatch
+):
+    import struct
+
+    pytest.importorskip("sqlite_vec")
+    from alira.database.services.data import service as data_module
+    from alira.database.services.data.embedding import MessageEmbedding
+
+    manager = StoreManager(
+        db_path=tmp_path / "store.sqlite3",
+        cache_path=tmp_path / "cache.json",
+        worker_count=1,
+    )
+    monkeypatch.setattr(manager_module, "_store_manager", manager)
+    monkeypatch.setattr(data_module, "SQLITE_EMBEDDING_ENABLE", False)
+    entered, release = threading.Event(), threading.Event()
+    encoded = []
+
+    async def blocked_encode(self, texts, *, query=False):
+        encoded.append(texts)
+        entered.set()
+        await wait_in_store(release)
+        return [struct.pack("2f", 1.0, 0.0) for _ in texts]
+
+    responses = []
+    response_ready = asyncio.Event()
+
+    async def request_handler():
+        responses.append(await query_store("sync_messages_embedding", {}))
+        response_ready.set()
+        # The request times out before its prepared response reaches the client.
+        await asyncio.Event().wait()
+
+    async def wait_completed():
+        while True:
+            result = await query_store("get_messages_embedding_sync_status", {})
+            if result["messages"]["status"] != "running":
+                return result["messages"]
+            await asyncio.sleep(0.001)
+
+    request = None
+    try:
+        identity = await create_conversation(manager)
+        await query_store(
+            "append_message",
+            {
+                **identity,
+                "message": {
+                    "message_uid": "history",
+                    "node_id": "n1",
+                    "role": "user",
+                    "content": [{"type": "text", "text": "history body"}],
+                },
+            },
+        )
+        await manager.stop()
+        model_path = tmp_path / "model"
+        model_path.mkdir()
+        monkeypatch.setattr(data_module, "SQLITE_EMBEDDING_ENABLE", True)
+        monkeypatch.setattr(data_module, "SQLITE_EMBEDDING_MODEL", str(model_path))
+        monkeypatch.setattr(data_module, "VECTOR_DIMENSION", 2)
+        monkeypatch.setattr(MessageEmbedding, "encode", blocked_encode)
+        request = asyncio.create_task(request_handler())
+        await asyncio.wait_for(response_ready.wait(), timeout=2)
+        await wait_for_thread(entered)
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(request, timeout=0.01)
+
+        # Even with one request worker, an active sync cannot hold up these calls.
+        duplicates = await asyncio.wait_for(
+            asyncio.gather(
+                *(query_store("sync_messages_embedding", {}) for _ in range(20))
+            ),
+            timeout=2,
+        )
+        assert all(result == responses[0] for result in duplicates)
+        assert encoded == [["history body"]]
+        running = await query_store("get_messages_embedding_sync_status", {})
+        assert running["messages"]["status"] == "running"
+        assert running["messages"]["task_id"] == responses[0]["messages"]["task_id"]
+        assert (await query_store("ensure_user_exists", {"user_uid": "user-1"}))[
+            "success"
+        ]
+        release.set()
+        completed = await asyncio.wait_for(wait_completed(), timeout=3)
+        assert completed["status"] == "completed"
+        assert completed["inserted"] == 1
+        assert completed["error"] is None
+    finally:
+        release.set()
+        if request is not None and not request.done():
+            request.cancel()
+            await asyncio.gather(request, return_exceptions=True)
+        await manager.stop()
+
+
 @pytest.mark.parametrize("worker_count", [1, 2])
 async def test_shutdown_cancels_all_pending_work_then_allows_restart(
     tmp_path, monkeypatch, worker_count
@@ -722,8 +819,9 @@ async def test_tool_role_survives_branch_filter_cache_and_restart(manager):
     ]
 
 
+@pytest.mark.parametrize("action", ["search_messages", "search_messages_vec"])
 async def test_search_returns_business_messages_and_separate_conversation_details(
-    manager,
+    manager, action
 ):
     from my_llm import TextContent
 
@@ -751,7 +849,7 @@ async def test_search_returns_business_messages_and_separate_conversation_detail
             await manager.query("append_message", {**payload, "message": incoming})
         )["success"]
 
-    result = await manager.query("search_messages", {**payload, "keyword": "find"})
+    result = await manager.query(action, {**payload, "keyword": "find"})
     assert result["success"]
     assert len(result["messages"]) == 2
     for found, message in zip(result["messages"], reversed(original), strict=True):
@@ -774,5 +872,10 @@ async def test_search_returns_business_messages_and_separate_conversation_detail
     conversation = result["conversations"][payload["conversation_uid"]]
     assert conversation["title"] == "New Conversation..."
     assert "T" in conversation["last_active_at"]
-    empty = await manager.query("search_messages", {**payload, "keyword": "missing"})
-    assert empty == {"success": True, "messages": [], "conversations": {}}
+    empty = await manager.query(action, {**payload, "keyword": "missing"})
+    assert empty == {
+        "success": True,
+        "messages": [],
+        "conversations": {},
+        "next_cursor": None,
+    }
