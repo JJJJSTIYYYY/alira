@@ -13,7 +13,7 @@ from alira.database.utils.handlers import store_action
 from alira.database.utils.message_tree import MessageNodeTree
 from alira.database.utils.serialization import decode_message_row
 from alira.utils.logger import logger
-from alira.utils.message import AliraMessageExtension
+from alira.shared.message import AliraMessageExtension
 
 
 class StoreExecutor:

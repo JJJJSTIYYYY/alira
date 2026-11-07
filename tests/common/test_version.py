@@ -3,7 +3,7 @@
 from importlib.metadata import version
 
 from alira import __version__
-from alira.utils.version import compare_version
+from alira.shared.version import compare_version
 
 
 def test_installed_distribution_matches_package_version():

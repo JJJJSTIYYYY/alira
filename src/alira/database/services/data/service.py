@@ -14,7 +14,7 @@ from sqlalchemy import case, func, insert, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from sqlalchemy.sql import Executable
 
-from alira.config.base_config import SQLITE_DATABASE
+from alira.shared.config import SQLITE_DATABASE
 from alira.database.services.data.engine import (
     create_engine,
     database_io,
@@ -40,7 +40,7 @@ from alira.database.utils.serialization import (
     encode_optional_json,
     normalize_row,
 )
-from alira.utils.message import message_wire_from_record
+from alira.shared.message import message_wire_from_record
 
 MESSAGE_RECORD_COLUMNS = tuple(
     column for column in messages.c if column.name not in {"id", "conversation_id"}

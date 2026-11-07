@@ -30,7 +30,7 @@ from alira.agent.core.tool import (
     ToolNode,
     tool,
 )
-from alira.utils.message import (
+from alira.shared.message import (
     AliraAssistantMessage,
     AliraToolMessage,
     AliraUserMessage,

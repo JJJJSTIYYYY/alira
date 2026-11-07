@@ -9,7 +9,7 @@ Alira 使用 `my-llm-py[all]>=2.0.1`。应用层统一传递 middleware 的 `Mes
 ```python
 from my_llm import TextContent
 from alira.agent.core.bot import AliraBot
-from alira.utils.message import AliraAssistantMessage, AliraUserMessage
+from alira.shared.message import AliraAssistantMessage, AliraUserMessage
 
 async with AliraBot(provider="deepseek", model="deepseek-flash", api_key="...") as bot:
     history = [AliraUserMessage(content=[TextContent("你好")])]
@@ -42,7 +42,7 @@ async with AliraBot(provider="deepseek", model="deepseek-flash", api_key="...") 
 ```python
 from my_llm import ToolCall
 from alira.agent.core.tool import ToolNode, tool
-from alira.utils.message import AliraAssistantMessage, AliraUserMessage
+from alira.shared.message import AliraAssistantMessage, AliraUserMessage
 
 @tool
 def weather(city: str) -> str:
@@ -107,7 +107,7 @@ Profile 使用库的 `Attribute`、`Config`、`InputParameter` 和 `OutputParame
 由业务调用方为这一整轮分配，不要每条消息重新生成。`metadata` 存用量等信息，
 `extensions` 存上传文件、任务等业务数据。
 
-业务消息统一定义在 `alira.utils.message`：`AliraSystemMessage`（含 developer）、
+业务消息统一定义在 `alira.shared.message`：`AliraSystemMessage`（含 developer）、
 `AliraUserMessage`、`AliraAssistantMessage` 和 `AliraToolMessage`，联合类型为
 `AliraMessage`，共享业务字段与扩展属性由 `AliraMessageExtension` 提供。
 各消息类均支持 `from_middleware()`，用于在对应的原生 middleware 消息上附加业务字段，

@@ -1,6 +1,6 @@
 """HTTP application and Uvicorn entry point with shared application logging."""
 
-from alira.utils.version import print_logo
+from alira.shared.version import print_logo
 
 print_logo()
 
@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 import alira.router as routers_pkg
 from alira._version import __version__
 from alira.utils.logger import get_uvicorn_log_config, logger
-from alira.config.base_config import BASE_URL
+from alira.shared.config import BASE_URL
 from alira.lifespan.auto_init import auto_init
 
 

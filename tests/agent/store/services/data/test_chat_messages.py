@@ -13,7 +13,7 @@ from my_llm import (
 )
 
 from alira.database.services.data import DataService
-from alira.utils.message import (
+from alira.shared.message import (
     AliraAssistantMessage,
     AliraMessageExtension,
     AliraSystemMessage,

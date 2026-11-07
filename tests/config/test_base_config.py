@@ -6,24 +6,24 @@ import runpy
 import pytest
 from apixis.core.config import base as shared_config
 
-from alira.config import base_config
+from alira.shared import config
 
 
 def test_business_settings_use_apixis_configuration():
-    assert base_config._get_config is shared_config._get_config
-    assert base_config.ALIRA_BASE_DIR == shared_config._get_config(
+    assert config._get_config is shared_config._get_config
+    assert config.ALIRA_BASE_DIR == shared_config._get_config(
         "SERVER.base_dir", "./.alira_data/"
     )
-    assert base_config.SQLITE_DATABASE == shared_config._get_config(
+    assert config.SQLITE_DATABASE == shared_config._get_config(
         "DATABASE.sqlite.database",
-        os.path.join(base_config.ALIRA_BASE_DIR, "sqlite", "alira.sqlite3"),
+        os.path.join(config.ALIRA_BASE_DIR, "sqlite", "alira.sqlite3"),
     )
 
 
 @pytest.mark.parametrize("base_dir", [None, "/tmp/alira-data"])
 def test_application_owns_storage_root_configuration(monkeypatch, base_dir):
     monkeypatch.setattr(shared_config, "_config", {"SERVER": {"base_dir": base_dir}})
-    settings = runpy.run_path(base_config.__file__)
+    settings = runpy.run_path(config.__file__)
     assert settings["ALIRA_BASE_DIR"] == (base_dir or "./.alira_data/")
     assert settings["SQLITE_DATABASE"] == os.path.join(
         settings["ALIRA_BASE_DIR"], "sqlite", "alira.sqlite3"
@@ -69,7 +69,7 @@ def test_storage_settings_ignore_removed_backends(monkeypatch, data_store, cache
             "RUNTIME": {"cache_clean_interval": 41},
         },
     )
-    settings = runpy.run_path(base_config.__file__)
+    settings = runpy.run_path(config.__file__)
     assert settings["SQLITE_DATABASE"] == "/tmp/custom-alira.sqlite3"
     assert settings["WORKER_COUNT"] == 2
     assert settings["HOT_CACHE_DEFAULT_EXPIRE_SECONDS"] == 17

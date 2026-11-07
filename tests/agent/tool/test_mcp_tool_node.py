@@ -14,7 +14,7 @@ import pytest_asyncio
 from alira.agent.core.tool import BaseTool, FunctionToolManager, Tool, ToolNode
 from alira.agent.core.tool.mcp import MCPTool, MCPToolError, MCPToolManager
 from alira.agent.core.tool.mcp.base import _convert_call_tool_result
-from alira.utils.message import AliraAssistantMessage
+from alira.shared.message import AliraAssistantMessage
 
 META = {
     "mcp_id": "test-mcp",

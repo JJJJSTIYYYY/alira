@@ -16,7 +16,7 @@ from my_llm import (
     ToolCall,
 )
 
-from alira.utils.message import (
+from alira.shared.message import (
     AliraAssistantMessage,
     AliraSystemMessage,
     AliraToolMessage,

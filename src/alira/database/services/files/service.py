@@ -11,7 +11,7 @@ from alira.database.services.files.packages import (
 )
 from alira.database.utils.handlers import service_handler
 from alira.utils.logger import logger
-from alira.config.base_config import ALIRA_BASE_DIR
+from alira.shared.config import ALIRA_BASE_DIR
 
 
 class FileService:

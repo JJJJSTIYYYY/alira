@@ -8,7 +8,7 @@ from my_llm import (
     ToolCall,
 )
 
-from alira.utils.message import AliraAssistantMessage
+from alira.shared.message import AliraAssistantMessage
 
 
 def test_completed_library_message_keeps_ordered_middleware_content():

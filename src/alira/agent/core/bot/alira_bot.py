@@ -20,7 +20,7 @@ from my_llm import (
 from alira.agent.core.bot.provider import BaseProvider
 from alira.agent.core.tool import BaseTool, ToolNode
 from alira.agent.core.utils.context import RoleSchema, to_prompt
-from alira.utils.message import AliraAssistantMessage
+from alira.shared.message import AliraAssistantMessage
 
 
 class AliraBot:

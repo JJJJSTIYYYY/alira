@@ -33,7 +33,7 @@ from alira.agent.core.tool import (
     tool,
 )
 from alira.agent.core.utils.exception import InvalidToolArgsError
-from alira.utils.message import (
+from alira.shared.message import (
     AliraAssistantMessage,
     AliraToolMessage,
 )

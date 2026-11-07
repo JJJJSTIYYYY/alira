@@ -19,10 +19,9 @@
 
 - Keep implementations simple, readable, and free of redundant logic, dead code, and unnecessary abstractions.
 - Prefer straightforward control flow over excessive branching and deeply nested conditions.
-- Centralize genuinely reusable utility functions in the appropriate `utils` directory.
-- Search for and reuse existing utilities before introducing new ones.
-- Do not create utility wrappers that merely delegate to an existing function without adding meaningful functionality.
-- Remove obsolete code and unnecessary compatibility layers when they are no longer required.
+- Search for and reuse existing functions before introducing new ones.
+- Place reusable business-related functions and methods in `shared`, and business-agnostic utilities in `utils`.
+- Avoid unnecessary wrappers, obsolete code, and compatibility layers that no longer serve a purpose.
 
 ### 4. Abstraction and Module Boundaries
 
