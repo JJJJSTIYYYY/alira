@@ -65,6 +65,7 @@ from alira.shared.application.config import (
     SQLITE_DATABASE,
     SQLITE_EMBEDDING_ENABLE,
     SQLITE_EMBEDDING_MODEL,
+    SQLITE_EMBEDDING_OPTIONS,
     VECTOR_DIMENSION,
 )
 from alira.shared.models.message import message_wire_from_record
@@ -117,7 +118,11 @@ class DataService:
             engine = create_engine(self._db_path)
             try:
                 embedding = (
-                    MessageEmbedding(SQLITE_EMBEDDING_MODEL, VECTOR_DIMENSION)
+                    MessageEmbedding(
+                        SQLITE_EMBEDDING_MODEL,
+                        VECTOR_DIMENSION,
+                        **SQLITE_EMBEDDING_OPTIONS,
+                    )
                     if SQLITE_EMBEDDING_ENABLE
                     else None
                 )

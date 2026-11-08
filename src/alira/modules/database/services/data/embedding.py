@@ -1,9 +1,10 @@
 """Local message embeddings and model-specific SQLite vector tables."""
 
 import asyncio
+import json
 from hashlib import sha256
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     CheckConstraint,
@@ -25,7 +26,22 @@ if TYPE_CHECKING:
 class MessageEmbedding:
     """Serialize local model inference and own its separate vector table."""
 
-    def __init__(self, model_path: str, dimension: int) -> None:
+    def __init__(
+        self,
+        model_path: str,
+        dimension: int,
+        *,
+        device: str | None = None,
+        prompts: dict[str, str] | None = None,
+        query_prompt_name: str | None = None,
+        document_prompt_name: str | None = None,
+        trust_remote_code: bool = False,
+        model_kwargs: dict[str, Any] | None = None,
+        truncate_dim: int | None = None,
+        max_seq_length: int | None = None,
+        batch_size: int = 32,
+        normalize_embeddings: bool = True,
+    ) -> None:
         if not model_path.strip():
             raise ValueError("SQLITE_EMBEDDING_MODEL must be a local model directory")
         path = Path(model_path).expanduser().resolve()
@@ -40,9 +56,38 @@ class MessageEmbedding:
 
         self._model_path = str(path)
         self._dimension = dimension
+        self._model_options = {
+            "device": device,
+            "prompts": prompts,
+            "trust_remote_code": trust_remote_code,
+            "model_kwargs": model_kwargs,
+            "truncate_dim": truncate_dim,
+        }
+        self._encode_options = {
+            "batch_size": batch_size,
+            "normalize_embeddings": normalize_embeddings,
+        }
+        self._query_prompt_name = query_prompt_name
+        self._document_prompt_name = document_prompt_name
+        self._max_seq_length = max_seq_length
         self._model: SentenceTransformer | None = None
         self._lock = asyncio.Lock()
-        identity = sha256(f"{path}\0{dimension}".encode()).hexdigest()
+        identity = sha256(
+            json.dumps(
+                {
+                    "model_path": self._model_path,
+                    "dimension": dimension,
+                    "prompts": prompts,
+                    "document_prompt_name": document_prompt_name,
+                    "model_kwargs": model_kwargs,
+                    "trust_remote_code": trust_remote_code,
+                    "truncate_dim": truncate_dim,
+                    "max_seq_length": max_seq_length,
+                    "normalize_embeddings": normalize_embeddings,
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
         self.table = Table(
             f"messages_embedding_{identity}",
             MetaData(),
@@ -62,7 +107,11 @@ class MessageEmbedding:
         if self._model is None:
             from sentence_transformers import SentenceTransformer
 
-            model = SentenceTransformer(self._model_path, local_files_only=True)
+            model = SentenceTransformer(
+                self._model_path, local_files_only=True, **self._model_options
+            )
+            if self._max_seq_length is not None:
+                model.max_seq_length = self._max_seq_length
             dimension = model.get_embedding_dimension()
             if dimension != self._dimension:
                 raise ValueError(
@@ -72,26 +121,15 @@ class MessageEmbedding:
             self._model = model
 
         model = self._model
-        if query:
-            # Harrier names its retrieval instruction differently from the
-            # standard Sentence Transformers query prompt.
-            prompt_name = (
-                "web_search_query"
-                if "query" not in model.prompts and "web_search_query" in model.prompts
-                else None
-            )
-            vectors = model.encode_query(
-                texts,
-                prompt_name=prompt_name,
-                normalize_embeddings=True,
-                show_progress_bar=False,
-            )
-        else:
-            vectors = model.encode_document(
-                texts,
-                normalize_embeddings=True,
-                show_progress_bar=False,
-            )
+        encode = model.encode_query if query else model.encode_document
+        prompt_name = self._query_prompt_name if query else self._document_prompt_name
+        vectors = encode(
+            texts,
+            prompt_name=prompt_name,
+            precision="float32",
+            show_progress_bar=False,
+            **self._encode_options,
+        )
         return [vector.astype("float32", copy=False).tobytes() for vector in vectors]
 
     async def close(self) -> None:

@@ -30,6 +30,7 @@ def test_application_owns_storage_root_configuration(monkeypatch, base_dir):
     )
     assert settings["SQLITE_EMBEDDING_MODEL"] == ""
     assert settings["SQLITE_EMBEDDING_ENABLE"] is False
+    assert settings["SQLITE_EMBEDDING_OPTIONS"] == {}
     assert settings["VECTOR_DIMENSION"] == 640
 
 
@@ -42,6 +43,10 @@ def test_sqlite_embedding_configuration(monkeypatch):
                 "sqlite": {
                     "embedding_model": "/models/embedding",
                     "embedding_enable": True,
+                    "embedding_options": {
+                        "device": "cpu",
+                        "query_prompt_name": "retrieval",
+                    },
                     "vector_dimension": 768,
                 }
             }
@@ -50,6 +55,10 @@ def test_sqlite_embedding_configuration(monkeypatch):
     settings = runpy.run_path(config.__file__)
     assert settings["SQLITE_EMBEDDING_MODEL"] == "/models/embedding"
     assert settings["SQLITE_EMBEDDING_ENABLE"] is True
+    assert settings["SQLITE_EMBEDDING_OPTIONS"] == {
+        "device": "cpu",
+        "query_prompt_name": "retrieval",
+    }
     assert settings["VECTOR_DIMENSION"] == 768
 
 

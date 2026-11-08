@@ -1,6 +1,8 @@
 # 消息检索
 
 `DataService.search_messages` 提供关键词检索，`search_messages_vec` 提供本地模型向量检索。
+一般使用 `search_messages`；用户选择按语义搜索聊天记录，或 agent 只能描述历史消息的大意时，
+再调用 `search_messages_vec`，其 `keyword` 参数填写自然语言描述。本项目不接入远程向量模型服务。
 两者只返回当前用户在未删除会话中的未删除用户消息和 AI 消息，每个消息节点最多一条，按消息
 `timestamp` 倒序分页，每页最多 20 条。`msg_cursor` 与 `conversation_uid` 倒序用于时间戳相同时的稳定排序。
 
@@ -21,15 +23,59 @@ DATABASE:
     embedding_enable: true
     embedding_model: "/path/to/model"
     vector_dimension: 640
+    embedding_options: {}
 ```
 
 对应配置常量为 `SQLITE_EMBEDDING_ENABLE`、`SQLITE_EMBEDDING_MODEL` 和 `VECTOR_DIMENSION`，默认值分别为
 `false`、空字符串和 `640`。维度必须与模型实际输出一致；例如 Harrier OSS v1 270M 使用 640 维。
 模型从本地目录加载，首次需要推理时才加载，模型加载与推理在线程中执行。
 
-向量以 float32 BLOB 存入独立的 SQLAlchemy 表，表名由规范化模型路径和维度的哈希确定。
+`embedding_options` 对应 `SQLITE_EMBEDDING_OPTIONS`，默认 `{}`。只开放现有 float32 存储和余弦检索
+链路适用的 Sentence Transformers 常用参数：
+
+| 参数 | 默认值 | 用途 |
+| --- | --- | --- |
+| `device` | `null` | 自动选择设备，也可指定 `cpu`、`cuda:0`、`mps`。 |
+| `prompts` | `null` | 传给模型的提示词字典，例如 `{query: "query: ", document: "passage: "}`。 |
+| `query_prompt_name` | `null` | 传给 `encode_query` 的 `prompt_name`；不指定时沿用框架行为。 |
+| `document_prompt_name` | `null` | 传给 `encode_document` 的 `prompt_name`；不指定时沿用框架行为。 |
+| `trust_remote_code` | `false` | 是否允许加载本地模型目录附带的自定义 Python 实现。 |
+| `model_kwargs` | `null` | 传给底层 Transformers 模型的参数，例如 `{dtype: float16}`。 |
+| `truncate_dim` | `null` | 传给模型构造函数的输出截维参数；仅在模型支持相应降维方式时使用。 |
+| `max_seq_length` | `null` | 覆盖模型的最大输入 token 数；不指定时保留模型配置，超长输入截断。 |
+| `batch_size` | `32` | 模型推理批量大小；不改变历史消息同步每批读取 64 条的行为。 |
+| `normalize_embeddings` | `true` | 是否对输出向量做 L2 归一化。 |
+
+`query_prompt_name`、`document_prompt_name` 分别传给两个编码方法的 `prompt_name` 参数；
+其余参数使用库接口原名。提示词前缀直接写入 `prompts`，空字符串表示该提示词不添加前缀。
+不识别的配置项会报错，不会静默忽略。`model_kwargs.dtype` 控制模型计算精度，最终保存的向量仍统一为 float32。
+不开放输出量化 `precision`、token 级输出 `output_value`、相似度函数或推理后端切换等配置。
+sqlite-vec 自身支持其他向量类型，但本项目的 BLOB 长度约束和余弦检索链路固定使用 float32。
+
+例如 Harrier 的查询提示词通过配置选择，代码中不再识别模型或提示词名称：
+
+```yaml
+embedding_options:
+  query_prompt_name: "web_search_query"
+```
+
+E5 等需要查询/文档前缀的模型可以直接使用原生提示词字典：
+
+```yaml
+embedding_options:
+  prompts:
+    query: "query: "
+    document: "passage: "
+```
+
+使用 `truncate_dim` 时，`vector_dimension` 必须等于截维后的实际输出维度；仅修改
+`vector_dimension` 不会使模型降维。不提供模型专属任务适配或向量后处理。
+
+向量以 float32 BLOB 存入独立的 SQLAlchemy 表，表名由规范化模型路径、维度和文档编码配置的哈希确定。
 `messages` 表结构保持原样。检索使用 SQLite 的 `sqlite-vec` 余弦距离函数进行精确扫描，适合本地消息存储，
-不提供 ANN 索引。同路径、同维度视为同一个模型；更换模型文件时应使用新目录。
+不提供 ANN 索引。`prompts` 整体、文档提示词选择、`model_kwargs`、`trust_remote_code`、截维、输入长度及
+归一化设置参与表标识；`device`、`batch_size` 和 `query_prompt_name` 不参与。更换模型文件时应使用新目录。
+表标识加入编码配置后，不再复用旧的仅按路径和维度命名的向量表；历史消息需要手动同步，旧表不会自动删除。
 
 只有 `user`、`assistant` 消息的顶层 `text` 内容块参与索引。思维链、工具调用、工具结果、图片、
 协议回放信息、元数据和扩展字段均不参与索引。没有正文的消息不建立向量记录。

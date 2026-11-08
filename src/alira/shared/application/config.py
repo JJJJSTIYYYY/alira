@@ -37,5 +37,6 @@ SQLITE_DATABASE = _get_config(
 )
 SQLITE_EMBEDDING_MODEL = _get_config("DATABASE.sqlite.embedding_model", "")
 SQLITE_EMBEDDING_ENABLE = _get_config("DATABASE.sqlite.embedding_enable", False)
+SQLITE_EMBEDDING_OPTIONS = _get_config("DATABASE.sqlite.embedding_options", {})
 VECTOR_DIMENSION = _get_config("DATABASE.sqlite.vector_dimension", 640)
 WORKER_COUNT = _get_config("DATABASE.worker_count", 4)

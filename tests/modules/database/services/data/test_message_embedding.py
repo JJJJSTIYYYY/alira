@@ -569,16 +569,17 @@ async def test_disabled_vector_search_delegates_to_text_search(tmp_path, monkeyp
         await db.stop()
 
 
-async def test_local_encoder_loads_lazily_and_uses_query_instruction(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("prompt_name", [None, "web_search_query"])
+async def test_local_encoder_loads_lazily_and_uses_configured_prompts(
+    tmp_path, monkeypatch, prompt_name
 ):
     np = pytest.importorskip("numpy")
     calls = []
 
     class Model:
-        def __init__(self, model_path, *, local_files_only):
+        def __init__(self, model_path, *, local_files_only, **kwargs):
             self.prompts = {"web_search_query": "retrieval instruction"}
-            calls.append(("load", model_path, local_files_only))
+            calls.append(("load", model_path, local_files_only, kwargs))
 
         def get_embedding_dimension(self):
             return 2
@@ -594,19 +595,140 @@ async def test_local_encoder_loads_lazily_and_uses_query_instruction(
     monkeypatch.setitem(
         sys.modules, "sentence_transformers", SimpleNamespace(SentenceTransformer=Model)
     )
-    embedding = MessageEmbedding(str(tmp_path), 2)
+    embedding = MessageEmbedding(
+        str(tmp_path),
+        2,
+        device="cpu",
+        prompts={"document": "passage: "},
+        query_prompt_name=prompt_name,
+        document_prompt_name="document",
+        trust_remote_code=True,
+        model_kwargs={"dtype": "float16"},
+        max_seq_length=512,
+        batch_size=4,
+        normalize_embeddings=False,
+    )
     assert calls == []
     assert await embedding.encode([]) == []
     assert calls == []
     assert await embedding.encode(["body"]) == [vector()]
     assert await embedding.encode(["question"], query=True) == [vector()]
-    assert calls[0] == ("load", str(tmp_path.resolve()), True)
+    assert calls[0] == (
+        "load",
+        str(tmp_path.resolve()),
+        True,
+        {
+            "device": "cpu",
+            "prompts": {"document": "passage: "},
+            "trust_remote_code": True,
+            "model_kwargs": {"dtype": "float16"},
+            "truncate_dim": None,
+        },
+    )
+    assert embedding._model.max_seq_length == 512
     assert calls[1][0] == "document"
     assert calls[2][0] == "query"
-    assert calls[2][2]["prompt_name"] == "web_search_query"
+    assert calls[1][2] == {
+        "prompt_name": "document",
+        "precision": "float32",
+        "show_progress_bar": False,
+        "batch_size": 4,
+        "normalize_embeddings": False,
+    }
+    assert calls[2][2] == {**calls[1][2], "prompt_name": prompt_name}
     assert sum(call[0] == "load" for call in calls) == 1
     await embedding.close()
     assert embedding._model is None
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"prompts": {"document": "passage: "}},
+        {"document_prompt_name": "passage"},
+        {"model_kwargs": {"dtype": "float16"}},
+        {"truncate_dim": 2},
+        {"max_seq_length": 512},
+        {"normalize_embeddings": False},
+    ],
+)
+def test_document_encoding_configuration_isolates_vector_tables(tmp_path, options):
+    baseline = MessageEmbedding(str(tmp_path), 2)
+    configured = MessageEmbedding(str(tmp_path), 2, **options)
+    assert configured.table.name != baseline.table.name
+    repeated = MessageEmbedding(str(tmp_path), 2, **options)
+    assert configured.table.name == repeated.table.name
+
+
+def test_query_selection_device_and_batch_size_reuse_vector_table(tmp_path):
+    baseline = MessageEmbedding(str(tmp_path), 2)
+    configured = MessageEmbedding(
+        str(tmp_path), 2, query_prompt_name="retrieval", device="cpu", batch_size=4
+    )
+    assert configured.table.name == baseline.table.name
+
+
+async def test_native_embeddings_round_trip_through_sqlalchemy_and_sqlite_vec(
+    tmp_path, monkeypatch
+):
+    pytest.importorskip("sqlite_vec")
+    st = pytest.importorskip("sentence_transformers")
+    modules = pytest.importorskip("sentence_transformers.sentence_transformer.modules")
+    model_path = tmp_path / "model"
+    model = st.SentenceTransformer(
+        modules=[modules.BoW(["cat", "dog", "bird"])], device="cpu"
+    )
+    model.save_pretrained(str(model_path))
+    monkeypatch.setattr(service_module, "SQLITE_EMBEDDING_ENABLE", True)
+    monkeypatch.setattr(service_module, "SQLITE_EMBEDDING_MODEL", str(model_path))
+    monkeypatch.setattr(service_module, "VECTOR_DIMENSION", 2)
+    monkeypatch.setattr(
+        service_module,
+        "SQLITE_EMBEDDING_OPTIONS",
+        {
+            "device": "cpu",
+            "truncate_dim": 2,
+            "batch_size": 1,
+            "normalize_embeddings": False,
+            "prompts": {
+                "document": "cat cat ",
+                "query": "dog ",
+                "retrieval": "cat ",
+            },
+            "query_prompt_name": "retrieval",
+        },
+    )
+    db = DataService(tmp_path / "native-vectors.sqlite3")
+    await db.start()
+    try:
+        await create_user_and_conversation(db, monkeypatch)
+        await append(db, "native-message", body="bird")
+        await drain(db)
+        stored = await index_rows(db)
+        assert len(stored) == 1
+        assert stored[0]["embedding"] == struct.pack("2f", 2.0, 0.0)
+        result = await db.search_messages_vec(
+            {"user_uid": "user-1", "keyword": "bird", "min_similarity": 0.9}
+        )
+        assert result["success"], result
+        assert [row["message_uid"] for row in result["messages"]] == ["native-message"]
+        assert result["messages"][0]["similarity"] == pytest.approx(1.0)
+        table_name = db._embedding.table.name
+        await db.stop()
+        monkeypatch.setattr(
+            service_module,
+            "SQLITE_EMBEDDING_OPTIONS",
+            {**service_module.SQLITE_EMBEDDING_OPTIONS, "query_prompt_name": None},
+        )
+        await db.start()
+        assert db._embedding.table.name == table_name
+        result = await db.search_messages_vec(
+            {"user_uid": "user-1", "keyword": "bird", "min_similarity": 0.9}
+        )
+        assert result["success"], result
+        assert result["messages"] == []
+    finally:
+        await db.stop()
 
 
 async def test_local_encoder_rejects_model_dimension_mismatch(tmp_path, monkeypatch):
