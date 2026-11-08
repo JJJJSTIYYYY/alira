@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from alira.modules.database.services.files import service as file_module
 from alira.modules.database.services.files import FileService
+from alira.modules.database.services.files import service as file_module
 
 
 def make_skill_zip(path: Path, frontmatter: str | None, *, nested=True) -> Path:
@@ -66,7 +66,7 @@ async def test_save_files_copies_sources_and_returns_workspace_paths(tmp_path):
 async def test_save_files_reports_invalid_payloads(tmp_path, payload_factory):
     result = await FileService().save_files(payload_factory(tmp_path))
     assert result["success"] is False
-    assert result["messages"].startswith("fail:")
+    assert isinstance(result["messages"], str) and result["code"] != 0
 
 
 @pytest.mark.asyncio
@@ -76,7 +76,7 @@ async def test_import_skill_packages_moves_valid_zip_and_extracts_metadata(
     monkeypatch.setattr(file_module, "ALIRA_BASE_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(
         "alira.modules.database.services.files.service.uuid4",
-        lambda: SimpleNamespace(hex="fixedid")
+        lambda: SimpleNamespace(hex="fixedid"),
     )
     source = make_skill_zip(
         tmp_path / "skill.zip",
@@ -179,18 +179,16 @@ async def test_same_package_name_is_isolated_by_user(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "frontmatter,error_text",
+    "frontmatter",
     [
-        (None, "SKILL.md is missing"),
-        ("# no frontmatter", "missing YAML frontmatter"),
-        ("---\nname: demo\n", "Invalid SKILL.md YAML frontmatter format"),
-        ("---\n- item\n---\n", "frontmatter must be an object"),
-        ("---\nname: demo\n---\n", "Missing skill metadata: description"),
+        None,
+        "# no frontmatter",
+        "---\nname: demo\n",
+        "---\n- item\n---\n",
+        "---\nname: demo\n---\n",
     ],
 )
-async def test_invalid_skill_package_is_deleted(
-    monkeypatch, tmp_path, frontmatter, error_text
-):
+async def test_invalid_skill_package_is_deleted(monkeypatch, tmp_path, frontmatter):
     monkeypatch.setattr(file_module, "ALIRA_BASE_DIR", str(tmp_path))
     skills_dir = tmp_path / "user-1" / "alira_skills"
     source = make_skill_zip(tmp_path / "invalid.zip", frontmatter)
@@ -200,7 +198,8 @@ async def test_invalid_skill_package_is_deleted(
     )
 
     assert result["success"] is False
-    assert error_text in result["messages"]
+    assert result["code"] == 1001
+    assert result["messages"] == "Invalid request payload."
     assert list(skills_dir.iterdir()) == []
     assert not source.exists(), "the selected archive was moved before validation"
 
@@ -218,7 +217,7 @@ async def test_import_skill_packages_rejects_non_zip_without_moving_it(
     )
 
     assert result["success"] is False
-    assert "must be a zip file" in result["messages"]
+    assert result["code"] == 1001
     assert source.exists()
 
 
@@ -230,7 +229,11 @@ async def test_import_skill_packages_rejects_non_zip_without_moving_it(
 async def test_import_skill_packages_normalizes_missing_fields(payload, missing_field):
     result = await FileService().import_skill_packages(payload)
 
-    assert result == {"success": False, "messages": f"fail: '{missing_field}'"}
+    assert result == {
+        "code": 1001,
+        "success": False,
+        "messages": "Invalid request payload.",
+    }
 
 
 @pytest.mark.asyncio
@@ -244,7 +247,7 @@ async def test_import_skill_packages_deletes_corrupt_zip(monkeypatch, tmp_path):
     )
 
     assert result["success"] is False
-    assert "Invalid skill package invalid.zip" in result["messages"]
+    assert result["code"] == 1001
     assert not source.exists()
     assert list((tmp_path / "data" / "user-1" / "alira_skills").iterdir()) == []
 
@@ -274,10 +277,12 @@ async def test_skill_inspection_keeps_event_loop_available(monkeypatch, tmp_path
         )
     )
     try:
-        assert await asyncio.wait_for(
-            asyncio.to_thread(started.wait, 1), timeout=2
-        ), "Skill inspection did not start"
-        assert not operation.done(), "Inspection blocked the event loop until its timeout"
+        assert await asyncio.wait_for(asyncio.to_thread(started.wait, 1), timeout=2), (
+            "Skill inspection did not start"
+        )
+        assert not operation.done(), (
+            "Inspection blocked the event loop until its timeout"
+        )
         release.set()
         result = await asyncio.wait_for(operation, timeout=2)
         assert result["success"] is True

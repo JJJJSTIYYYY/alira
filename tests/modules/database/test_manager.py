@@ -9,14 +9,15 @@ import pytest
 from sqlalchemy import text
 
 import alira.modules.database as store_package
+from alira.lifespan.auto_init import auto_init
 from alira.modules.database import StoreManager, query_store
 from alira.modules.database import manager as manager_module
 from alira.modules.database import runtime as runtime_module
 from alira.modules.database.executor import StoreExecutor
 from alira.modules.database.services.cache import CacheService
 from alira.modules.database.services.data import DataService
+from alira.modules.database.utils.errors import StoreError
 from alira.modules.database.utils.message_tree import MessageNodeTree
-from alira.lifespan.auto_init import auto_init
 
 
 async def wait_for_thread(event):
@@ -54,12 +55,11 @@ def extra_actions(monkeypatch, **actions):
 
 
 async def create_conversation(manager):
-    await manager.query(
-        "create_user", {"user_uid": "user-1", "username": "alice", "password": "secret"}
-    )
-    created = await manager.query("create_conversation", {"user_uid": "user-1"})
+    user = await manager.query("create_user", {"user_name": "alice"})
+    user_uid = user["messages"]["user_uid"]
+    created = await manager.query("create_conversation", {"user_uid": user_uid})
     return {
-        "user_uid": "user-1",
+        "user_uid": user_uid,
         "conversation_uid": created["messages"]["conversation_uid"],
     }
 
@@ -110,12 +110,14 @@ async def test_query_store_round_trip_cache_isolation_and_restart(
         request = {**payload, "current_node_id": "node-1"}
         first = await query_store("list_messages", request)
         assert not first.get("cache_hit", False)
+        assert first["messages"]["next_cursor"] == 2
         cached = await query_store("list_messages", request)
-        assert cached["cache_hit"]
-        assert cached["messages"] == first["messages"]
-        assert cached["messages"][0].message_uid == "message-1"
+        assert set(cached) == {"success", "code", "messages"}
+        assert cached["messages"]["cache_hit"]
+        assert cached["messages"]["messages"] == first["messages"]["messages"]
+        assert cached["messages"]["messages"][0].message_uid == "message-1"
         assert all(
-            not hasattr(cached["messages"][0], key)
+            not hasattr(cached["messages"]["messages"][0], key)
             for key in (
                 "msg_cursor",
                 "timestamp",
@@ -124,7 +126,7 @@ async def test_query_store_round_trip_cache_isolation_and_restart(
                 "conversation_id",
             )
         )
-        cached["messages"][0].metadata["usage"]["total"] = 999
+        cached["messages"]["messages"][0].metadata["usage"]["total"] = 999
         state = manager._state
         await manager.stop()
         assert not state.thread.is_alive()
@@ -132,8 +134,9 @@ async def test_query_store_round_trip_cache_isolation_and_restart(
         assert manager._state is None
         assert (tmp_path / "cache.json").exists()
         restored = await query_store("list_messages", request)
-        assert restored["cache_hit"]
-        assert restored["messages"] == first["messages"]
+        assert set(restored) == {"success", "code", "messages"}
+        assert restored["messages"]["cache_hit"]
+        assert restored["messages"]["messages"] == first["messages"]["messages"]
         assert manager._state is not state
         assert (await query_store("list_conversations", payload))["messages"]
     finally:
@@ -188,7 +191,7 @@ async def test_services_and_actions_are_created_started_and_closed_on_store_thre
 
     async def location(payload):
         records.append(("action", threading.get_ident(), asyncio.get_running_loop()))
-        return {"success": True, "messages": "located"}
+        return {"code": 0, "success": True, "messages": "located"}
 
     monkeypatch.setattr(runtime_module, "CacheService", TrackedCache)
     monkeypatch.setattr(runtime_module, "DataService", TrackedData)
@@ -265,7 +268,7 @@ async def test_synchronous_message_work_does_not_block_the_caller_loop(
         assert executed_on[0] != threading.get_ident()
     finally:
         release.set()
-    assert (await query)["messages"][0]["content"] == [
+    assert (await query)["messages"]["messages"][0]["content"] == [
         {"type": "text", "text": "hello"}
     ]
 
@@ -274,10 +277,10 @@ async def test_one_manager_accepts_queries_from_distinct_caller_event_loops(mana
     await create_conversation(manager)
 
     def other_loop():
-        return asyncio.run(manager.query("ensure_user_exists", {"user_uid": "user-1"}))
+        return asyncio.run(manager.query("verify_user", {"user_name": "alice"}))
 
     results = await asyncio.gather(
-        manager.query("ensure_user_exists", {"user_uid": "user-1"}),
+        manager.query("verify_user", {"user_name": "alice"}),
         asyncio.to_thread(other_loop),
         asyncio.to_thread(other_loop),
     )
@@ -296,7 +299,7 @@ async def test_timeout_abandons_queued_work_without_losing_workers(
         if payload["id"] == "active":
             entered.set()
             await wait_in_store(release)
-        return {"success": True, "messages": payload["id"]}
+        return {"code": 0, "success": True, "messages": payload["id"]}
 
     extra_actions(monkeypatch, blocked=blocked)
     manager = StoreManager(
@@ -410,9 +413,7 @@ async def test_embedding_sync_survives_request_timeout_and_reuses_one_store_task
         running = await query_store("get_messages_embedding_sync_status", {})
         assert running["messages"]["status"] == "running"
         assert running["messages"]["task_id"] == responses[0]["messages"]["task_id"]
-        assert (await query_store("ensure_user_exists", {"user_uid": "user-1"}))[
-            "success"
-        ]
+        assert (await query_store("verify_user", {"user_name": "alice"}))["success"]
         release.set()
         completed = await asyncio.wait_for(wait_completed(), timeout=3)
         assert completed["status"] == "completed"
@@ -440,7 +441,7 @@ async def test_shutdown_cancels_all_pending_work_then_allows_restart(
         finally:
             cleaning.set()
             await wait_in_store(release)
-        return {"success": True, "messages": "unreachable"}
+        return {"code": 0, "success": True, "messages": "unreachable"}
 
     extra_actions(monkeypatch, blocked=blocked)
     manager = StoreManager(
@@ -458,9 +459,12 @@ async def test_shutdown_cancels_all_pending_work_then_allows_restart(
         state = manager._state
         stopping = asyncio.create_task(manager.stop())
         await wait_for_thread(cleaning)
-        with pytest.raises(RuntimeError, match="stopping"):
-            await manager.query("list_conversations", {"user_uid": "nobody"})
-        with pytest.raises(RuntimeError, match="stopping"):
+        assert await manager.query("list_conversations", {"user_uid": "nobody"}) == {
+            "success": False,
+            "code": 3004,
+            "messages": "Database service is unavailable.",
+        }
+        with pytest.raises(StoreError, match="unavailable"):
             await manager.start()
         assert not stopping.done()
     finally:
@@ -531,7 +535,7 @@ async def test_stop_during_startup_waits_for_cleanup_and_can_retry(
     finally:
         release.set()
         await stopping
-    with pytest.raises(RuntimeError, match="stopping"):
+    with pytest.raises(StoreError, match="unavailable"):
         await starting
     assert not state.thread.is_alive()
     await manager.start()
@@ -626,10 +630,16 @@ async def test_action_errors_and_child_cancellation_do_not_kill_workers(
         raise asyncio.CancelledError
 
     extra_actions(monkeypatch, explode=explode, cancel=cancel)
-    with pytest.raises(RuntimeError, match="unknown action"):
-        await manager.query("does_not_exist", {})
-    with pytest.raises(RuntimeError, match="action exploded"):
-        await manager.query("explode", {})
+    assert await manager.query("does_not_exist", {}) == {
+        "success": False,
+        "code": 1002,
+        "messages": "Unknown database action.",
+    }
+    assert await manager.query("explode", {}) == {
+        "success": False,
+        "code": 1001,
+        "messages": "Invalid request payload.",
+    }
     with pytest.raises(asyncio.CancelledError):
         await manager.query("cancel", {})
     assert (await manager.query("list_conversations", {"user_uid": "nobody"}))[
@@ -704,11 +714,11 @@ async def test_stop_waits_for_active_driver_io_and_rolls_back_before_restart(
                 )
             await executor.data_store._execute(
                 text(
-                    "INSERT INTO users (user_uid, username, password) "
-                    "VALUES ('cancelled-user', slow_sql(), 'secret')"
+                    "INSERT INTO users (user_uid, user_name) "
+                    "VALUES ('cancelled-user', slow_sql())"
                 )
             )
-            return {"success": True, "messages": "unreachable"}
+            return {"code": 0, "success": True, "messages": "unreachable"}
 
         return {**original_export(executor), "slow_write": slow_write}
 
@@ -718,14 +728,7 @@ async def test_stop_waits_for_active_driver_io_and_rolls_back_before_restart(
 
     monkeypatch.setattr(StoreExecutor, "export_handlers", export)
     monkeypatch.setattr(runtime_module._StoreRuntime, "stop", stop)
-    await manager.query(
-        "create_user",
-        {
-            "user_uid": "existing",
-            "username": "existing",
-            "password": "secret",
-        },
-    )
+    existing = await manager.query("create_user", {"user_name": "existing"})
     query = asyncio.create_task(manager.query("slow_write", {}))
     shutdown = None
     try:
@@ -750,19 +753,16 @@ async def test_stop_waits_for_active_driver_io_and_rolls_back_before_restart(
     with pytest.raises(asyncio.CancelledError):
         await query
     assert not state.thread.is_alive()
-    assert (
-        await manager.query(
-            "verify_user", {"username": "existing", "password": "secret"}
-        )
-    )["messages"]["uid"] == "existing"
+    assert (await manager.query("verify_user", {"user_name": "existing"}))["messages"][
+        "user_uid"
+    ] == existing["messages"]["user_uid"]
     # Reusing the cancelled write's unique ID proves that its transaction rolled back.
     assert (
         await manager.query(
             "create_user",
             {
                 "user_uid": "cancelled-user",
-                "username": "cancelled-user",
-                "password": "secret",
+                "user_name": "cancelled-user",
             },
         )
     )["success"]
@@ -793,22 +793,22 @@ async def test_tool_role_survives_branch_filter_cache_and_restart(manager):
     request = {**payload, "current_node_id": "n3"}
     cold = await manager.query("list_messages", request)
     assert not cold.get("cache_hit", False)
-    assert [row["role"] for row in cold["messages"]] == [
+    assert [row["role"] for row in cold["messages"]["messages"]] == [
         "user",
         "assistant",
         "tool",
         "assistant",
     ]
-    restored = cold["messages"]
+    restored = cold["messages"]["messages"]
     assert all(isinstance(message, AliraMessageExtension) for message in restored)
     assert generation_input(restored, None).messages[2].role == "tool"
     hot = await manager.query("list_messages", request)
-    assert hot["cache_hit"] and hot["messages"] == cold["messages"]
+    assert hot["messages"]["messages"] == cold["messages"]["messages"]
     await manager.stop()
     restarted = await manager.query("list_messages", request)
-    assert restarted["cache_hit"] and restarted["messages"] == cold["messages"]
+    assert restarted["messages"]["messages"] == cold["messages"]["messages"]
     visible = await manager.query("list_user_face_messages", request)
-    assert [row["role"] for row in visible["messages"]] == [
+    assert [row["role"] for row in visible["messages"]["messages"]] == [
         "user",
         "assistant",
         "tool",
@@ -858,15 +858,17 @@ async def test_full_generation_ids_keep_message_nodes_distinct_after_restart(man
             result = await manager.query(
                 "list_messages", {**payload, "current_node_id": selected.node_id}
             )
-            assert [message.to_record() for message in result["messages"]] == [
-                {**message.to_record(), **payload} for message in expected
+            assert [
+                message.to_record() for message in result["messages"]["messages"]
+            ] == [{**message.to_record(), **payload} for message in expected]
+            assert result["messages"]["current_chain"] == [
+                message.node_id for message in expected
             ]
-            assert result["current_chain"] == [message.node_id for message in expected]
         visible = await manager.query(
             "list_user_face_messages",
             {**payload, "current_node_id": original[-1].node_id},
         )
-        assert [message.message_uid for message in visible["messages"]] == [
+        assert [message.message_uid for message in visible["messages"]["messages"]] == [
             message.message_uid for message in original
         ]
 
@@ -884,9 +886,12 @@ async def test_system_messages_are_rejected_before_persistence(manager, as_recor
         if as_record
         else message
     )
-    with pytest.raises(RuntimeError, match="system messages are runtime-only"):
-        await manager.query("append_message", {**payload, "message": value})
-    assert (await manager.query("list_messages", payload))["messages"] == []
+    assert await manager.query("append_message", {**payload, "message": value}) == {
+        "success": False,
+        "code": 1001,
+        "messages": "Invalid request payload.",
+    }
+    assert (await manager.query("list_messages", payload))["messages"]["messages"] == []
     assert (await manager.query("get_conversation", payload))["messages"][0][
         "latest_cursor"
     ] == 0
@@ -924,8 +929,10 @@ async def test_search_returns_business_messages_and_separate_conversation_detail
 
     result = await manager.query(action, {**payload, "keyword": "find"})
     assert result["success"]
-    assert len(result["messages"]) == 2
-    for found, message in zip(result["messages"], reversed(original), strict=True):
+    assert len(result["messages"]["messages"]) == 2
+    for found, message in zip(
+        result["messages"]["messages"], reversed(original), strict=True
+    ):
         assert type(found) is type(message)
         assert found.message_uid == message.message_uid
         assert found.generation_id == message.generation_id
@@ -942,13 +949,12 @@ async def test_search_returns_business_messages_and_separate_conversation_detail
                 "last_active_at",
             )
         )
-    conversation = result["conversations"][payload["conversation_uid"]]
+    conversation = result["messages"]["conversations"][payload["conversation_uid"]]
     assert conversation["title"] == "New Conversation..."
     assert "T" in conversation["last_active_at"]
     empty = await manager.query(action, {**payload, "keyword": "missing"})
     assert empty == {
+        "code": 0,
         "success": True,
-        "messages": [],
-        "conversations": {},
-        "next_cursor": None,
+        "messages": {"messages": [], "conversations": {}, "next_cursor": None},
     }

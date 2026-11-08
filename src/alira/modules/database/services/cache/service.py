@@ -8,11 +8,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from alira.shared.application.config import (
-    ALIRA_BASE_DIR,
-    HOT_CACHE_DEFAULT_EXPIRE_SECONDS,
-    STATIC_CACHE_DEFAULT_EXPIRE_SECONDS,
-)
 from alira.modules.database.services.cache.keys import (
     build_conversation_key,
     build_resource_key,
@@ -20,6 +15,11 @@ from alira.modules.database.services.cache.keys import (
 )
 from alira.modules.database.utils.handlers import service_handler
 from alira.modules.database.utils.serialization import decode_message_row
+from alira.shared.application.config import (
+    ALIRA_BASE_DIR,
+    HOT_CACHE_DEFAULT_EXPIRE_SECONDS,
+    STATIC_CACHE_DEFAULT_EXPIRE_SECONDS,
+)
 from alira.utils.logger import logger
 from alira.utils.serialization import json_default
 
@@ -27,8 +27,8 @@ from alira.utils.serialization import json_default
 class CacheService:
     """TTL cache for copied message, branch-chain and resource values.
 
-    All payload methods return ``success`` and ``messages``. Failures return
-    ``{"success": False, "messages": "fail: <error>"}``; ``cache_hit`` is
+    All payload methods return ``success``, ``code`` and ``messages``. Failures
+    use the standard error table in database.utils.errors. ``cache_hit`` is
     present only on successful reads. Reads return disposable deep copies by
     default; borrowed message snapshots expose read-only records to the executor.
     """
@@ -105,10 +105,18 @@ class CacheService:
     ) -> dict:
         """Append to an existing conversation cache and refresh its hot TTL.
 
-        Payload requires user_uid and conversation_uid; message defaults to {}.
-        Returns success with messages="success", including on a cache miss.
-        take_ownership consumes an exclusively owned, normalized record; its
-        caller must not modify that record after handing it to the cache."""
+        Args:
+            payload: Required ``user_uid`` and ``conversation_uid``; optional
+                ``message`` dictionary defaults to {}. ``take_ownership=True`` consumes
+                an exclusively owned normalized record; the caller must not mutate it
+                afterward.
+
+        Returns:
+            ``{"success": True, "code": 0, "messages": result}``, where result is
+            An empty dictionary, including when the cache is missing.
+            Failure: ``{"success": False, "code": int, "messages": str}``, using
+            the standard database.utils.errors table.
+        """
         key = build_conversation_key(payload)
         message = payload.get("message", {})
         if not take_ownership and not isinstance(message, dict):
@@ -117,12 +125,12 @@ class CacheService:
             item = self._get_item(key)
             if item is None:
                 logger.warning("Builtin cache key not exists.")
-                return {"success": True, "messages": "success"}
+                return {"success": True, "messages": {}}
             if not take_ownership:
                 message = decode_message_row(copy.deepcopy(message))
             item["value"].append(message)
             item["expires_at"] = time.time() + HOT_CACHE_DEFAULT_EXPIRE_SECONDS
-        return {"success": True, "messages": "success"}
+        return {"success": True, "messages": {}}
 
     @service_handler
     async def set_messages(
@@ -130,11 +138,18 @@ class CacheService:
     ) -> dict:
         """Replace cached messages and refresh their hot TTL.
 
-        Payload requires user_uid and conversation_uid; messages defaults to []
-        and must be a list. An empty list removes the cache entry.
-        Returns success with messages="success". take_ownership consumes an
-        exclusively owned list of normalized records; the caller subsequently
-        treats both that list and its records as read-only."""
+        Args:
+            payload: Required ``user_uid`` and ``conversation_uid``; optional
+                ``messages`` list of records defaults to []. Empty lists remove the
+                entry. ``take_ownership=True`` consumes the normalized list and its
+                records; the caller subsequently treats them as read-only.
+
+        Returns:
+            ``{"success": True, "code": 0, "messages": result}``, where result is
+            An empty dictionary.
+            Failure: ``{"success": False, "code": int, "messages": str}``, using
+            the standard database.utils.errors table.
+        """
         key = build_conversation_key(payload)
         messages = payload.get("messages", [])
         if not take_ownership and (
@@ -156,7 +171,7 @@ class CacheService:
                 )
             else:
                 self._cache.pop(key, None)
-        return {"success": True, "messages": "success"}
+        return {"success": True, "messages": {}}
 
     @service_handler
     async def get_messages(
@@ -164,10 +179,18 @@ class CacheService:
     ) -> dict:
         """Read all cached messages for user_uid and conversation_uid.
 
-        Returns success, messages=list and cache_hit=bool. Missing, expired or
-        empty message caches return messages=[] and cache_hit=False.
-        borrow_records returns a new list containing read-only cache records,
-        allowing branch selection before copying the selected records."""
+        Args:
+            payload: Required ``user_uid`` and ``conversation_uid``.
+                ``borrow_records=True`` returns a new list of read-only cached records
+                for branch selection; the default returns independent deep copies.
+
+        Returns:
+            ``{"success": True, "code": 0, "messages": result}``, where result is
+            A record list. Missing, expired or empty entries return []. Internal
+            ``cache_hit`` is a top-level boolean.
+            Failure: ``{"success": False, "code": int, "messages": str}``, using
+            the standard database.utils.errors table.
+        """
         key = build_conversation_key(payload)
         async with self._lock:
             return self._read_result(key, empty_is_miss=True, deep=not borrow_records)
@@ -176,8 +199,17 @@ class CacheService:
     async def set_branch_chain(self, payload: dict) -> dict:
         """Replace a conversation branch chain and refresh its static TTL.
 
-        Payload requires user_uid and conversation_uid; node_id_chain defaults
-        to [] and must be a list. Returns success with messages="success"."""
+        Args:
+            payload: Required ``user_uid`` and ``conversation_uid``; optional
+                ``node_id_chain`` list of strings defaults to []. Refreshes the static
+                TTL.
+
+        Returns:
+            ``{"success": True, "code": 0, "messages": result}``, where result is
+            An empty dictionary.
+            Failure: ``{"success": False, "code": int, "messages": str}``, using
+            the standard database.utils.errors table.
+        """
         node_id_chain = payload.get("node_id_chain", [])
         if not isinstance(node_id_chain, list) or not all(
             isinstance(node_id, str) for node_id in node_id_chain
@@ -190,16 +222,24 @@ class CacheService:
                 node_id_chain.copy(),
                 STATIC_CACHE_DEFAULT_EXPIRE_SECONDS,
             )
-        return {"success": True, "messages": "success"}
+        return {"success": True, "messages": {}}
 
     @service_handler
     async def update_branch_chain(self, payload: dict) -> dict:
         """Replace the cached chain after parent_id with node_id.
 
-        Payload requires user_uid, conversation_uid, node_id and parent_id.
-        Returns success with messages="success", "cache not found",
-        "parent_id not found in cache" or "already up to date". Only a changed
-        chain refreshes its static TTL."""
+        Args:
+            payload: Required ``user_uid``, ``conversation_uid``, ``node_id`` and
+                ``parent_id`` strings. Replaces descendants of the parent with the new
+                node and refreshes TTL only when the chain changes.
+
+        Returns:
+            ``{"success": True, "code": 0, "messages": result}``, where result is
+            An empty dictionary, including missing entries, missing parents and
+            unchanged chains.
+            Failure: ``{"success": False, "code": int, "messages": str}``, using
+            the standard database.utils.errors table.
+        """
         node_id = payload["node_id"]
         parent_id = payload["parent_id"]
         if not isinstance(node_id, str) or not isinstance(parent_id, str):
@@ -208,30 +248,38 @@ class CacheService:
         async with self._lock:
             item = self._get_item(key)
             if item is None:
-                return {"success": True, "messages": "cache not found"}
+                return {"success": True, "messages": {}}
             node_id_chain = item["value"]
             try:
                 parent_index = node_id_chain.index(parent_id)
             except ValueError:
                 return {
                     "success": True,
-                    "messages": "parent_id not found in cache",
+                    "messages": {},
                 }
             if parent_index == len(node_id_chain) - 2 and node_id_chain[-1] == node_id:
-                return {"success": True, "messages": "already up to date"}
+                return {"success": True, "messages": {}}
             self._set_item(
                 key,
                 node_id_chain[: parent_index + 1] + [node_id],
                 STATIC_CACHE_DEFAULT_EXPIRE_SECONDS,
             )
-        return {"success": True, "messages": "success"}
+        return {"success": True, "messages": {}}
 
     @service_handler
     async def get_branch_chain(self, payload: dict) -> dict:
         """Read the branch chain for user_uid and conversation_uid.
 
-        Returns success, messages=list and cache_hit=bool. An existing empty
-        chain is a cache hit; missing or expired chains return [] and False."""
+        Args:
+            payload: Required ``user_uid`` and ``conversation_uid``.
+
+        Returns:
+            ``{"success": True, "code": 0, "messages": result}``, where result is
+            A list of node ID strings. Internal ``cache_hit`` is a top-level boolean;
+            existing empty chains are hits, missing or expired chains are misses.
+            Failure: ``{"success": False, "code": int, "messages": str}``, using
+            the standard database.utils.errors table.
+        """
         key = build_conversation_key(payload, prefix="chain")
         async with self._lock:
             return self._read_result(key, deep=False)
@@ -242,25 +290,42 @@ class CacheService:
     ) -> dict:
         """Set the TTL of cached messages for user_uid and conversation_uid.
 
-        ttl_seconds defaults to HOT_CACHE_DEFAULT_EXPIRE_SECONDS.
-        Returns success with messages="success", including on a cache miss."""
+        Args:
+            payload: Required ``user_uid`` and ``conversation_uid``. ``ttl_seconds``
+                defaults to HOT_CACHE_DEFAULT_EXPIRE_SECONDS; missing entries are
+                unchanged.
+
+        Returns:
+            ``{"success": True, "code": 0, "messages": result}``, where result is
+            An empty dictionary.
+            Failure: ``{"success": False, "code": int, "messages": str}``, using
+            the standard database.utils.errors table.
+        """
         key = build_conversation_key(payload)
         async with self._lock:
             item = self._get_item(key)
             if item is not None:
                 item["expires_at"] = time.time() + ttl_seconds
-        return {"success": True, "messages": "success"}
+        return {"success": True, "messages": {}}
 
     @service_handler
     async def delete_messages(self, payload: dict) -> dict:
         """Remove cached messages for user_uid and conversation_uid.
 
-        Returns success with messages="success", including on a cache miss.
-        The conversation branch-chain cache is retained."""
+        Args:
+            payload: Required ``user_uid`` and ``conversation_uid``. Removes only the
+                message cache; retains the branch chain.
+
+        Returns:
+            ``{"success": True, "code": 0, "messages": result}``, where result is
+            An empty dictionary, including on a cache miss.
+            Failure: ``{"success": False, "code": int, "messages": str}``, using
+            the standard database.utils.errors table.
+        """
         key = build_conversation_key(payload)
         async with self._lock:
             self._cache.pop(key, None)
-        return {"success": True, "messages": "success"}
+        return {"success": True, "messages": {}}
 
     # ------------------------------------------------------------------
     # Read-through Resource Cache
@@ -270,9 +335,17 @@ class CacheService:
     async def set_resource(self, payload: dict) -> dict:
         """Cache a resource list with the static TTL.
 
-        Payload requires nonempty cache_group and cache_key strings, plus a
-        messages list. Empty lists are cached as hits.
-        Returns success with messages="success"."""
+        Args:
+            payload: Required nonempty ``cache_group`` and ``cache_key`` strings, and a
+                ``messages`` list. Caches an independent copy with the static TTL; empty
+                lists are hits.
+
+        Returns:
+            ``{"success": True, "code": 0, "messages": result}``, where result is
+            An empty dictionary.
+            Failure: ``{"success": False, "code": int, "messages": str}``, using
+            the standard database.utils.errors table.
+        """
         messages = payload.get("messages")
         if not isinstance(messages, list):
             raise TypeError("Resource messages must be a list")
@@ -283,14 +356,22 @@ class CacheService:
                 copy.deepcopy(messages),
                 STATIC_CACHE_DEFAULT_EXPIRE_SECONDS,
             )
-        return {"success": True, "messages": "success"}
+        return {"success": True, "messages": {}}
 
     @service_handler
     async def get_resource(self, payload: dict) -> dict:
         """Read the resource identified by cache_group and cache_key.
 
-        Both keys must be nonempty strings. Returns success, messages=list and
-        cache_hit=bool. A missing or expired entry returns [] and False."""
+        Args:
+            payload: Required nonempty ``cache_group`` and ``cache_key`` strings.
+
+        Returns:
+            ``{"success": True, "code": 0, "messages": result}``, where result is
+            An independently copied resource list. Internal ``cache_hit`` is a top-level
+            boolean; missing or expired entries return [] and False.
+            Failure: ``{"success": False, "code": int, "messages": str}``, using
+            the standard database.utils.errors table.
+        """
         key = build_resource_key(payload)
         async with self._lock:
             return self._read_result(key)
@@ -299,9 +380,16 @@ class CacheService:
     async def delete_resources(self, payload: dict) -> dict:
         """Remove one resource entry or all entries in a cache group.
 
-        Payload requires a nonempty cache_group string. A non-None cache_key
-        must be a nonempty string and selects one entry; absent/None removes
-        the whole group. Returns success with messages="success"."""
+        Args:
+            payload: Required nonempty ``cache_group`` string. Optional nonempty
+                ``cache_key`` selects one entry; absent or None removes the whole group.
+
+        Returns:
+            ``{"success": True, "code": 0, "messages": result}``, where result is
+            An empty dictionary.
+            Failure: ``{"success": False, "code": int, "messages": str}``, using
+            the standard database.utils.errors table.
+        """
         async with self._lock:
             if payload.get("cache_key") is not None:
                 self._cache.pop(build_resource_key(payload), None)
@@ -310,7 +398,7 @@ class CacheService:
                 matching_keys = [key for key in self._cache if key.startswith(prefix)]
                 for key in matching_keys:
                     self._cache.pop(key, None)
-        return {"success": True, "messages": "success"}
+        return {"success": True, "messages": {}}
 
     def _set_item(self, key: str, value: Any, ttl_seconds: int) -> None:
         self._cache[key] = {"value": value, "expires_at": time.time() + ttl_seconds}

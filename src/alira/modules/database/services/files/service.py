@@ -10,8 +10,8 @@ from alira.modules.database.services.files.packages import (
     next_available_package_path,
 )
 from alira.modules.database.utils.handlers import service_handler
-from alira.utils.logger import logger
 from alira.shared.application.config import ALIRA_BASE_DIR
+from alira.utils.logger import logger
 
 
 class FileService:
@@ -21,8 +21,17 @@ class FileService:
     async def save_files(self, payload: dict) -> dict:
         """Copy ``file_path`` entries into ``workspace/user_upload``.
 
-        Return each file's name, absolute saved_path and workspace-relative
-        ws_saved_path. Failures use the common service result format.
+        Args:
+            payload: Required ``file_path`` list of source paths and ``workspace``
+                directory path. Copies files to workspace/user_upload, retaining source
+                files.
+
+        Returns:
+            ``{"success": True, "code": 0, "messages": result}``, where result is
+            A list of dictionaries with ``file_name``, absolute ``saved_path`` and
+            workspace-relative ``ws_saved_path``.
+            Failure: ``{"success": False, "code": int, "messages": str}``, using
+            the standard database.utils.errors table.
         """
         source_paths: list[str] = payload["file_path"]
         workspace = Path(payload["workspace"]).expanduser().resolve()
@@ -52,9 +61,19 @@ class FileService:
     async def import_skill_packages(self, payload: dict) -> dict:
         """Move ``file_path`` ZIP archives into the user's skill directory.
 
-        ``user_uid`` selects the directory. Return skill identity, frontmatter
-        metadata, package_path, package_size and package_sha256 for each archive.
-        Invalid archives are removed after moving; version defaults to 0.0.1.
+        Args:
+            payload: Required ``user_uid`` string and ``file_path`` list of ZIP paths.
+                Moves archives to the user skill directory; removes invalid moved
+                archives. Requires SKILL.md frontmatter name and description; version
+                defaults to 0.0.1.
+
+        Returns:
+            ``{"success": True, "code": 0, "messages": result}``, where result is
+            A list of dictionaries with ``skill_id``, ``skill_name``,
+            ``skill_description``, ``skill_version``, ``package_path``, ``package_size``
+            and ``package_sha256``.
+            Failure: ``{"success": False, "code": int, "messages": str}``, using
+            the standard database.utils.errors table.
         """
         user_uid: str = payload["user_uid"]
         source_paths: list[str] = payload["file_path"]

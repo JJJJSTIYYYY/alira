@@ -135,7 +135,7 @@ user、assistant 和 tool 消息。父子关系由调用方通过 `parent_id` �
 `query_store("append_message", payload)` 的 `message` 接受 user、assistant、tool 的
 平铺记录字典或对应的 `Alira*Message`。`StoreExecutor` 创建独立的存储快照，数据库、缓存和消息树内部
 继续使用字典。`list_messages`、`list_user_face_messages` 和 `search_messages` 返回的
-`messages` 均为 `Alira*Message` 列表，可以直接传给 `AliraBot.invoke()`：
+`messages["messages"]` 均为 `Alira*Message` 列表，可以直接传给 `AliraBot.invoke()`：
 
 ```python
 from alira.modules.database import query_store
@@ -144,12 +144,12 @@ identity = {"user_uid": "user-1", "conversation_uid": "conversation-1"}
 message = AliraUserMessage(content=[TextContent("你好")], node_id="n1", parent_id="-")
 await query_store("append_message", {**identity, "message": message})
 result = await query_store("list_messages", {**identity, "current_node_id": "n1"})
-answer = await bot.invoke(result["messages"])
+answer = await bot.invoke(result["messages"]["messages"])
 ```
 
 用户和会话需已存在。消息对象不包含 `id`、`conversation_id`、`msg_cursor`、
-`timestamp` 或 `is_deleted`；列表响应继续单独提供游标、分支和链信息。
-搜索响应的会话标题与活跃时间放在 `conversations[conversation_uid]` 中。
+`timestamp` 或 `is_deleted`；列表响应在 `messages` 内提供业务消息、分支和链信息。
+搜索响应的会话标题与活跃时间放在 `messages["conversations"][conversation_uid]` 中。
 
 写入时只创建一份独立消息快照，再将其所有权交给缓存；数据层直接校验记录结构，
 不再恢复消息对象后重新序列化。缓存默认读写仍复制数据，Executor 使用显式的所有权

@@ -24,7 +24,7 @@ async def create_user_and_conversation(
     db: DataService, monkeypatch, *, user_uid="user-1", conversation_uid="conv-1"
 ):
     created = await db.create_user(
-        {"user_uid": user_uid, "username": f"name-{user_uid}", "password": "secret"}
+        {"user_uid": user_uid, "user_name": f"name-{user_uid}"}
     )
     assert created["success"] is True
     monkeypatch.setattr(db, "_new_conversation_id", lambda: conversation_uid)
@@ -37,6 +37,7 @@ async def create_user_and_conversation(
         }
     )
     assert conversation == {
+        "code": 0,
         "success": True,
         "messages": {"conversation_uid": conversation_uid},
     }
@@ -53,6 +54,13 @@ async def test_lifecycle_helpers_and_transaction_rollback(tmp_path):
     try:
         await asyncio.gather(service.start(), service.start())
         assert path.exists()
+        columns = await service._fetch_all(text("PRAGMA table_info(users)"))
+        assert {column["name"] for column in columns} == {
+            "id",
+            "user_uid",
+            "user_name",
+            "created_at",
+        }
         tables = await service._fetch_all(
             text("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
         )
@@ -99,13 +107,12 @@ async def test_lifecycle_helpers_and_transaction_rollback(tmp_path):
             async with service._transaction() as connection:
                 await connection.execute(
                     text(
-                        "INSERT INTO users (user_uid, username, password) "
-                        "VALUES (:user_uid, :username, :password)"
+                        "INSERT INTO users (user_uid, user_name) "
+                        "VALUES (:user_uid, :user_name)"
                     ),
                     {
                         "user_uid": "rolled-back",
-                        "username": "rolled-back",
-                        "password": "secret",
+                        "user_name": "rolled-back",
                     },
                 )
                 raise RuntimeError("force rollback")
@@ -129,7 +136,7 @@ async def test_lifecycle_helpers_and_transaction_rollback(tmp_path):
 async def test_repeated_start_and_stop_preserve_expected_storage(tmp_path, db_name):
     path = db_name if db_name == ":memory:" else tmp_path / db_name
     service = DataService(path)
-    user = {"user_uid": "user-1", "username": "alice", "password": "secret"}
+    user = {"user_uid": "user-1", "user_name": "alice"}
     try:
         await asyncio.gather(service.start(), service.start())
         assert (await service.create_user(user))["success"]
@@ -140,10 +147,11 @@ async def test_repeated_start_and_stop_preserve_expected_storage(tmp_path, db_na
         await service.start()
         restored = await service.verify_user(user)
         if db_name == ":memory:":
-            assert restored["success"] is False
+            assert restored["success"] is True
+            assert restored["code"] == 2001
             assert (await service.create_user(user))["success"]
         else:
-            assert restored["messages"]["uid"] == "user-1"
+            assert restored["messages"]["user_uid"] == "user-1"
 
         assert (await service.create_conversation({"user_uid": "missing"}))[
             "success"
@@ -177,8 +185,7 @@ async def test_multiple_services_can_initialize_the_same_database(
                 await service.create_user(
                     {
                         "user_uid": f"user-{index}",
-                        "username": f"user-{index}",
-                        "password": "secret",
+                        "user_name": f"user-{index}",
                     }
                 )
             )["success"]
@@ -200,13 +207,12 @@ async def test_cancelled_transaction_rolls_back_and_allows_stop_and_restart(tmp_
         async with service._transaction() as connection:
             await connection.execute(
                 text(
-                    "INSERT INTO users (user_uid, username, password) "
-                    "VALUES (:user_uid, :username, :password)"
+                    "INSERT INTO users (user_uid, user_name) "
+                    "VALUES (:user_uid, :user_name)"
                 ),
                 {
                     "user_uid": "cancelled",
-                    "username": "cancelled",
-                    "password": "secret",
+                    "user_name": "cancelled",
                 },
             )
             entered.set()
@@ -231,12 +237,12 @@ async def test_cancelled_transaction_rolls_back_and_allows_stop_and_restart(tmp_
         )
         assert (
             await service.create_user(
-                {"user_uid": "cancelled", "username": "cancelled", "password": "secret"}
+                {"user_uid": "cancelled", "user_name": "cancelled"}
             )
         )["success"]
-        assert (
-            await service.verify_user({"username": "cancelled", "password": "secret"})
-        )["messages"]["uid"] == "cancelled"
+        assert (await service.verify_user({"user_name": "cancelled"}))["messages"][
+            "user_uid"
+        ] == "cancelled"
     finally:
         release.set()
         if task is not None and not task.done():
@@ -253,7 +259,7 @@ async def test_cancelling_active_sql_keeps_the_in_memory_database(cancel_count):
     entered = asyncio.Event()
     release = threading.Event()
     task = None
-    user = {"user_uid": "existing", "username": "existing", "password": "secret"}
+    user = {"user_uid": "existing", "user_name": "existing"}
 
     def slow_sql():
         loop.call_soon_threadsafe(entered.set)
@@ -273,8 +279,8 @@ async def test_cancelling_active_sql_keeps_the_in_memory_database(cancel_count):
         task = asyncio.create_task(
             service._execute(
                 text(
-                    "INSERT INTO users (user_uid, username, password) "
-                    "VALUES ('cancelled', slow_sql(), 'secret')"
+                    "INSERT INTO users (user_uid, user_name) "
+                    "VALUES ('cancelled', slow_sql())"
                 )
             )
         )
@@ -286,12 +292,10 @@ async def test_cancelling_active_sql_keeps_the_in_memory_database(cancel_count):
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, timeout=2)
 
-        assert (await service.verify_user(user))["messages"]["uid"] == "existing"
-        assert (
-            await service.create_user(
-                {"user_uid": "new", "username": "new", "password": "secret"}
-            )
-        )["success"]
+        assert (await service.verify_user(user))["messages"]["user_uid"] == "existing"
+        assert (await service.create_user({"user_uid": "new", "user_name": "new"}))[
+            "success"
+        ]
         assert await service._fetch_all(
             text("SELECT user_uid FROM users ORDER BY user_uid")
         ) == [{"user_uid": "existing"}, {"user_uid": "new"}]
@@ -387,35 +391,25 @@ async def test_failed_message_insert_does_not_advance_conversation_cursor(
 
 @pytest.mark.asyncio
 async def test_users_conversations_and_messages(db, monkeypatch):
-    assert await db.ensure_user_exists({"user_uid": "user-1", "username": "alice"}) == {
-        "success": False,
-        "messages": "fail: User do not exist.",
-    }
-    assert (
-        await db.create_user(
-            {"user_uid": "user-1", "username": "alice", "password": "secret"}
-        )
-    )["success"]
-    assert await db.verify_user({"username": "alice", "password": "secret"}) == {
+    assert await db.verify_user({"user_uid": "user-1"}) == {
         "success": True,
-        "messages": {"msg": "success", "uid": "user-1"},
+        "code": 2001,
+        "messages": "User not found.",
     }
-    assert (await db.verify_user({"username": "alice", "password": "wrong"}))[
-        "success"
-    ] is False
-    assert (await db.ensure_user_exists({"user_uid": "user-1", "username": "alice"}))[
-        "success"
-    ]
-    assert (
-        await db.ensure_user_exists(
-            {"user_uid": "new", "username": "alice"}, exist=False
-        )
-    )["success"] is False
-    assert (
-        await db.create_user(
-            {"user_uid": "duplicate", "username": "alice", "password": "secret"}
-        )
-    )["success"] is False
+    identity = {"user_uid": "user-1", "user_name": "alice"}
+    assert (await db.create_user(identity))["success"]
+    for query in ({"user_uid": "user-1"}, {"user_name": "alice"}, identity):
+        assert await db.verify_user(query) == {
+            "success": True,
+            "code": 0,
+            "messages": identity,
+        }
+    assert (await db.verify_user({"user_uid": "new", "user_name": "alice"}))[
+        "code"
+    ] == 2001
+    assert (await db.create_user({"user_uid": "duplicate", "user_name": "alice"}))[
+        "code"
+    ] == 2002
 
     monkeypatch.setattr(db, "_new_conversation_id", lambda: "conv-1")
     assert await db.create_conversation(
@@ -425,7 +419,7 @@ async def test_users_conversations_and_messages(db, monkeypatch):
             "workspace": "/tmp/work",
             "is_cron": True,
         }
-    ) == {"success": True, "messages": {"conversation_uid": "conv-1"}}
+    ) == {"code": 0, "success": True, "messages": {"conversation_uid": "conv-1"}}
     conversations = (await db.list_conversations({"user_uid": "user-1"}))["messages"]
     assert conversations[0]["title"] == "New Conversation..."
     assert conversations[0]["work_space"] == "/tmp/work"
@@ -440,7 +434,7 @@ async def test_users_conversations_and_messages(db, monkeypatch):
             "workspace": "/tmp/new",
             "is_pinned": True,
         }
-    ) == {"success": True, "messages": "success"}
+    ) == {"code": 0, "success": True, "messages": {}}
     meta = (await db.get_conversation({"conversation_uid": "conv-1"}))["messages"][0]
     assert (meta["title"], meta["work_space"], meta["is_pinned"]) == (
         "Renamed",
@@ -520,6 +514,7 @@ async def test_users_conversations_and_messages(db, monkeypatch):
         "hello sqlite"
     ]
     assert await db.search_messages({"user_uid": "user-1", "keyword": "% _ \\"}) == {
+        "code": 0,
         "success": True,
         "messages": [],
         "next_cursor": None,
@@ -533,6 +528,7 @@ async def test_users_conversations_and_messages(db, monkeypatch):
         }
     )
     assert deleted == {
+        "code": 0,
         "success": True,
         "messages": [{"message_uid": "message-1"}],
     }
@@ -548,7 +544,11 @@ async def test_users_conversations_and_messages(db, monkeypatch):
             {"user_uid": "user-1", "conversation_uid": "conv-1", "messages": []}
         ),
     ):
-        assert result["success"] is False
+        assert result == {
+            "success": True,
+            "code": 1001,
+            "messages": "Invalid request payload.",
+        }
 
 
 @pytest.mark.asyncio
@@ -562,7 +562,7 @@ async def test_compressed_context(db, monkeypatch):
             "conversation_uid": "conv-1",
             "content": "remember this",
         }
-    ) == {"success": True, "messages": "success"}
+    ) == {"code": 0, "success": True, "messages": {}}
     memory = (
         await db.list_compressed_contexts(
             {"user_uid": "user-1", "conversation_uid": "conv-1"}
@@ -663,7 +663,7 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
             "model_list": ["model-a"],
             "description": "initial",
         }
-    ) == {"success": True, "messages": {"provider_id": "provider-1"}}
+    ) == {"code": 0, "success": True, "messages": {"provider_id": "provider-1"}}
     provider = (await db.get_llm_provider({"provider_id": "provider-1"}))["messages"][0]
     assert provider["type"] == "openai"
     assert provider["model_list"] == ["model-a"]
@@ -678,7 +678,7 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
             "type": "ANTHROPIC",
             "model_list": ["claude"],
         }
-    ) == {"success": True, "messages": "success"}
+    ) == {"code": 0, "success": True, "messages": {}}
     provider = (await db.get_llm_provider({"provider_id": "provider-1"}))["messages"][0]
     assert provider["provider_name"] == "Updated"
     assert provider["type"] == "anthropic"
@@ -705,7 +705,7 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
             "config": {"command": "demo"},
             "description": "tool server",
         }
-    ) == {"success": True, "messages": {"mcp_id": "mcp-1"}}
+    ) == {"code": 0, "success": True, "messages": {"mcp_id": "mcp-1"}}
     mcp = (await db.list_mcp_servers({"user_uid": "user-1"}))["messages"][0]
     assert mcp["config"] == {"command": "demo"}
     enabled_mcp = (await db.list_enabled_mcp_servers({"user_uid": "user-1"}))[
@@ -740,7 +740,7 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
             "repeat": "day",
             "extra_config": {"timezone": "Asia/Tokyo"},
         }
-    ) == {"success": True, "messages": {"task_id": "task-1"}}
+    ) == {"code": 0, "success": True, "messages": {"task_id": "task-1"}}
     task = (await db.get_cron_task({"task_id": "task-1"}))["messages"][0]
     assert task["platform"] == "default"
     assert task["exec_time"] == "2026-07-22T09:30:00"
@@ -761,7 +761,7 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
             "extra_config": {"weekday": 1},
             "enabled": False,
         }
-    ) == {"success": True, "messages": "success"}
+    ) == {"code": 0, "success": True, "messages": {}}
     task = (await db.get_cron_task({"task_id": "task-1"}))["messages"][0]
     assert (task["name"], task["repeat"], task["enabled"]) == (
         "Weekly check",
@@ -856,8 +856,9 @@ async def test_message_objects_reject_encoded_text_before_allocating_a_cursor(
             },
         }
     )
-    assert not result["success"]
-    assert result["messages"] == f"fail: Message {field} must be an object"
+    assert result["success"] is True
+    assert result["code"] == 1001
+    assert result["messages"] == "Invalid request payload."
     assert (await db.list_messages(payload))["messages"] == []
     conversation = (await db.get_conversation(payload))["messages"][0]
     assert conversation["latest_cursor"] == 0
@@ -874,3 +875,46 @@ def test_data_service_generates_uuid4_strings(tmp_path):
         parsed = UUID(identifier)
         assert parsed.version == 4
         assert str(parsed) == identifier
+
+
+@pytest.mark.parametrize(
+    ("method", "payload", "code"),
+    [
+        ("verify_user", {"user_uid": "missing"}, 2001),
+        ("verify_user", {}, 1001),
+        ("get_messages_embedding_sync_status", {}, 2005),
+        ("sync_messages_embedding", {}, 2004),
+        ("delete_messages", {"messages": []}, 1001),
+        (
+            "append_message",
+            {"user_uid": "missing", "conversation_uid": "missing", "message": {}},
+            1001,
+        ),
+        (
+            "append_message",
+            {
+                "user_uid": "missing",
+                "conversation_uid": "missing",
+                "message": {
+                    "message_uid": "m",
+                    "role": "user",
+                    "content": [{"type": "text", "text": "hello"}],
+                },
+            },
+            2003,
+        ),
+    ],
+)
+async def test_business_errors_return_directly_without_the_exception_handler(
+    db, method, payload, code
+):
+    from alira.modules.database.utils.errors import ERROR_MESSAGES, StoreCode
+
+    operation = getattr(type(db), method).__wrapped__
+    assert await operation(db, payload) == {
+        "success": True,
+        "code": code,
+        "messages": ERROR_MESSAGES[StoreCode(code)],
+    }
+    assert await db._fetch_all(text("SELECT user_uid FROM users")) == []
+    assert await db._fetch_all(text("SELECT message_uid FROM messages")) == []

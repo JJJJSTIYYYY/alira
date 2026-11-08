@@ -36,11 +36,9 @@ async def test_upload_files_checks_user_then_saves_file():
         "file_path": ["/upload/demo.txt"],
         "workspace": "/workspace/demo",
     }
-    expected = {"success": True, "messages": [{"file_name": "demo.txt"}]}
+    expected = {"code": 0, "success": True, "messages": [{"file_name": "demo.txt"}]}
     data_store = SimpleNamespace(
-        ensure_user_exists=AsyncMock(
-            return_value={"success": True, "messages": "success"}
-        )
+        verify_user=AsyncMock(return_value={"code": 0, "success": True, "messages": {}})
     )
     file_store = SimpleNamespace(save_files=AsyncMock(return_value=expected))
     executor = make_executor(data_store=data_store, file_store=file_store)
@@ -48,14 +46,14 @@ async def test_upload_files_checks_user_then_saves_file():
     result = await executor.upload_files(payload)
 
     assert result == expected
-    data_store.ensure_user_exists.assert_awaited_once_with(payload)
+    data_store.verify_user.assert_awaited_once_with({"user_uid": payload["user_uid"]})
     file_store.save_files.assert_awaited_once_with(payload)
 
 
 @pytest.mark.asyncio
 async def test_upload_files_short_circuits_for_missing_user():
-    failure = {"success": False, "messages": "user missing"}
-    data_store = SimpleNamespace(ensure_user_exists=AsyncMock(return_value=failure))
+    failure = {"code": 5000, "success": False, "messages": "user missing"}
+    data_store = SimpleNamespace(verify_user=AsyncMock(return_value=failure))
     file_store = SimpleNamespace(save_files=AsyncMock())
     executor = make_executor(data_store=data_store, file_store=file_store)
 
@@ -68,7 +66,7 @@ async def test_upload_files_short_circuits_for_missing_user():
 @pytest.mark.asyncio
 async def test_upload_files_converts_unexpected_exception():
     data_store = SimpleNamespace(
-        ensure_user_exists=AsyncMock(side_effect=RuntimeError("database down"))
+        verify_user=AsyncMock(side_effect=RuntimeError("database down"))
     )
     executor = make_executor(
         data_store=data_store,
@@ -77,13 +75,18 @@ async def test_upload_files_converts_unexpected_exception():
 
     result = await executor.upload_files({"user_uid": "user-1"})
 
-    assert result == {"success": False, "messages": "fail: database down"}
+    assert result == {
+        "code": 5000,
+        "success": False,
+        "messages": "Internal database service error.",
+    }
 
 
 @pytest.mark.asyncio
 async def test_create_skills_returns_file_metadata():
     payload = {"user_uid": "user-1", "file_path": ["/upload/demo.zip"]}
     file_result = {
+        "code": 0,
         "success": True,
         "messages": [
             {
@@ -98,7 +101,7 @@ async def test_create_skills_returns_file_metadata():
         ],
     }
     data_store = SimpleNamespace(
-        ensure_user_exists=AsyncMock(return_value={"success": True}),
+        verify_user=AsyncMock(return_value={"code": 0, "success": True}),
     )
     file_store = SimpleNamespace(
         import_skill_packages=AsyncMock(return_value=file_result)
@@ -106,15 +109,15 @@ async def test_create_skills_returns_file_metadata():
     executor = make_executor(data_store=data_store, file_store=file_store)
 
     assert await executor.create_skills(payload) == file_result
-    data_store.ensure_user_exists.assert_awaited_once_with(payload)
+    data_store.verify_user.assert_awaited_once_with({"user_uid": payload["user_uid"]})
     file_store.import_skill_packages.assert_awaited_once_with(payload)
 
 
 @pytest.mark.asyncio
 async def test_create_skills_short_circuits_on_user_or_file_failure():
-    user_failure = {"success": False, "messages": "user missing"}
+    user_failure = {"code": 5000, "success": False, "messages": "user missing"}
     data_store = SimpleNamespace(
-        ensure_user_exists=AsyncMock(return_value=user_failure),
+        verify_user=AsyncMock(return_value=user_failure),
     )
     file_store = SimpleNamespace(import_skill_packages=AsyncMock())
     executor = make_executor(data_store=data_store, file_store=file_store)
@@ -122,8 +125,8 @@ async def test_create_skills_short_circuits_on_user_or_file_failure():
     assert await executor.create_skills({"user_uid": "missing"}) == user_failure
     file_store.import_skill_packages.assert_not_awaited()
 
-    file_failure = {"success": False, "messages": "invalid package"}
-    data_store.ensure_user_exists.return_value = {"success": True}
+    file_failure = {"code": 5000, "success": False, "messages": "invalid package"}
+    data_store.verify_user.return_value = {"code": 0, "success": True}
     file_store.import_skill_packages.return_value = file_failure
 
     assert await executor.create_skills({"user_uid": "user-1"}) == file_failure
@@ -132,7 +135,7 @@ async def test_create_skills_short_circuits_on_user_or_file_failure():
 @pytest.mark.asyncio
 async def test_create_skills_converts_unexpected_exception():
     data_store = SimpleNamespace(
-        ensure_user_exists=AsyncMock(return_value={"success": True}),
+        verify_user=AsyncMock(return_value={"code": 0, "success": True}),
     )
     file_store = SimpleNamespace(
         import_skill_packages=AsyncMock(side_effect=RuntimeError("filesystem down"))
@@ -141,7 +144,11 @@ async def test_create_skills_converts_unexpected_exception():
 
     result = await executor.create_skills({"user_uid": "user-1"})
 
-    assert result == {"success": False, "messages": "fail: filesystem down"}
+    assert result == {
+        "code": 5000,
+        "success": False,
+        "messages": "Internal database service error.",
+    }
 
 
 def test_removed_metadata_actions_are_not_exported():
@@ -171,9 +178,7 @@ async def test_create_skills_saves_archive_without_metadata_tables(
     await data_store.start()
     try:
         assert (
-            await data_store.create_user(
-                {"user_uid": "user-1", "username": "demo", "password": "test"}
-            )
+            await data_store.create_user({"user_uid": "user-1", "user_name": "demo"})
         )["success"]
         executor = make_executor(data_store=data_store, file_store=FileService())
         result = await executor.create_skills(

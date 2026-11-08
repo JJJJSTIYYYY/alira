@@ -21,8 +21,7 @@ users = Table(
     metadata,
     Column("id", Integer, primary_key=True),
     Column("user_uid", Text, nullable=False, unique=True),
-    Column("username", Text, nullable=False, unique=True),
-    Column("password", Text, nullable=False),
+    Column("user_name", Text, nullable=False, unique=True),
     Column(
         "created_at", Text, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     ),

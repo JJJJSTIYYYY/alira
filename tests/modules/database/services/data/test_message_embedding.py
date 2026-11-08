@@ -199,7 +199,7 @@ async def test_sync_submissions_share_one_background_task_and_stop_drains_it(
     await append(db, "history")
     await drain(db)
     await db._execute(delete(db._embedding.table))
-    assert not (await db.get_messages_embedding_sync_status())["success"]
+    assert (await db.get_messages_embedding_sync_status())["code"] == 2005
     entered = asyncio.Event()
     release = asyncio.Event()
     calls = []
@@ -243,7 +243,7 @@ async def test_sync_submissions_share_one_background_task_and_stop_drains_it(
     assert db._engine is None
     await db.start()
     assert len(await index_rows(db)) == 1
-    assert not (await db.get_messages_embedding_sync_status())["success"]
+    assert (await db.get_messages_embedding_sync_status())["code"] == 2005
 
 
 async def test_sync_failure_is_queryable_and_allows_a_new_submission(
@@ -268,14 +268,14 @@ async def test_sync_failure_is_queryable_and_allows_a_new_submission(
         "status": "failed",
         "inserted": 0,
         "deleted": 0,
-        "error": "RuntimeError: model unavailable",
+        "error": "Internal database service error.",
     }
     monkeypatch.setattr(MessageEmbedding, "encode", original_encode)
     retry = await db.sync_messages_embedding()
     assert retry["success"] and retry != submitted
-    assert not (await db.get_messages_embedding_sync_status(submitted["messages"]))[
-        "success"
-    ]
+    assert (await db.get_messages_embedding_sync_status(submitted["messages"]))[
+        "code"
+    ] == 2005
     await asyncio.wait_for(db._embedding_sync_task, timeout=2)
     completed = await db.get_messages_embedding_sync_status(retry["messages"])
     assert completed["messages"]["status"] == "completed"
@@ -469,7 +469,8 @@ async def test_vector_search_filters_invalid_messages_before_page_limit(
     invalid = await db.search_messages_vec(
         {"user_uid": "user-1", "keyword": "needle", "min_similarity": 1.1}
     )
-    assert not invalid["success"]
+    assert invalid["success"] is True
+    assert invalid["code"] == 1001
     scoped = await db.search_messages_vec(
         {
             "user_uid": "user-1",
@@ -547,7 +548,7 @@ async def test_disabled_vector_search_delegates_to_text_search(tmp_path, monkeyp
     monkeypatch.setattr(service_module, "SQLITE_EMBEDDING_ENABLE", False)
     db = DataService(tmp_path / "disabled.sqlite3")
     payload = {"user_uid": "user-1", "keyword": "needle", "cursor": {"msg_cursor": 4}}
-    expected = {"success": True, "messages": [], "next_cursor": None}
+    expected = {"code": 0, "success": True, "messages": [], "next_cursor": None}
     seen = []
 
     async def search(received):
@@ -559,7 +560,7 @@ async def test_disabled_vector_search_delegates_to_text_search(tmp_path, monkeyp
     try:
         assert await db.search_messages_vec(payload) is expected
         assert seen == [payload]
-        assert not (await db.sync_messages_embedding())["success"]
+        assert (await db.sync_messages_embedding())["code"] == 2004
         tables = await db._fetch_all(
             text("SELECT name FROM sqlite_master WHERE type='table'")
         )

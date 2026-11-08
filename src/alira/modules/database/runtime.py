@@ -9,6 +9,11 @@ from alira.modules.database.executor import StoreExecutor
 from alira.modules.database.services.cache import CacheService
 from alira.modules.database.services.data import DataService
 from alira.modules.database.services.files import FileService
+from alira.modules.database.utils.errors import (
+    StoreCode,
+    exception_code,
+    failure_result,
+)
 from alira.utils.logger import logger
 
 
@@ -84,7 +89,7 @@ class _StoreRuntime:
                     continue
                 handler = self._handlers.get(action)
                 result = (
-                    {"success": False, "messages": f"unknown action: {action}"}
+                    failure_result(StoreCode.UNKNOWN_ACTION)
                     if handler is None
                     else await handler(payload)
                 )
@@ -94,9 +99,11 @@ class _StoreRuntime:
                 if asyncio.current_task().cancelling():
                     raise
             except Exception as exc:  # noqa: BLE001 - isolate action failures
-                logger.exception(f"Store action `{action}` failed: {exc}")
-                future.set_result(
-                    {"success": False, "messages": f"internal error: {exc}"}
-                )
+                code = exception_code(exc)
+                if code == StoreCode.INTERNAL_ERROR:
+                    logger.exception("Store action %s failed", action)
+                else:
+                    logger.warning("Store action %s failed: %s", action, code.name)
+                future.set_result(failure_result(code))
             finally:
                 self._queue.task_done()

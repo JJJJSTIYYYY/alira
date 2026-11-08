@@ -6,7 +6,8 @@ from typing import TypedDict
 class AliraIdentity(TypedDict):
     """Identify an Alira user on a platform."""
 
-    id: str
+    id: str  # user_uid
+    name: str  # username
     platform: str
 
 

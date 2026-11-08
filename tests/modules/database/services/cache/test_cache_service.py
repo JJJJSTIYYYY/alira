@@ -25,13 +25,15 @@ async def test_message_cache_workflow_is_copy_safe(tmp_path, payload):
     ]
 
     assert await service.set_messages({**payload, "messages": original}) == {
+        "code": 0,
         "success": True,
-        "messages": "success",
+        "messages": {},
     }
     original[0]["content"] = "mutated outside cache"
 
     result = await service.get_messages(payload)
     assert result == {
+        "code": 0,
         "success": True,
         "messages": [
             {
@@ -65,10 +67,12 @@ async def test_message_cache_workflow_is_copy_safe(tmp_path, payload):
     ]
 
     assert await service.delete_messages(payload) == {
+        "code": 0,
         "success": True,
-        "messages": "success",
+        "messages": {},
     }
     assert await service.get_messages(payload) == {
+        "code": 0,
         "success": True,
         "messages": [],
         "cache_hit": False,
@@ -168,25 +172,26 @@ async def test_branch_chain_create_update_and_read(tmp_path, payload):
 
     assert await service.set_branch_chain(
         {**payload, "node_id_chain": ["root", "old"]}
-    ) == {"success": True, "messages": "success"}
+    ) == {"code": 0, "success": True, "messages": {}}
     assert await service.get_branch_chain(payload) == {
+        "code": 0,
         "success": True,
         "messages": ["root", "old"],
         "cache_hit": True,
     }
     assert await service.update_branch_chain(
         {**payload, "parent_id": "root", "node_id": "new"}
-    ) == {"success": True, "messages": "success"}
+    ) == {"code": 0, "success": True, "messages": {}}
     assert (await service.get_branch_chain(payload))["messages"] == [
         "root",
         "new",
     ]
     assert await service.update_branch_chain(
         {**payload, "parent_id": "root", "node_id": "new"}
-    ) == {"success": True, "messages": "already up to date"}
+    ) == {"code": 0, "success": True, "messages": {}}
     assert await service.update_branch_chain(
         {**payload, "parent_id": "missing", "node_id": "other"}
-    ) == {"success": True, "messages": "parent_id not found in cache"}
+    ) == {"code": 0, "success": True, "messages": {}}
 
 
 @pytest.mark.asyncio
@@ -195,8 +200,9 @@ async def test_branch_chain_update_handles_cache_miss(tmp_path, payload):
 
     assert await service.update_branch_chain(
         {**payload, "parent_id": "root", "node_id": "new"}
-    ) == {"success": True, "messages": "cache not found"}
+    ) == {"code": 0, "success": True, "messages": {}}
     assert await service.get_branch_chain(payload) == {
+        "code": 0,
         "success": True,
         "messages": [],
         "cache_hit": False,
@@ -229,6 +235,7 @@ async def test_resource_cache_preserves_empty_hits_and_supports_invalidation(
 
     empty_hit = await service.get_resource(first)
     assert empty_hit == {
+        "code": 0,
         "success": True,
         "messages": [],
         "cache_hit": True,
@@ -378,6 +385,7 @@ async def test_persistence_rejects_invalid_shapes_but_keeps_generic_resource_lis
 
     assert set(service._cache) == {"resource:g:valid"}
     assert await service.get_resource({"cache_group": "g", "cache_key": "valid"}) == {
+        "code": 0,
         "success": True,
         "messages": [1, None, {"a": []}],
         "cache_hit": True,
@@ -409,6 +417,7 @@ async def test_empty_branch_chain_remains_a_copy_safe_hit(tmp_path, payload):
 
     await service.set_branch_chain({**payload, "node_id_chain": []})
     assert await service.get_branch_chain(payload) == {
+        "code": 0,
         "success": True,
         "messages": [],
         "cache_hit": True,
@@ -430,7 +439,7 @@ async def test_validation_errors_are_returned_as_failures(tmp_path, payload):
         await service.update_branch_chain(payload),
     ):
         assert result["success"] is False
-        assert result["messages"].startswith("fail:")
+        assert isinstance(result["messages"], str) and result["code"] != 0
 
 
 def test_item_validation_and_purge_helpers(monkeypatch, tmp_path):

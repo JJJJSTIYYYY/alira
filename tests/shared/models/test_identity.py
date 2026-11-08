@@ -10,7 +10,7 @@ from alira.utils.validation import validate_typed_dict_fields
 
 
 def test_user_and_conversation_required_fields():
-    user: AliraIdentity = {"id": "user", "platform": "web"}
+    user: AliraIdentity = {"id": "user", "name": "alice", "platform": "web"}
     conversation: ConversationIdentity = {**user, "conversation_uid": "conversation"}
 
     validate_typed_dict_fields(user, AliraIdentity, non_empty=True)
@@ -20,11 +20,10 @@ def test_user_and_conversation_required_fields():
         validate_typed_dict_fields(user, ConversationIdentity, non_empty=True)
 
 
-@pytest.mark.parametrize(
-    "schema", [AliraIdentity, ConversationIdentity]
-)
-def test_identity_fields_validation_rejects_missing_user_fields(schema):
-    with pytest.raises(ValueError, match="platform"):
-        validate_typed_dict_fields({"id": "user"}, schema, non_empty=True)
-    with pytest.raises(ValueError, match="id"):
-        validate_typed_dict_fields({"platform": "web"}, schema, non_empty=True)
+@pytest.mark.parametrize("schema", [AliraIdentity, ConversationIdentity])
+@pytest.mark.parametrize("field", ["id", "name", "platform"])
+def test_identity_fields_validation_rejects_missing_user_fields(schema, field):
+    user = {"id": "user", "name": "alice", "platform": "web"}
+    del user[field]
+    with pytest.raises(ValueError, match=field):
+        validate_typed_dict_fields(user, schema, non_empty=True)

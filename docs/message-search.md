@@ -43,12 +43,12 @@ DATABASE:
 from alira.modules.database import query_store
 
 submitted = await query_store("sync_messages_embedding", {})
-# {"success": True, "messages": {"task_id": "..."}}
+# {"success": True, "code": 0, "messages": {"task_id": "..."}}
 
 result = await query_store(
     "get_messages_embedding_sync_status", submitted["messages"]
 )
-# {"success": True, "messages": {
+# {"success": True, "code": 0, "messages": {
 #     "task_id": "...", "status": "running",
 #     "inserted": 64, "deleted": 3, "error": None
 # }}
@@ -59,27 +59,30 @@ result = await query_store(
 已提交的任务不会因 HTTP 请求超时或取消而停止；正常关闭服务时会等待同步完成。
 
 状态查询返回 `running`、`completed` 或 `failed`。`inserted` 和 `deleted` 是已经提交到数据库的计数；
-失败时 `error` 包含错误类型和原因。需要时重复查询该动作即可获取进度，提交成功不代表同步已经成功完成。
+失败时 `error` 为错误码表中的标准消息。需要时重复查询该动作即可获取进度，提交成功不代表同步已经成功完成。
 完成或失败后再次提交会生成新的任务 ID。只保留当前模型最近一次任务的内存状态，重启后清空。
 查询时传 `{}` 可获取最新任务，适用于提交成功但 HTTP 响应丢失、未收到任务 ID 的情况；
 没有任务或指定的任务 ID 已被新任务替代时返回失败。
 
 同步只作用于当前模型的表：删除对应消息已软删除或不存在的记录，为尚无向量的正文消息建立记录。
 已经存在相同消息 ID 的记录直接跳过。向量检索关闭时，提交返回失败结果。
-`query_store` 会把服务返回的失败结果转换为 `RuntimeError`，调用方可按现有存储异常约定处理。
+预期业务失败直接返回 `{"success": True, "code": int, "messages": str}`（非零 code）；
+意外异常返回 `success=False`。调用方使用 `code == 0` 判断业务成功。
+完整契约与错误码见[数据库接口](database.md)。
 
 ## 检索与分页
 
-通过 `query_store` 调用的搜索动作返回 `AliraMessage` 对象列表，并将会话信息置于 `conversations` 字典；
+通过 `query_store` 调用的搜索动作在 `messages` 中返回
+`{"messages": list[AliraMessage], "conversations": dict, "next_cursor": dict | None}`；
 直接调用 `DataService` 则返回完整消息记录，并附上会话标题和活动时间。
 
 ```python
 payload = {"user_uid": "user-1", "keyword": "如何保存聊天记录"}
 result = await query_store("search_messages_vec", payload)
 
-if result["success"] and result["next_cursor"] is not None:
+if result["code"] == 0 and result["messages"]["next_cursor"] is not None:
     next_page = await query_store(
-        "search_messages_vec", {**payload, "cursor": result["next_cursor"]}
+        "search_messages_vec", {**payload, "cursor": result["messages"]["next_cursor"]}
     )
 ```
 

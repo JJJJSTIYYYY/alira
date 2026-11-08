@@ -16,6 +16,8 @@ from fastmcp.client.transports import (
 )
 from my_llm import ToolCall
 
+from alira.lifespan import auto_init
+from alira.modules.database import query_store
 from alira.modules.tool.base import BaseTool
 from alira.modules.tool.mcp.base import McpMetaSchema
 from alira.modules.tool.mcp.mcp_tool import MCPTool
@@ -24,8 +26,6 @@ from alira.modules.tool.utils.manager import ToolManager
 from alira.modules.tool.utils.request import ToolRequest
 from alira.shared.models.identity import AliraIdentity, ConversationIdentity
 from alira.utils import logger
-from alira.modules.database import query_store
-from alira.lifespan import auto_init
 
 IdentityKey = tuple[str, str, str]
 UserKey = tuple[str, str]
@@ -160,15 +160,14 @@ class MCPToolManager(ToolManager):
         return await self.execute_tool(tool, {"target": deepcopy(identity)}, call)
 
     async def get_mcp_meta(self, user_uid: str) -> list[McpMetaSchema]:
-        try:
-            result = await query_store(
-                action="list_enabled_mcp_servers",
-                payload={"user_uid": user_uid},
-            )
-            return result.get("messages", [])
-        except Exception as exc:
-            logger.warning(f"Failed to fetch MCP meta: {exc}")
+        result = await query_store(
+            action="list_enabled_mcp_servers",
+            payload={"user_uid": user_uid},
+        )
+        if result["code"] != 0:
+            logger.warning("Failed to fetch MCP meta: %s", result["messages"])
             return []
+        return result["messages"]
 
     @staticmethod
     def _resolve_endpoint(mcp_meta: McpMetaSchema, config_key: str) -> str:

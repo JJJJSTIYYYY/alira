@@ -8,6 +8,8 @@ from threading import Lock, Thread
 from typing import TYPE_CHECKING
 
 from alira.lifespan.auto_init import auto_init
+from alira.modules.database.utils.errors import StoreCode, StoreError
+from alira.modules.database.utils.handlers import service_handler
 from alira.shared.application.config import WORKER_COUNT
 
 if TYPE_CHECKING:
@@ -67,25 +69,34 @@ class StoreManager:
         """Start once, waiting for thread-local services to become ready."""
         await self._ensure_started()
 
+    @service_handler
     async def query(self, action: str, payload: dict) -> dict:
-        """Execute an action on the store thread, raising on a failure result.
+        """Execute an action on the store thread.
 
         Keep ``payload`` stable until this call completes. Storage code borrows
         it without copying it on the caller thread. Cancelling the call abandons
         its result; a write already being executed may still finish.
+
+        Args:
+            action: Registered StoreExecutor action name.
+            payload: Action-specific dictionary documented on the executor.
+
+        Returns:
+            ``{"success": bool, "code": int, "messages": dict | list | str}``.
+            Success uses code 0 and dict/list results; failure uses a code and
+            standard message from database.utils.errors. Business rejections use
+            success=True and a nonzero code; unexpected exceptions use success=False.
+            Cancellation propagates.
         """
         state = await self._ensure_started()
         pending: Future[dict] = Future()
         with self._guard:
             if state.stopping:
-                raise RuntimeError("Store manager is stopping")
+                raise StoreError(StoreCode.STORE_UNAVAILABLE)
             state.loop.call_soon_threadsafe(
                 state.runtime.submit, pending, action, payload
             )
-        result = await asyncio.wrap_future(pending)
-        if not result.get("success"):
-            raise RuntimeError(f"Failed to access store: {result.get('messages')}")
-        return result
+        return await asyncio.wrap_future(pending)
 
     async def stop(self) -> None:
         """Stop accepting queries, cancel work, close services, and join the thread.
@@ -128,11 +139,11 @@ class StoreManager:
                     self._state = None
                     raise
             elif state.stopping:
-                raise RuntimeError("Store manager is stopping")
+                raise StoreError(StoreCode.STORE_UNAVAILABLE)
         await _wait_for_transition(state.ready)
         with self._guard:
             if state.stopping:
-                raise RuntimeError("Store manager is stopping")
+                raise StoreError(StoreCode.STORE_UNAVAILABLE)
         return state
 
     def _run(self, state: _ThreadState) -> None:
@@ -180,7 +191,7 @@ class StoreManager:
             await runtime.start()
             with self._guard:
                 if state.stopping:
-                    raise RuntimeError("Store manager is stopping")
+                    raise StoreError(StoreCode.STORE_UNAVAILABLE)
                 state.ready.set_result(None)
             await state.stop_signal.wait()
         finally:
@@ -194,5 +205,24 @@ auto_init.register(_store_manager, group="database")
 
 
 async def query_store(action: str, payload: dict) -> dict:
-    """Execute an action through the application-owned store manager."""
+    """Execute a database action through the application-owned manager.
+
+    Args:
+        action: Registered StoreExecutor action, for example ``create_user``,
+            ``verify_user`` or ``list_all_user``.
+        payload: Action-specific dictionary. Registration takes
+            ``{"user_name": str}``; verification takes ``{"user_uid": str}``
+            or ``{"user_name": str}`` (both require a single matching user).
+            Listing users takes ``{}``. Other payloads are documented on
+            StoreExecutor's corresponding action.
+
+    Returns:
+        Exactly ``{"success": bool, "code": int, "messages": dict | list | str}``.
+        Success uses code 0 and dict/list results (``{}`` for a completed mutation).
+        User registration/verification return ``{"user_uid": str, "user_name": str}``
+        in messages; listing returns a list of those dictionaries. Failure uses
+        a nonzero code and fixed string from database.utils.errors, without
+        exception details. Business rejections use success=True; unexpected
+        exceptions use success=False. Check code == 0 for business success. Cancellation propagates to the caller.
+    """
     return await _store_manager.query(action, payload)

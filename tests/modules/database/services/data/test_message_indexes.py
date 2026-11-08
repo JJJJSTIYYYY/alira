@@ -143,7 +143,12 @@ async def test_tool_results_do_not_reset_notifications_or_enter_user_search(
         matches = await db.search_messages(
             {"user_uid": "user-1", "keyword": "tool-only-needle"}
         )
-        assert matches == {"success": True, "messages": [], "next_cursor": None}
+        assert matches == {
+            "code": 0,
+            "success": True,
+            "messages": [],
+            "next_cursor": None,
+        }
         rows = (await db.list_messages(payload))["messages"]
         assert rows[0]["role"] == "tool" and rows[0]["call_id"] == "c1"
         user = AliraUserMessage(content=[TextContent("user-only-needle")])
