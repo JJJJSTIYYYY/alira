@@ -142,12 +142,6 @@ llm_provider = Table(
     metadata,
     Column("id", Integer, primary_key=True),
     Column("provider_id", Text, nullable=False, unique=True),
-    Column(
-        "user_uid",
-        Text,
-        ForeignKey("users.user_uid", ondelete="CASCADE"),
-        nullable=False,
-    ),
     Column("provider_name", Text, nullable=False),
     Column(
         "type",
@@ -172,12 +166,6 @@ mcp_server = Table(
     metadata,
     Column("id", Integer, primary_key=True),
     Column("mcp_id", Text, nullable=False, unique=True),
-    Column(
-        "user_uid",
-        Text,
-        ForeignKey("users.user_uid", ondelete="CASCADE"),
-        nullable=False,
-    ),
     Column("mcp_name", Text, nullable=False),
     Column(
         "transport",

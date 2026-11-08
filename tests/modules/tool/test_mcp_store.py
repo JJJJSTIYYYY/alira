@@ -22,7 +22,5 @@ async def test_get_mcp_meta_handles_structured_database_results(
     )
     monkeypatch.setattr(manager_module, "query_store", query)
 
-    assert await MCPToolManager().get_mcp_meta("user-1") == (rows if code == 0 else [])
-    query.assert_awaited_once_with(
-        action="list_enabled_mcp_servers", payload={"user_uid": "user-1"}
-    )
+    assert await MCPToolManager().get_mcp_meta() == (rows if code == 0 else [])
+    query.assert_awaited_once_with(action="list_enabled_mcp_servers", payload={})

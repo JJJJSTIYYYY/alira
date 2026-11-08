@@ -159,10 +159,10 @@ class MCPToolManager(ToolManager):
         call = ToolCall(call_id=uuid4().hex, name=tool_name, arguments=arguments or {})
         return await self.execute_tool(tool, {"target": deepcopy(identity)}, call)
 
-    async def get_mcp_meta(self, user_uid: str) -> list[McpMetaSchema]:
+    async def get_mcp_meta(self) -> list[McpMetaSchema]:
         result = await query_store(
             action="list_enabled_mcp_servers",
-            payload={"user_uid": user_uid},
+            payload={},
         )
         if result["code"] != 0:
             logger.warning("Failed to fetch MCP meta: %s", result["messages"])
@@ -258,7 +258,7 @@ class MCPToolManager(ToolManager):
         key = self.identity_key(identity)
         self._check_admission(key, self._catalogs.get(key))
         tools: list[MCPTool] = []
-        for meta in await self.get_mcp_meta(identity["id"]):
+        for meta in await self.get_mcp_meta():
             tools.extend(await self.get_mcp_tools(meta, identity))
         return tools
 
@@ -270,7 +270,8 @@ class MCPToolManager(ToolManager):
             async with catalog.locks[mcp_id]:
                 try:
                     await catalog.runtimes[mcp_id].stop()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
+                    # Close remaining runtimes before reporting any client failure.
                     errors.append(exc)
                 else:
                     catalog.runtimes.pop(mcp_id, None)

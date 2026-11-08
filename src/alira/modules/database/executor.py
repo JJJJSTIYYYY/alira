@@ -700,7 +700,7 @@ class StoreExecutor:
         """Create a provider and invalidate its list and item caches.
 
         Args:
-            payload: Required ``user_uid``, ``provider_name``,
+            payload: Required ``provider_name``,
                 ``endpoint`` and JSON-serializable ``model_list`` (normally a list).
                 ``type`` defaults to ``"openai"`` when absent or falsey and is
                 lowercased; the schema permits ``openai`` and ``anthropic``.
@@ -718,7 +718,7 @@ class StoreExecutor:
             self.data_store.create_llm_provider,
             {
                 "cache_group": "providers:list",
-                "cache_key": write_payload.get("user_uid") or "-",
+                "cache_key": "all",
             },
             {
                 "cache_group": "providers:item",
@@ -728,10 +728,10 @@ class StoreExecutor:
 
     @store_action
     async def list_llm_providers(self, payload: dict) -> dict:
-        """List the user's providers.
+        """List all providers.
 
         Args:
-            payload: Required ``user_uid``.
+            payload: No required keys; use an empty dictionary.
 
         Returns:
             Success: ``{"success": True, "code": 0, "messages": rows}``, possibly empty.
@@ -745,7 +745,7 @@ class StoreExecutor:
         return await self._read_through_resource(
             payload,
             cache_group="providers:list",
-            cache_key=payload.get("user_uid") or "-",
+            cache_key="all",
             reader=self.data_store.list_llm_providers,
         )
 
@@ -775,7 +775,7 @@ class StoreExecutor:
         """Update a provider and invalidate its list and item caches.
 
         Args:
-            payload: Required ``provider_id`` and ``user_uid``. Optional
+            payload: Required ``provider_id``. Optional
                 ``provider_name``, ``type``, ``endpoint``, ``model_list``,
                 ``description`` and ``is_deleted``; absent or ``None`` values
                 leave fields unchanged. String ``type`` is lowercased. A list
@@ -793,7 +793,7 @@ class StoreExecutor:
             self.data_store.update_llm_provider,
             {
                 "cache_group": "providers:list",
-                "cache_key": payload.get("user_uid") or "-",
+                "cache_key": "all",
             },
             {
                 "cache_group": "providers:item",
@@ -807,10 +807,10 @@ class StoreExecutor:
 
     @store_action
     async def create_mcp_server(self, payload: dict) -> dict:
-        """Create an MCP server and invalidate its user's server lists.
+        """Create an MCP server and invalidate the shared server lists.
 
         Args:
-            payload: Required ``user_uid``, ``mcp_name``, ``transport``
+            payload: Required ``mcp_name``, ``transport``
                 and ``endpoint`` (which may be ``None``). Transport must be
                 ``stdio``, ``http``, ``streamable_http``, ``websocket`` or ``sse``.
                 Optional JSON-serializable ``config`` defaults to an empty object
@@ -827,15 +827,15 @@ class StoreExecutor:
         return await self._write_resource(
             write_payload,
             self.data_store.create_mcp_server,
-            {"cache_group": f"mcp:{write_payload.get('user_uid') or '-'}"},
+            {"cache_group": "mcp"},
         )
 
     @store_action
     async def list_mcp_servers(self, payload: dict) -> dict:
-        """List the user's MCP servers.
+        """List all MCP servers.
 
         Args:
-            payload: Required ``user_uid``.
+            payload: No required keys; use an empty dictionary.
 
         Returns:
             Success: ``{"success": True, "code": 0, "messages": rows}``, possibly empty.
@@ -848,17 +848,17 @@ class StoreExecutor:
         """
         return await self._read_through_resource(
             payload,
-            cache_group=f"mcp:{payload.get('user_uid') or '-'}",
+            cache_group="mcp",
             cache_key="all",
             reader=self.data_store.list_mcp_servers,
         )
 
     @store_action
     async def list_enabled_mcp_servers(self, payload: dict) -> dict:
-        """List the user's enabled MCP servers.
+        """List all enabled MCP servers.
 
         Args:
-            payload: Required ``user_uid``.
+            payload: No required keys; use an empty dictionary.
 
         Returns:
             Success: ``{"success": True, "code": 0, "messages": rows}``, possibly empty.
@@ -870,17 +870,17 @@ class StoreExecutor:
         """
         return await self._read_through_resource(
             payload,
-            cache_group=f"mcp:{payload.get('user_uid') or '-'}",
+            cache_group="mcp",
             cache_key="enabled",
             reader=self.data_store.list_enabled_mcp_servers,
         )
 
     @store_action
     async def update_mcp_server(self, payload: dict) -> dict:
-        """Update an MCP server and invalidate its user's server lists.
+        """Update an MCP server and invalidate the shared server lists.
 
         Args:
-            payload: Required ``mcp_id`` and ``user_uid``. Optional ``mcp_name``,
+            payload: Required ``mcp_id``. Optional ``mcp_name``,
                 ``transport``, ``endpoint``, ``config``, ``description``, ``enabled``,
                 ``tool_count`` and ``is_deleted``; absent or ``None`` values leave
                 fields unchanged. Config is encoded as a native JSON value.
@@ -896,7 +896,7 @@ class StoreExecutor:
         return await self._write_resource(
             payload,
             self.data_store.update_mcp_server,
-            {"cache_group": f"mcp:{payload.get('user_uid') or '-'}"},
+            {"cache_group": "mcp"},
         )
 
     @store_action

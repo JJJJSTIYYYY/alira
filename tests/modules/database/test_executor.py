@@ -1062,7 +1062,7 @@ async def test_create_metadata_handlers_normalize_exceptions(
             (
                 {
                     "cache_group": "providers:list",
-                    "cache_key": "user-1",
+                    "cache_key": "all",
                 },
                 {
                     "cache_group": "providers:item",
@@ -1074,7 +1074,7 @@ async def test_create_metadata_handlers_normalize_exceptions(
             "create_mcp_server",
             "create_mcp_server",
             "mcp_id",
-            ({"cache_group": "mcp:user-1"},),
+            ({"cache_group": "mcp"},),
         ),
     ],
 )
@@ -1104,7 +1104,7 @@ async def test_create_resource_handlers_invalidate_after_success(
         data_store=SimpleNamespace(**{store_method: AsyncMock(side_effect=persist)}),
         cache_store=SimpleNamespace(delete_resources=AsyncMock(side_effect=invalidate)),
     )
-    payload = {"user_uid": "user-1"}
+    payload = {}
 
     assert (await getattr(executor, method_name)(payload))["success"] is True
     assert call_order == [
@@ -1229,11 +1229,11 @@ async def test_mcp_readers_return_store_failure_and_exception(
     [
         (
             "list_llm_providers",
-            {"user_uid": "user-1"},
+            {},
             "list_llm_providers",
             {
                 "cache_group": "providers:list",
-                "cache_key": "user-1",
+                "cache_key": "all",
             },
         ),
         (
@@ -1247,19 +1247,19 @@ async def test_mcp_readers_return_store_failure_and_exception(
         ),
         (
             "list_mcp_servers",
-            {"user_uid": "user-1"},
+            {},
             "list_mcp_servers",
             {
-                "cache_group": "mcp:user-1",
+                "cache_group": "mcp",
                 "cache_key": "all",
             },
         ),
         (
             "list_enabled_mcp_servers",
-            {"user_uid": "user-1"},
+            {},
             "list_enabled_mcp_servers",
             {
-                "cache_group": "mcp:user-1",
+                "cache_group": "mcp",
                 "cache_key": "enabled",
             },
         ),
@@ -1326,23 +1326,23 @@ async def test_resource_readers_use_cache_hits_without_querying_data_store(
     [
         (
             "list_llm_providers",
-            {"user_uid": "user-1"},
+            {},
             "list_llm_providers",
             [{"provider_id": "provider-1", "model_list": ["model-a"]}],
             [{"provider_id": "provider-1", "model_list": ["model-a"]}],
             {
                 "cache_group": "providers:list",
-                "cache_key": "user-1",
+                "cache_key": "all",
             },
         ),
         (
             "list_mcp_servers",
-            {"user_uid": "user-1"},
+            {},
             "list_mcp_servers",
             [{"mcp_id": "mcp-1", "config": {"command": "demo"}}],
             [{"mcp_id": "mcp-1", "config": {"command": "demo"}}],
             {
-                "cache_group": "mcp:user-1",
+                "cache_group": "mcp",
                 "cache_key": "all",
             },
         ),
@@ -1478,11 +1478,11 @@ async def test_resource_read_falls_back_and_ignores_cache_failures():
         (
             "update_llm_provider",
             "update_llm_provider",
-            {"user_uid": "user-1", "provider_id": "provider-1"},
+            {"provider_id": "provider-1"},
             (
                 {
                     "cache_group": "providers:list",
-                    "cache_key": "user-1",
+                    "cache_key": "all",
                 },
                 {
                     "cache_group": "providers:item",
@@ -1493,8 +1493,8 @@ async def test_resource_read_falls_back_and_ignores_cache_failures():
         (
             "update_mcp_server",
             "update_mcp_server",
-            {"user_uid": "user-1", "mcp_id": "mcp-1"},
-            ({"cache_group": "mcp:user-1"},),
+            {"mcp_id": "mcp-1"},
+            ({"cache_group": "mcp"},),
         ),
         (
             "create_compressed_context",
@@ -1549,12 +1549,12 @@ async def test_resource_mutations_persist_before_best_effort_invalidation(
         (
             "update_llm_provider",
             "update_llm_provider",
-            {"user_uid": "user-1", "provider_id": "provider-1"},
+            {"provider_id": "provider-1"},
         ),
         (
             "update_mcp_server",
             "update_mcp_server",
-            {"user_uid": "user-1", "mcp_id": "mcp-1"},
+            {"mcp_id": "mcp-1"},
         ),
         (
             "create_compressed_context",

@@ -632,11 +632,15 @@ async def test_compressed_context(db, monkeypatch):
 async def test_json_reads_survive_restart_and_do_not_share_state(
     db, monkeypatch, create_method, read_method, payload, json_field
 ):
-    await create_user_and_conversation(db, monkeypatch)
-    created = await getattr(db, create_method)({"user_uid": "user-1", **payload})
+    read_payload = {}
+    if create_method == "create_cron_task":
+        await create_user_and_conversation(db, monkeypatch)
+        payload = {**payload, "user_uid": "user-1"}
+        read_payload = {"user_uid": "user-1"}
+    created = await getattr(db, create_method)(payload)
     assert created["success"]
 
-    result = await getattr(db, read_method)({"user_uid": "user-1"})
+    result = await getattr(db, read_method)(read_payload)
     assert result["success"]
     value = result["messages"][0][json_field]
     assert value == payload[json_field]
@@ -644,19 +648,37 @@ async def test_json_reads_survive_restart_and_do_not_share_state(
 
     await db.stop()
     await db.start()
-    restored = await getattr(db, read_method)({"user_uid": "user-1"})
+    restored = await getattr(db, read_method)(read_payload)
     assert restored["success"]
     assert restored["messages"][0][json_field] == payload[json_field]
 
 
 @pytest.mark.asyncio
-async def test_provider_mcp_and_cron_crud(db, monkeypatch):
-    await create_user_and_conversation(db, monkeypatch)
+async def test_shared_configuration_tables_have_no_user_dependency(db):
+    for table in ("llm_provider", "mcp_server"):
+        columns = await db._fetch_all(text(f"PRAGMA table_info({table})"))
+        assert "user_uid" not in {column["name"] for column in columns}
+        assert await db._fetch_all(text(f"PRAGMA foreign_key_list({table})")) == []
 
+    cron_columns = await db._fetch_all(text("PRAGMA table_info(cron_task)"))
+    assert (
+        next(column for column in cron_columns if column["name"] == "user_uid")[
+            "notnull"
+        ]
+        == 1
+    )
+    cron_keys = await db._fetch_all(text("PRAGMA foreign_key_list(cron_task)"))
+    assert {(key["from"], key["table"], key["to"]) for key in cron_keys} == {
+        ("user_uid", "users", "user_uid"),
+        ("conversation_uid", "conversations", "conversation_uid"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_provider_mcp_and_cron_crud(db, monkeypatch):
     assert await db.create_llm_provider(
         {
             "provider_id": "provider-1",
-            "user_uid": "user-1",
             "provider_name": "Primary",
             "type": "OPENAI",
             "endpoint": "https://example.test/v1",
@@ -667,13 +689,10 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
     provider = (await db.get_llm_provider({"provider_id": "provider-1"}))["messages"][0]
     assert provider["type"] == "openai"
     assert provider["model_list"] == ["model-a"]
-    assert (await db.list_llm_providers({"user_uid": "user-1"}))["messages"] == [
-        provider
-    ]
+    assert (await db.list_llm_providers({}))["messages"] == [provider]
     assert await db.update_llm_provider(
         {
             "provider_id": "provider-1",
-            "user_uid": "user-1",
             "provider_name": "Updated",
             "type": "ANTHROPIC",
             "model_list": ["claude"],
@@ -687,7 +706,6 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
         await db.create_llm_provider(
             {
                 "provider_id": "provider-1",
-                "user_uid": "user-1",
                 "provider_name": "duplicate",
                 "endpoint": "x",
                 "model_list": [],
@@ -698,7 +716,6 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
     assert await db.create_mcp_server(
         {
             "mcp_id": "mcp-1",
-            "user_uid": "user-1",
             "mcp_name": "Tools",
             "transport": "stdio",
             "endpoint": None,
@@ -706,28 +723,26 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
             "description": "tool server",
         }
     ) == {"code": 0, "success": True, "messages": {"mcp_id": "mcp-1"}}
-    mcp = (await db.list_mcp_servers({"user_uid": "user-1"}))["messages"][0]
+    mcp = (await db.list_mcp_servers({}))["messages"][0]
     assert mcp["config"] == {"command": "demo"}
-    enabled_mcp = (await db.list_enabled_mcp_servers({"user_uid": "user-1"}))[
-        "messages"
-    ]
+    enabled_mcp = (await db.list_enabled_mcp_servers({}))["messages"]
     assert len(enabled_mcp) == 1
     assert enabled_mcp[0]["config"] == {"command": "demo"}
     await db.update_mcp_server(
         {
             "mcp_id": "mcp-1",
-            "user_uid": "user-1",
             "mcp_name": "Updated tools",
             "config": {"command": "new"},
             "enabled": False,
             "tool_count": 7,
         }
     )
-    assert (await db.list_enabled_mcp_servers({"user_uid": "user-1"}))["messages"] == []
-    mcp = (await db.list_mcp_servers({"user_uid": "user-1"}))["messages"][0]
+    assert (await db.list_enabled_mcp_servers({}))["messages"] == []
+    mcp = (await db.list_mcp_servers({}))["messages"][0]
     assert (mcp["mcp_name"], mcp["tool_count"]) == ("Updated tools", 7)
     assert mcp["config"] == {"command": "new"}
 
+    await create_user_and_conversation(db, monkeypatch)
     assert await db.create_cron_task(
         {
             "task_id": "task-1",
@@ -742,10 +757,12 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
         }
     ) == {"code": 0, "success": True, "messages": {"task_id": "task-1"}}
     task = (await db.get_cron_task({"task_id": "task-1"}))["messages"][0]
+    assert task["user_uid"] == "user-1"
     assert task["platform"] == "default"
     assert task["exec_time"] == "2026-07-22T09:30:00"
     assert task["extra_config"] == {"timezone": "Asia/Tokyo"}
     tasks = (await db.list_cron_tasks({"user_uid": "user-1"}))["messages"]
+    assert (await db.list_cron_tasks({"user_uid": "other"}))["messages"] == []
     enabled_tasks = (await db.list_enabled_cron_tasks({}))["messages"]
     assert len(tasks) == len(enabled_tasks) == 1
     assert (
@@ -773,14 +790,10 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
     await db.update_cron_task({"task_id": "task-1", "is_deleted": True})
     assert (await db.get_cron_task({"task_id": "task-1"}))["messages"] == []
 
-    await db.update_llm_provider(
-        {"provider_id": "provider-1", "user_uid": "user-1", "is_deleted": True}
-    )
-    await db.update_mcp_server(
-        {"mcp_id": "mcp-1", "user_uid": "user-1", "is_deleted": True}
-    )
-    assert (await db.list_llm_providers({"user_uid": "user-1"}))["messages"] == []
-    assert (await db.list_mcp_servers({"user_uid": "user-1"}))["messages"] == []
+    await db.update_llm_provider({"provider_id": "provider-1", "is_deleted": True})
+    await db.update_mcp_server({"mcp_id": "mcp-1", "is_deleted": True})
+    assert (await db.list_llm_providers({}))["messages"] == []
+    assert (await db.list_mcp_servers({}))["messages"] == []
 
 
 @pytest.mark.parametrize("resource", ["provider", "mcp", "cron"])
@@ -790,7 +803,8 @@ async def test_provider_mcp_and_cron_crud(db, monkeypatch):
 async def test_json_values_keep_their_type_across_create_and_update(
     db, monkeypatch, resource, value
 ):
-    await create_user_and_conversation(db, monkeypatch)
+    if resource == "cron":
+        await create_user_and_conversation(db, monkeypatch)
     operations = {
         "provider": (
             db.create_llm_provider,
@@ -799,7 +813,6 @@ async def test_json_values_keep_their_type_across_create_and_update(
             "model_list",
             {
                 "provider_id": "json-provider",
-                "user_uid": "user-1",
                 "provider_name": "JSON",
                 "endpoint": "https://example.test",
             },
@@ -811,7 +824,6 @@ async def test_json_values_keep_their_type_across_create_and_update(
             "config",
             {
                 "mcp_id": "json-mcp",
-                "user_uid": "user-1",
                 "mcp_name": "JSON",
                 "transport": "stdio",
                 "endpoint": None,

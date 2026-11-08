@@ -197,13 +197,13 @@ async def test_identity_isolation_and_discovery_catalog(manager):
 
 
 @pytest.mark.asyncio
-async def test_load_all_tools_uses_user_id_and_binds_full_identity(
+async def test_load_all_tools_uses_shared_meta_and_binds_full_identity(
     manager, monkeypatch
 ):
     get_meta = AsyncMock(return_value=[META])
     monkeypatch.setattr(manager, "get_mcp_meta", get_meta)
     tools = await manager.load_all_mcp_tools(IDENTITY)
-    get_meta.assert_awaited_once_with(IDENTITY["id"])
+    get_meta.assert_awaited_once_with()
     assert manager.tools_for(IDENTITY) == tools
     assert await tools[0].execute(state(), call()) == "output:first"
 

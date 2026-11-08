@@ -1033,10 +1033,10 @@ class DataService:
 
     @service_handler
     async def create_llm_provider(self, payload: dict) -> dict:
-        """Insert an LLM provider for an existing user.
+        """Insert a shared LLM provider.
 
         Args:
-            payload: Required ``provider_id``, ``user_uid``, ``provider_name``,
+            payload: Required ``provider_id``, ``provider_name``,
                 ``endpoint`` and JSON-serializable ``model_list`` (normally a list).
                 ``type`` defaults to ``"openai"`` when absent or falsey and is
                 lowercased; the schema permits ``openai`` and ``anthropic``.
@@ -1051,7 +1051,6 @@ class DataService:
         await self._execute(
             insert(llm_provider).values(
                 provider_id=provider_id,
-                user_uid=payload["user_uid"],
                 provider_name=payload["provider_name"],
                 type=(payload.get("type", "openai") or "openai").lower(),
                 endpoint=payload["endpoint"],
@@ -1063,10 +1062,10 @@ class DataService:
 
     @service_handler
     async def list_llm_providers(self, payload: dict) -> dict:
-        """List a user's undeleted LLM providers, newest creation first.
+        """List all undeleted LLM providers, newest creation first.
 
         Args:
-            payload: Required ``user_uid``.
+            payload: No required keys; use an empty dictionary.
 
         Returns:
             Success: ``{"success": True, "code": 0, "messages": rows}``, possibly empty.
@@ -1086,10 +1085,7 @@ class DataService:
                 llm_provider.c.description,
                 llm_provider.c.created_at,
             )
-            .where(
-                llm_provider.c.user_uid == payload["user_uid"],
-                llm_provider.c.is_deleted == 0,
-            )
+            .where(llm_provider.c.is_deleted == 0)
             .order_by(llm_provider.c.created_at.desc()),
             json_fields=("model_list",),
         )
@@ -1097,7 +1093,7 @@ class DataService:
 
     @service_handler
     async def get_llm_provider(self, payload: dict) -> dict:
-        """Get one undeleted LLM provider by ID, without a user filter.
+        """Get one undeleted LLM provider by ID.
 
         Args:
             payload: Required ``provider_id``.
@@ -1132,7 +1128,7 @@ class DataService:
         """Partially update or soft-delete an undeleted LLM provider.
 
         Args:
-            payload: Required ``provider_id`` and ``user_uid``. Optional
+            payload: Required ``provider_id``. Optional
                 ``provider_name``, ``type``, ``endpoint``, ``model_list``,
                 ``description`` and ``is_deleted``; absent or ``None`` values
                 leave fields unchanged. String ``type`` is lowercased. A list
@@ -1152,7 +1148,6 @@ class DataService:
             update(llm_provider)
             .where(
                 llm_provider.c.provider_id == payload["provider_id"],
-                llm_provider.c.user_uid == payload["user_uid"],
                 llm_provider.c.is_deleted == 0,
             )
             .values(
@@ -1180,10 +1175,10 @@ class DataService:
 
     @service_handler
     async def create_mcp_server(self, payload: dict) -> dict:
-        """Insert MCP server metadata for an existing user.
+        """Insert shared MCP server metadata.
 
         Args:
-            payload: Required ``mcp_id``, ``user_uid``, ``mcp_name``, ``transport``
+            payload: Required ``mcp_id``, ``mcp_name``, ``transport``
                 and ``endpoint`` (which may be ``None``). Transport must be
                 ``stdio``, ``http``, ``streamable_http``, ``websocket`` or ``sse``.
                 Optional JSON-serializable ``config`` defaults to an empty object
@@ -1199,7 +1194,6 @@ class DataService:
         await self._execute(
             insert(mcp_server).values(
                 mcp_id=mcp_id,
-                user_uid=payload["user_uid"],
                 mcp_name=payload["mcp_name"],
                 transport=payload["transport"],
                 endpoint=payload["endpoint"],
@@ -1211,10 +1205,10 @@ class DataService:
 
     @service_handler
     async def list_mcp_servers(self, payload: dict) -> dict:
-        """List a user's undeleted MCP servers, newest creation first.
+        """List all undeleted MCP servers, newest creation first.
 
         Args:
-            payload: Required ``user_uid``.
+            payload: No required keys; use an empty dictionary.
 
         Returns:
             Success: ``{"success": True, "code": 0, "messages": rows}``, possibly empty.
@@ -1236,10 +1230,7 @@ class DataService:
                 mcp_server.c.tool_count,
                 mcp_server.c.created_at,
             )
-            .where(
-                mcp_server.c.user_uid == payload["user_uid"],
-                mcp_server.c.is_deleted == 0,
-            )
+            .where(mcp_server.c.is_deleted == 0)
             .order_by(mcp_server.c.created_at.desc()),
             json_fields=("config",),
         )
@@ -1247,10 +1238,10 @@ class DataService:
 
     @service_handler
     async def list_enabled_mcp_servers(self, payload: dict) -> dict:
-        """List a user's enabled, undeleted MCP servers, oldest creation first.
+        """List all enabled, undeleted MCP servers, oldest creation first.
 
         Args:
-            payload: Required ``user_uid``.
+            payload: No required keys; use an empty dictionary.
 
         Returns:
             Success: ``{"success": True, "code": 0, "messages": rows}``, possibly empty.
@@ -1268,7 +1259,6 @@ class DataService:
                 mcp_server.c.config,
             )
             .where(
-                mcp_server.c.user_uid == payload["user_uid"],
                 mcp_server.c.enabled == 1,
                 mcp_server.c.is_deleted == 0,
             )
@@ -1282,7 +1272,7 @@ class DataService:
         """Partially update or soft-delete an undeleted MCP server.
 
         Args:
-            payload: Required ``mcp_id`` and ``user_uid``. Optional ``mcp_name``,
+            payload: Required ``mcp_id``. Optional ``mcp_name``,
                 ``transport``, ``endpoint``, ``config``, ``description``, ``enabled``,
                 ``tool_count`` and ``is_deleted``; absent or ``None`` values leave
                 fields unchanged. Config is encoded as a native JSON value.
@@ -1299,7 +1289,6 @@ class DataService:
             update(mcp_server)
             .where(
                 mcp_server.c.mcp_id == payload["mcp_id"],
-                mcp_server.c.user_uid == payload["user_uid"],
                 mcp_server.c.is_deleted == 0,
             )
             .values(
