@@ -1,5 +1,5 @@
 from alira.agent.core.tool.function.function_tool_manager import FunctionToolManager
-from alira.agent.core.tool.function.tool import Tool, tool
+from alira.agent.core.tool.function.tool import InvalidToolArgsError, Tool, tool
 from alira.agent.core.tool.function.tool_context import (
     AutoInjection,
     ToolInjectionContext,
@@ -8,6 +8,7 @@ from alira.agent.core.tool.function.tool_context import (
 __all__ = [
     "AutoInjection",
     "FunctionToolManager",
+    "InvalidToolArgsError",
     "Tool",
     "ToolInjectionContext",
     "tool",

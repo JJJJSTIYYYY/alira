@@ -93,7 +93,7 @@ tools = ToolNode([functions, mcp], identity=identity, bind_llm_node="model")
 
 客户端按 `(id, platform, conversation_uid)` 隔离，同一身份下再按 `mcp_id` 复用。发现接口要求完整 `ConversationIdentity`；执行时检查 `state["target"]` 与发现身份一致，校验通过后才访问连接。
 
-身份类型从 `alira.interface.utils.identiity` 导入：`AliraIdentity` 包含 `id`、`platform`，`ConversationIdentity(AliraIdentity)` 再增加必填的 `conversation_uid`。MCP 发现、调用和关闭单个会话使用 `ConversationIdentity`；`close_user()` 只要求 `AliraIdentity`。
+身份类型从 `alira.shared.models.identity` 导入：`AliraIdentity` 包含 `id`、`platform`，`ConversationIdentity(AliraIdentity)` 再增加必填的 `conversation_uid`。MCP 发现、调用和关闭单个会话使用 `ConversationIdentity`；`close_user()` 只要求 `AliraIdentity`。
 
 旧的 `config.lifecycle`、`agent_invoke` 和 `tool_calls` 资源作用域已移除。连接在工具批次和图调用结束后保持打开，通过以下入口显式回收：
 

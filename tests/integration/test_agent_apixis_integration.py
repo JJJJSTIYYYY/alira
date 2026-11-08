@@ -18,7 +18,7 @@ from apixis.core.utils.exception import InvalidContextError
 from httpx import ASGITransport, AsyncClient
 
 from alira.agent.core.graph import AgentGraph, AgentGraphCreator
-from alira.shared.message import AliraAssistantMessage, AliraToolMessage
+from alira.shared.models.message import AliraAssistantMessage, AliraToolMessage
 
 
 class State(TypedDict, total=False):

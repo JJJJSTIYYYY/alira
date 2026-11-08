@@ -14,7 +14,7 @@ import pytest_asyncio
 from alira.agent.core.tool import BaseTool, FunctionToolManager, Tool, ToolNode
 from alira.agent.core.tool.mcp import MCPTool, MCPToolError, MCPToolManager
 from alira.agent.core.tool.mcp.base import _convert_call_tool_result
-from alira.shared.message import AliraAssistantMessage
+from alira.shared.models.message import AliraAssistantMessage
 
 META = {
     "mcp_id": "test-mcp",
@@ -120,7 +120,7 @@ async def test_one_graph_node_routes_function_and_mcp_managers(manager):
 
     from alira.agent.core.bot.alira_bot import AliraBot
     from alira.agent.core.graph import AgentGraphCreator
-    from alira.common.type.identiity import ConversationIdentity
+    from alira.shared.models.identity import ConversationIdentity
 
     class State(TypedDict):
         messages: Annotated[list, AutoMerge()]
@@ -525,7 +525,7 @@ async def test_real_in_process_mcp_protocol_persists_across_agent_graph_invocati
     from mcp.server.fastmcp import FastMCP
 
     from alira.agent.core.graph import AgentGraphCreator
-    from alira.common.type.identiity import ConversationIdentity
+    from alira.shared.models.identity import ConversationIdentity
 
     class State(TypedDict):
         target: ConversationIdentity

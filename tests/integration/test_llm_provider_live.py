@@ -12,7 +12,7 @@ from alira.agent.core.bot import (
     ModelProfile,
     ProviderProfile,
 )
-from alira.shared.message import AliraUserMessage
+from alira.shared.models.message import AliraUserMessage
 
 pytestmark = pytest.mark.skipif(
     not all(

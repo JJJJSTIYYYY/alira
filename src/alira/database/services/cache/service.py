@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from alira.shared.config import (
+from alira.shared.application.config import (
     ALIRA_BASE_DIR,
     HOT_CACHE_DEFAULT_EXPIRE_SECONDS,
     STATIC_CACHE_DEFAULT_EXPIRE_SECONDS,

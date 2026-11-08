@@ -15,7 +15,7 @@ from pathlib import Path
 from threading import Condition, RLock, Thread
 from typing import Any, ClassVar
 
-from alira.shared.config import (
+from alira.shared.application.config import (
     ALIRA_BASE_DIR,
     DEBUG_LEVEL,
     LOG_BUFFER_SIZE,

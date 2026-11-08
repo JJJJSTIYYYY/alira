@@ -27,13 +27,13 @@ from pydantic import BaseModel
 
 from alira.agent.core.tool import (
     AutoInjection,
+    InvalidToolArgsError,
     Tool,
     ToolInjectionContext,
     ToolNode,
     tool,
 )
-from alira.agent.core.utils.exception import InvalidToolArgsError
-from alira.shared.message import (
+from alira.shared.models.message import (
     AliraAssistantMessage,
     AliraToolMessage,
 )

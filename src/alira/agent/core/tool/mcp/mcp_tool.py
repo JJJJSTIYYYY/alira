@@ -13,7 +13,7 @@ from alira.agent.core.tool.mcp.base import (
     McpMetaSchema,
     _get_model_value,
 )
-from alira.common.type.identiity import ConversationIdentity
+from alira.shared.models.identity import ConversationIdentity
 
 if TYPE_CHECKING:
     from alira.agent.core.tool.mcp.mcp_tool_manager import MCPToolManager

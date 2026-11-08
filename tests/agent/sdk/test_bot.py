@@ -21,7 +21,7 @@ from my_llm import (
 
 from alira.agent.core.bot import AliraBot, BaseProvider, CustomProvider
 from alira.agent.core.tool import ToolNode, tool
-from alira.shared.message import (
+from alira.shared.models.message import (
     AliraAssistantMessage,
     AliraSystemMessage,
     AliraUserMessage,

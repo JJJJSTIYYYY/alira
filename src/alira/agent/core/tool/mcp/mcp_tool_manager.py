@@ -22,7 +22,7 @@ from alira.agent.core.tool.mcp.mcp_tool import MCPTool
 from alira.agent.core.tool.mcp.mcp_tool_runtime import MCPToolRuntime
 from alira.agent.core.tool.utils.manager import ToolManager
 from alira.agent.core.tool.utils.request import ToolRequest
-from alira.common.type.identiity import AliraIdentity, ConversationIdentity
+from alira.shared.models.identity import AliraIdentity, ConversationIdentity
 from alira.utils import logger
 from alira.database import query_store
 from alira.lifespan import auto_init

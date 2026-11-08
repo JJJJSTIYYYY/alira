@@ -8,7 +8,7 @@ from threading import Lock, Thread
 from typing import TYPE_CHECKING
 
 from alira.lifespan.auto_init import auto_init
-from alira.shared.config import WORKER_COUNT
+from alira.shared.application.config import WORKER_COUNT
 
 if TYPE_CHECKING:
     from alira.database.runtime import _StoreRuntime

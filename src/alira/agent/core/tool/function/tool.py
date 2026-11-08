@@ -31,7 +31,10 @@ from alira.agent.core.tool.function.tool_context import (
     AutoInjection,
     ToolInjectionContext,
 )
-from alira.agent.core.utils.exception import InvalidToolArgsError
+
+
+class InvalidToolArgsError(TypeError):
+    """Function tool arguments do not satisfy the callable's signature."""
 
 
 class Tool(BaseTool):

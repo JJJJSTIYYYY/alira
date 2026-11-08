@@ -57,13 +57,13 @@ from alira.database.utils.serialization import (
     encode_optional_json,
     normalize_row,
 )
-from alira.shared.config import (
+from alira.shared.application.config import (
     SQLITE_DATABASE,
     SQLITE_EMBEDDING_ENABLE,
     SQLITE_EMBEDDING_MODEL,
     VECTOR_DIMENSION,
 )
-from alira.shared.message import message_wire_from_record
+from alira.shared.models.message import message_wire_from_record
 from alira.utils.logger import logger
 
 MESSAGE_RECORD_COLUMNS = tuple(

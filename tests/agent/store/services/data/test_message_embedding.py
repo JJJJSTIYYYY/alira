@@ -13,7 +13,7 @@ from alira.database.services.data import DataService
 from alira.database.services.data import service as service_module
 from alira.database.services.data.embedding import MessageEmbedding
 from alira.database.services.data.schema import messages
-from alira.shared.message import (
+from alira.shared.models.message import (
     AliraAssistantMessage,
     AliraSystemMessage,
     AliraToolMessage,

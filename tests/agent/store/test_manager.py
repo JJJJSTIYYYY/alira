@@ -101,7 +101,7 @@ async def test_query_store_round_trip_cache_isolation_and_restart(
             "metadata": {"usage": {"total": 2}},
         }
         if as_object:
-            from alira.shared.message import AliraAssistantMessage
+            from alira.shared.models.message import AliraAssistantMessage
 
             message = AliraAssistantMessage.from_record(message)
         await query_store("append_message", {**payload, "message": message})
@@ -772,7 +772,7 @@ async def test_tool_role_survives_branch_filter_cache_and_restart(manager):
     from my_llm import TextContent, ToolCall
     from my_llm.middleware.protocol import generation_input
 
-    from alira.shared.message import (
+    from alira.shared.models.message import (
         AliraAssistantMessage,
         AliraMessageExtension,
         AliraSystemMessage,
@@ -825,7 +825,7 @@ async def test_search_returns_business_messages_and_separate_conversation_detail
 ):
     from my_llm import TextContent
 
-    from alira.shared.message import AliraAssistantMessage, AliraUserMessage
+    from alira.shared.models.message import AliraAssistantMessage, AliraUserMessage
 
     payload = await create_conversation(manager)
     original = [

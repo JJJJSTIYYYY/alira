@@ -1,1 +1,0 @@
-from alira.common.type.exception import *
