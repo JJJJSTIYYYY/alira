@@ -14,7 +14,7 @@ from apixis.core.graph import (
     NodeGraph,
 )
 
-from alira.agent.core.tool import ToolNode, tool
+from alira.modules.tool import ToolNode, tool
 from alira.shared.models.message import (
     AliraAssistantMessage,
     AliraToolMessage,

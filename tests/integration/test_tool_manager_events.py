@@ -18,7 +18,7 @@ from apixis.core.event import (
 )
 from apixis.core.graph import AutoMerge, GraphManager
 
-from alira.agent.core.tool import FunctionToolManager, ToolNode
+from alira.modules.tool import FunctionToolManager, ToolNode
 from alira.shared.models.message import AliraAssistantMessage
 
 pytestmark = pytest.mark.parametrize(

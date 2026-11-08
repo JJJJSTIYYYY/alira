@@ -17,7 +17,7 @@ from apixis.core.graph import (
 from apixis.core.utils.exception import InvalidContextError
 from httpx import ASGITransport, AsyncClient
 
-from alira.agent.core.graph import AgentGraph, AgentGraphCreator
+from alira.modules.agent.core.graph import AgentGraph, AgentGraphCreator
 from alira.shared.models.message import AliraAssistantMessage, AliraToolMessage
 
 

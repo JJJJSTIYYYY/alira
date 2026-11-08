@@ -16,7 +16,7 @@
 目录结构：
 
 ```text
-src/alira/agent/core/tool/
+src/alira/modules/tool/
 ├── base.py                 # BaseTool 与共享调用契约
 ├── tool_node.py            # 图节点编排
 ├── function/               # 函数工具、注入上下文、FunctionToolManager
@@ -24,7 +24,7 @@ src/alira/agent/core/tool/
 └── utils/                  # 常驻服务、类型化请求、结果事件与取消协议
 ```
 
-旧的 `tool/tool.py` 和 `tool/tool_context.py` 已迁入 `function/`。公共导入继续使用 `alira.agent.core.tool`，MCP 类型从 `alira.agent.core.tool.mcp` 导入。
+工具模块位于 `modules/tool/`，与 `modules/agent/` 并列。公共导入使用 `alira.modules.tool`，MCP 类型从 `alira.modules.tool.mcp` 导入。函数工具实现位于 `function/`。
 
 ## 一次调用如何流转
 
@@ -44,7 +44,7 @@ src/alira/agent/core/tool/
 ## 函数工具
 
 ```python
-from alira.agent.core.tool import FunctionToolManager, ToolNode, tool
+from alira.modules.tool import FunctionToolManager, ToolNode, tool
 
 @tool
 async def weather(city: str) -> str:
@@ -75,8 +75,8 @@ await auto_init.stop(group="tool")
 ## MCP 工具
 
 ```python
-from alira.agent.core.tool import FunctionToolManager, ToolNode
-from alira.agent.core.tool.mcp import MCPToolManager
+from alira.modules.tool import FunctionToolManager, ToolNode
+from alira.modules.tool.mcp import MCPToolManager
 
 identity = {"id": "user-1", "platform": "web", "conversation_uid": "chat-1"}
 functions = FunctionToolManager([weather])

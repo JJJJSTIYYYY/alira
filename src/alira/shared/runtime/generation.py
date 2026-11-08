@@ -19,7 +19,7 @@ class Generation:
     """
 
     identity: ConversationIdentity
-    generation_id: str = field(default_factory=lambda: str(uuid4()))
+    generation_id: str = field(default_factory=lambda: uuid4().hex)
 
     @cached_property
     def user_uid(self):

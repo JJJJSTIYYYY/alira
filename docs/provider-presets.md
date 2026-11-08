@@ -9,7 +9,7 @@
 
 ```python
 from my_llm import TextContent, UserMessage
-from alira.agent.core.bot import AliraBot, BaseProvider
+from alira.modules.agent.core.bot import AliraBot, BaseProvider
 
 bot = AliraBot(provider="moonshot", model="kimi-k2.6", api_key="YOUR_API_KEY")
 
@@ -286,7 +286,7 @@ CustomProvider 不猜测远端模型能力；由调用方提供有文档依据�
 ```python
 from my_llm import Attribute, Config, ModelProfile, InputParameter, ProviderProfile, omit
 from my_llm import TextContent, UserMessage
-from alira.agent.core.bot import AliraBot, BaseProvider, CustomProvider
+from alira.modules.agent.core.bot import AliraBot, BaseProvider, CustomProvider
 
 custom = CustomProvider(
     name="my-service",

@@ -56,6 +56,10 @@ alira/
 ├── .python-version  # Python 版本
 ├── src/
 │   └── alira/       # 应用源码，版本号统一定义在 _version.py
+│       └── modules/ # 业务模块
+│           ├── agent/    # Agent SDK、图与上下文
+│           ├── tool/     # 函数工具与 MCP
+│           └── database/ # 数据、缓存与文件存储
 ├── tests/           # 测试
 └── docs/            # 文档
 ```

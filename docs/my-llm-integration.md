@@ -8,7 +8,7 @@ Alira 使用 `my-llm-py[all]>=2.0.1`。应用层统一传递 middleware 的 `Mes
 
 ```python
 from my_llm import TextContent
-from alira.agent.core.bot import AliraBot
+from alira.modules.agent.core.bot import AliraBot
 from alira.shared.models.message import AliraAssistantMessage, AliraUserMessage
 
 async with AliraBot(provider="deepseek", model="deepseek-flash", api_key="...") as bot:
@@ -41,7 +41,7 @@ async with AliraBot(provider="deepseek", model="deepseek-flash", api_key="...") 
 
 ```python
 from my_llm import ToolCall
-from alira.agent.core.tool import ToolNode, tool
+from alira.modules.tool import ToolNode, tool
 from alira.shared.models.message import AliraAssistantMessage, AliraUserMessage
 
 @tool
@@ -94,7 +94,7 @@ Profile 使用库的 `Attribute`、`Config`、`InputParameter` 和 `OutputParame
 `messages` 表按 middleware `Message` 的字段存储：`role`、有序 `content`、
 `name`、`protocol`、`item`、`origin`，并增加 `call_id` 兼容 `ToolMessage`。
 不再维护 Chat 专用的 `tool_calls`、`tool_call_id`、`reasoning_content` 等列。
-`role` 支持 `system`、`developer`、`user`、`assistant` 和 `tool`；工具结果使用
+存储的 `role` 支持 `user`、`assistant` 和 `tool`；工具结果使用
 `tool` 角色，并必须携带非空 `call_id`。其他角色不携带 `call_id`。搜索与新消息标记
 直接按角色处理，无需通过 `call_id` 区分用户输入与工具结果。
 
@@ -107,25 +107,38 @@ Profile 使用库的 `Attribute`、`Config`、`InputParameter` 和 `OutputParame
 由业务调用方为这一整轮分配，不要每条消息重新生成。`metadata` 存用量等信息，
 `extensions` 存上传文件、任务等业务数据。
 
-业务消息统一定义在 `alira.shared.models.message`：`AliraSystemMessage`（含 developer）、
+`Generation.generation_id` 默认使用 UUID4 的 32 位 hex 字符串。节点 ID 保留完整
+generation ID，追加 `-user` 或 `-alira`（assistant/tool 共用）后缀。
+数据库的 `generation_id` 声明为 `String(32)`，`node_id` 和 `parent_id` 声明为
+`String(38)`，覆盖最长的 assistant/tool 节点 ID；根节点仍使用 `-`。SQLite 不按声明长度
+截断或校验字符串。这些声明用于新建表，不自动迁移已有表。
+
+`AliraBot` 将调用参数 `system_prompt` 和 `role_schema` 生成的 system 消息依次放在
+历史消息之前。system 仅用于运行时上下文，不生成消息树节点，也不保存到数据库。
+`append_message` 拒绝 system 消息，`list_messages` 和 `list_user_face_messages` 只返回
+user、assistant 和 tool 消息。父子关系由调用方通过 `parent_id` 设置。
+
+业务消息统一定义在 `alira.shared.models.message`：`AliraSystemMessage`、
 `AliraUserMessage`、`AliraAssistantMessage` 和 `AliraToolMessage`，联合类型为
 `AliraMessage`，共享业务字段与扩展属性由 `AliraMessageExtension` 提供。
 各消息类均支持 `from_middleware()`，用于在对应的原生 middleware 消息上附加业务字段，
 直接复用原生内容和协议身份；工具消息同时保留 `call_id`。
 
-`to_record()` 输出包含业务字段的平铺存储记录，`to_wire()` 输出库的 middleware
+可持久化消息的 `to_record()` 输出包含业务字段的平铺存储记录；
+`AliraSystemMessage.to_record()` 会抛出 `ValueError`。`to_wire()` 输出库的 middleware
 协议结构，不包含业务字段。`AliraMessageExtension.from_record()` 按角色恢复
-对应的 Alira 消息子类；具体消息类的 `from_record()` 和 `from_middleware()` 只接受
-匹配的角色。新消息自动分配 `message_uid`，尚未绑定的用户、会话、generation 和
+对应的 user、assistant 或 tool 消息子类，并拒绝 system 记录。
+`from_middleware()` 仍支持运行时的 system 消息；具体消息类的工厂方法只接受匹配的角色。
+新消息自动分配 `message_uid`，尚未绑定的用户、会话、generation 和
 节点标识默认为空字符串。
 
-`query_store("append_message", payload)` 的 `message` 同时接受平铺记录字典和
-`Alira*Message`。`StoreExecutor` 创建独立的存储快照，数据库、缓存和消息树内部
-继续使用字典。`list_messages`、`list_user_messages` 和 `search_messages` 返回的
+`query_store("append_message", payload)` 的 `message` 接受 user、assistant、tool 的
+平铺记录字典或对应的 `Alira*Message`。`StoreExecutor` 创建独立的存储快照，数据库、缓存和消息树内部
+继续使用字典。`list_messages`、`list_user_face_messages` 和 `search_messages` 返回的
 `messages` 均为 `Alira*Message` 列表，可以直接传给 `AliraBot.invoke()`：
 
 ```python
-from alira.database import query_store
+from alira.modules.database import query_store
 
 identity = {"user_uid": "user-1", "conversation_uid": "conversation-1"}
 message = AliraUserMessage(content=[TextContent("你好")], node_id="n1", parent_id="-")

@@ -8,7 +8,7 @@ import pytest_asyncio
 from apixis.core.event import aget_event_loop, aget_event_pipe, factory
 from apixis.core.graph import NodeGraph
 
-from alira.agent.core.tool.utils.manager import ToolManager
+from alira.modules.tool.utils.manager import ToolManager
 from alira.utils.logger import logger
 from alira.lifespan import auto_init
 from alira.lifespan.auto_init import ApixisCore, AutoInit

@@ -13,8 +13,8 @@ from apixis.core.event import (
     wait_for_event,
 )
 
-from alira.agent.core.tool.mcp import MCPRuntimeStop, MCPToolManager, MCPToolRuntime
-from alira.agent.core.tool.utils.request import send_request
+from alira.modules.tool.mcp import MCPRuntimeStop, MCPToolManager, MCPToolRuntime
+from alira.modules.tool.utils.request import send_request
 
 META = {
     "mcp_id": "server",

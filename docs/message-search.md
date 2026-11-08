@@ -40,7 +40,7 @@ DATABASE:
 启动服务和切换模型都不自动同步历史消息。配置修改后重启服务，显式执行全量同步：
 
 ```python
-from alira.database import query_store
+from alira.modules.database import query_store
 
 submitted = await query_store("sync_messages_embedding", {})
 # {"success": True, "messages": {"task_id": "..."}}

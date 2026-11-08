@@ -24,7 +24,6 @@ from alira.shared.models.message import (
     "native_type,message_type,role,tool_fields",
     [
         (InstructionMessage, AliraSystemMessage, "system", {}),
-        (InstructionMessage, AliraSystemMessage, "developer", {}),
         (UserMessage, AliraUserMessage, "user", {}),
         (AssistantMessage, AliraAssistantMessage, "assistant", {}),
         (ToolMessage, AliraToolMessage, "tool", {"call_id": "call-1"}),
@@ -63,8 +62,6 @@ def test_from_middleware_preserves_native_fields_without_copying(
 @pytest.mark.parametrize(
     "message_type,role,tool_fields",
     [
-        (AliraSystemMessage, "system", {}),
-        (AliraSystemMessage, "developer", {}),
         (AliraUserMessage, "user", {}),
         (AliraAssistantMessage, "assistant", {}),
         (AliraToolMessage, "tool", {"call_id": "call-1"}),
@@ -114,6 +111,29 @@ def test_record_round_trip_restores_business_message(message_type, role, tool_fi
     assert restored.origin == message.origin
     assert restored.uploaded_files == ["brief.pdf"]
     assert all(not hasattr(restored, key) for key in storage_fields)
+
+
+@pytest.mark.parametrize("source", ["record", "middleware"])
+def test_business_message_factory_rejects_developer_role(source):
+    with pytest.raises(ValueError, match="unsupported message role: 'developer'"):
+        if source == "record":
+            AliraMessageExtension.from_record({"role": "developer", "content": []})
+        else:
+            AliraMessageExtension.from_middleware(InstructionMessage("developer"))
+
+
+@pytest.mark.parametrize("operation", ["serialize", "restore"])
+def test_system_message_is_runtime_only(operation):
+    message = AliraSystemMessage(content=[TextContent("rules")])
+    assert message.to_wire() == {
+        "role": "system",
+        "content": [{"type": "text", "text": "rules"}],
+    }
+    with pytest.raises(ValueError, match="system messages are runtime-only"):
+        if operation == "serialize":
+            message.to_record()
+        else:
+            AliraMessageExtension.from_record(message.to_wire())
 
 
 @pytest.mark.parametrize("source", ["record", "middleware"])

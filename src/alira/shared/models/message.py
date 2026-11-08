@@ -71,7 +71,9 @@ class AliraMessageExtension:
     @classmethod
     def from_middleware(cls, message: Message, **application_fields: Any) -> Self:
         """Restore the matching Alira type while borrowing native content."""
-        message_class = _MESSAGE_CLASSES_BY_ROLE[message.role]
+        message_class = _MESSAGE_CLASSES_BY_ROLE.get(message.role)
+        if message_class is None:
+            raise ValueError(f"unsupported message role: {message.role!r}")
         if cls is not AliraMessageExtension:
             if not issubclass(cls, message_class):
                 raise ValueError(
@@ -150,9 +152,12 @@ class AliraMessageExtension:
 
 @dataclass(slots=True)
 class AliraSystemMessage(InstructionMessage, AliraMessageExtension):
-    """System/developer instruction message bound to an Alira DB record."""
+    """Runtime-only system instruction with application fields."""
 
-    role: Literal["system", "developer"] = "system"
+    role: Literal["system"] = "system"
+
+    def to_record(self) -> dict[str, Any]:
+        raise ValueError("system messages are runtime-only and cannot be persisted")
 
 
 @dataclass(slots=True)
@@ -181,7 +186,6 @@ AliraMessage: TypeAlias = (
 )
 _MESSAGE_CLASSES_BY_ROLE = {
     "system": AliraSystemMessage,
-    "developer": AliraSystemMessage,
     "user": AliraUserMessage,
     "assistant": AliraAssistantMessage,
     "tool": AliraToolMessage,
@@ -191,6 +195,8 @@ _MESSAGE_CLASSES_BY_ROLE = {
 def message_wire_from_record(record: dict[str, Any]) -> dict[str, Any]:
     """Project a flat record to middleware wire fields without copying content."""
     role = record["role"]
+    if role == "system":
+        raise ValueError("system messages are runtime-only and cannot be persisted")
     if role not in _MESSAGE_CLASSES_BY_ROLE:
         raise ValueError(f"unsupported message role: {role!r}")
     call_id = record.get("call_id")

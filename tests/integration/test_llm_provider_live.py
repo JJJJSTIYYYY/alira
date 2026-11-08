@@ -5,7 +5,7 @@ import os
 import pytest
 from my_llm import Attribute, Config, InputParameter, MessageEvent, TextContent
 
-from alira.agent.core.bot import (
+from alira.modules.agent.core.bot import (
     AliraBot,
     BaseProvider,
     CustomProvider,
