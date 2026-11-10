@@ -16,7 +16,7 @@ from fastmcp.client.transports import (
 )
 from my_llm import ToolCall
 
-from alira.lifespan import auto_init
+from alira.kernel import auto_init
 from alira.modules.database import query_store
 from alira.modules.tool.base import BaseTool
 from alira.modules.tool.mcp.base import McpMetaSchema

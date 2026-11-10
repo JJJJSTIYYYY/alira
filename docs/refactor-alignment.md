@@ -9,7 +9,7 @@
 | `agent/core/tool/` | `alira.modules.tool` | 工具模块与 Agent 并列，已更新业务导入、测试、动态导入和文档示例。 |
 | `agent/`（移出工具后） | `alira.modules.agent` | 保留内部 `core/` 结构，已更新 Agent SDK、图与上下文导入。 |
 | `database/` | `alira.modules.database` | 已核对业务导入、内部导入、测试和 monkeypatch 路径，更新文档目录。 |
-| `alira.common.lifespan` | `alira.lifespan` | 已核对应用、数据库管理器和测试调用，保留分组启停契约。 |
+| `alira.common.lifespan` | `alira.kernel` | 已核对应用、数据库管理器和测试调用，保留分组启停契约。 |
 | `alira.common.type.identiity` | `alira.shared.models.identity` | 修正文件名，集中身份类型和键生成；字段检查由通用工具提供。 |
 | `alira.common.type.generation` | `alira.shared.runtime.generation` | 保留生成状态和上下文绑定契约。 |
 | `alira.common.type.configuration` | `alira.shared.models.configuration` | 用户级配置契约；进程级设置继续由 `alira.shared.application.config` 管理。 |
@@ -99,7 +99,7 @@ validate_typed_dict_fields(conversation, ConversationIdentity, non_empty=True)
 | `tests/modules/database` | 数据、缓存、文件服务、存储执行器与管理器。 |
 | `tests/integration` | Agent、工具、事件和应用生命周期的集成测试。 |
 | `tests/utils` | 字典合并、JSON 序列化、YAML 读写、日志、Uvicorn 日志适配、TypedDict 字段检查。 |
-| `tests/lifespan` | 应用服务初始化与启停。 |
+| `tests/kernel` | 应用服务初始化与启停。 |
 | `tests/shared/models` | 共享消息、身份数据。 |
 | `tests/shared/runtime` | 生成上下文。 |
 | `tests/shared/application` | 应用配置与版本。 |

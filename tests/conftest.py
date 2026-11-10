@@ -10,8 +10,8 @@ from apixis.core.graph import NodeGraph
 
 from alira.modules.tool.utils.manager import ToolManager
 from alira.utils.logger import logger
-from alira.lifespan import auto_init
-from alira.lifespan.auto_init import ApixisCore, AutoInit
+from alira.kernel import auto_init
+from alira.kernel.auto_init import ApixisCore, AutoInit
 
 
 @pytest_asyncio.fixture

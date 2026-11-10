@@ -17,7 +17,7 @@ import alira.router as routers_pkg
 from alira._version import __version__
 from alira.utils.logger import get_uvicorn_log_config, logger
 from alira.shared.application.config import BASE_URL
-from alira.lifespan.auto_init import auto_init
+from alira.kernel.auto_init import auto_init
 
 
 def auto_load_router(app: FastAPI):

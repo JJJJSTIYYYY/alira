@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from alira.lifespan.auto_init import AutoInit, auto_init
+from alira.kernel.auto_init import AutoInit, auto_init
 
 
 @pytest.fixture

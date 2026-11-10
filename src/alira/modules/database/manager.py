@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Lock, Thread
 from typing import TYPE_CHECKING
 
-from alira.lifespan.auto_init import auto_init
+from alira.kernel.auto_init import auto_init
 from alira.modules.database.utils.errors import StoreCode, StoreError
 from alira.modules.database.utils.handlers import service_handler
 from alira.shared.application.config import WORKER_COUNT
