@@ -14,15 +14,15 @@ def test_declaration_does_not_import_web_business_packages():
         [sys.executable, "-c", (
             "import sys\n"
             "import alira.modules.web.main\n"
-            "assert 'alira.modules.web.runtime' not in sys.modules\n"
-            "assert 'alira.modules.web.application' not in sys.modules\n"
+            "assert 'alira.modules.web.src.runtime' not in sys.modules\n"
+            "assert 'alira.modules.web.src.application' not in sys.modules\n"
         )],
         check=True, capture_output=True,
     )
 
 
 async def test_web_module_serves_health_and_restarts_with_core(monkeypatch, core_lifecycle, module_manager_factory, kernel_lifecycle):
-    runtime = importlib.import_module("alira.modules.web.runtime")
+    runtime = importlib.import_module("alira.modules.web.src.runtime")
     monkeypatch.setattr(runtime, "BASE_URL", "http://127.0.0.1:0")
     manager = module_manager_factory()
     core_lifecycle.register(manager)
@@ -47,7 +47,7 @@ async def test_web_module_serves_health_and_restarts_with_core(monkeypatch, core
 
 
 async def test_failed_web_bind_does_not_leave_resources_or_package_claims(tmp_path, monkeypatch, module_manager_factory):
-    runtime = importlib.import_module("alira.modules.web.runtime")
+    runtime = importlib.import_module("alira.modules.web.src.runtime")
     with socket.socket() as occupied:
         occupied.bind(("127.0.0.1", 0))
         occupied.listen()
@@ -77,7 +77,7 @@ async def test_process_signals_stop_web_before_core(tmp_path, exit_signal):
         port = listener.getsockname()[1]
     script = (
         "from alira import main\n"
-        "from alira.modules.web import runtime\n"
+        "from alira.modules.web.src import runtime\n"
         f"runtime.BASE_URL = 'http://127.0.0.1:{port}'\n"
         "from alira.kernel.module import module_manager\n"
         "module_manager._requirements_path = lambda name: None\n"

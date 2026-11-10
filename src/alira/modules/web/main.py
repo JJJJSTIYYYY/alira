@@ -10,7 +10,7 @@ class WebModule(BaseModule):
         self._runtime = None
 
     async def startup(self) -> None:
-        from alira.modules.web.runtime import WebRuntime
+        from alira.modules.web.src.runtime import WebRuntime
 
         self._runtime = WebRuntime()
         await self._runtime.start()

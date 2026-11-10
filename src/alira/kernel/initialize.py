@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from alira.kernel.lifespan.auto_init import apixis_core, auto_init
 from alira.kernel.module import module_manager
 from alira.kernel.lifespan.resource_cleaner import resource_cleaner
-from alira.utils.logger import logger
+from alira.shared.logger import logger
 
 
 def initialize() -> None:

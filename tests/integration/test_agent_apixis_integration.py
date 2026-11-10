@@ -17,8 +17,8 @@ from apixis.core.graph import (
 from apixis.core.utils.exception import InvalidContextError
 from httpx import ASGITransport, AsyncClient
 
-from alira.modules.agent.core.graph import AgentGraph, AgentGraphCreator
-from alira.shared.models.message import AliraAssistantMessage, AliraToolMessage
+from alira.modules.agent.src.core.graph import AgentGraph, AgentGraphCreator
+from alira.modules.agent.src.shared.message import AliraAssistantMessage, AliraToolMessage
 
 
 class State(TypedDict, total=False):
@@ -182,14 +182,14 @@ async def test_server_lifespan_can_restart_with_local_events_and_health_check(
         unsubscribe,
     )
 
-    from alira.modules.web.application import create_app
+    from alira.modules.web.src.application import create_app
 
     # Exercise the real event runtime without opening unrelated storage services.
     start = AsyncMock(wraps=core_lifecycle.start)
     stop = AsyncMock(wraps=core_lifecycle.stop)
     monkeypatch.setattr(core_lifecycle, "start", start)
     monkeypatch.setattr(core_lifecycle, "stop", stop)
-    monkeypatch.setattr("alira.modules.web.application.auto_load_router", lambda app: None)
+    monkeypatch.setattr("alira.modules.web.src.application.auto_load_router", lambda app: None)
     app = create_app()
     for _ in range(2):
         received = asyncio.Event()

@@ -5,14 +5,14 @@ import os
 import pytest
 from my_llm import Attribute, Config, InputParameter, MessageEvent, TextContent
 
-from alira.modules.agent.core.bot import (
+from alira.modules.agent.src.core.bot import (
     AliraBot,
     BaseProvider,
     CustomProvider,
     ModelProfile,
     ProviderProfile,
 )
-from alira.shared.models.message import AliraUserMessage
+from alira.modules.agent.src.shared.message import AliraUserMessage
 
 pytestmark = pytest.mark.skipif(
     not all(

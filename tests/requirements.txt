@@ -1,0 +1,4 @@
+-r ../src/alira/modules/agent/requirements.txt
+-r ../src/alira/modules/database/requirements.txt
+-r ../src/alira/modules/tool/requirements.txt
+-r ../src/alira/modules/web/requirements.txt

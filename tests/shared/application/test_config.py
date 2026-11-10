@@ -1,122 +1,41 @@
-"""Tests for Alira-specific configuration and shared configuration ownership."""
+"""Application settings stay independent from module and Apixis settings."""
 
-import os
 import runpy
 
 import pytest
-from apixis.core.config import base as shared_config
+import yaml
 
 from alira.shared.application import config
 
 
-def test_business_settings_use_apixis_configuration():
-    assert config._get_config is shared_config._get_config
-    assert config.ALIRA_BASE_DIR == shared_config._get_config(
-        "SERVER.base_dir", "./.alira_data/"
-    )
-    assert config.SQLITE_DATABASE == shared_config._get_config(
-        "DATABASE.sqlite.database",
-        os.path.join(config.ALIRA_BASE_DIR, "sqlite", "alira.sqlite3"),
-    )
-
-
 @pytest.mark.parametrize("base_dir", [None, "/tmp/alira-data"])
-def test_application_owns_storage_root_configuration(monkeypatch, base_dir):
-    monkeypatch.setattr(shared_config, "_config", {"SERVER": {"base_dir": base_dir}})
+def test_application_configuration_reads_its_own_namespace(monkeypatch, tmp_path, base_dir):
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump({
+        "SERVER": {"base_dir": base_dir},
+        "LOG": {"debug_level": "WARN", "trace": False, "log_buffer_size": 32},
+        "RUNTIME": {"cache_clean_interval": 41},
+        "APIXIS": {"LOG": {"debug_level": "ERROR"}},
+        "DATABASE": {"worker_count": 99},
+    }))
+    monkeypatch.chdir(tmp_path)
     settings = runpy.run_path(config.__file__)
     assert settings["ALIRA_BASE_DIR"] == (base_dir or "./.alira_data/")
-    assert settings["SQLITE_DATABASE"] == os.path.join(
-        settings["ALIRA_BASE_DIR"], "sqlite", "alira.sqlite3"
-    )
-    assert settings["SQLITE_EMBEDDING_MODEL"] == ""
-    assert settings["SQLITE_EMBEDDING_ENABLE"] is False
-    assert settings["SQLITE_EMBEDDING_OPTIONS"] == {}
-    assert settings["VECTOR_DIMENSION"] == 640
-
-
-def test_sqlite_embedding_configuration(monkeypatch):
-    monkeypatch.setattr(
-        shared_config,
-        "_config",
-        {
-            "DATABASE": {
-                "sqlite": {
-                    "embedding_model": "/models/embedding",
-                    "embedding_enable": True,
-                    "embedding_options": {
-                        "device": "cpu",
-                        "query_prompt_name": "retrieval",
-                    },
-                    "vector_dimension": 768,
-                }
-            }
-        },
-    )
-    settings = runpy.run_path(config.__file__)
-    assert settings["SQLITE_EMBEDDING_MODEL"] == "/models/embedding"
-    assert settings["SQLITE_EMBEDDING_ENABLE"] is True
-    assert settings["SQLITE_EMBEDDING_OPTIONS"] == {
-        "device": "cpu",
-        "query_prompt_name": "retrieval",
-    }
-    assert settings["VECTOR_DIMENSION"] == 768
-
-
-@pytest.mark.parametrize("data_store", ["sqlite", "mysql"])
-@pytest.mark.parametrize("cache_store", ["builtin", "redis"])
-def test_storage_settings_ignore_removed_backends(monkeypatch, data_store, cache_store):
-    monkeypatch.setattr(
-        shared_config,
-        "_config",
-        {
-            "REMOTE_GATEWAY": {"enable": True},
-            "EVENT_CHANNEL": {"type": "kafka"},
-            "DATABASE": {
-                "sqlite": {"database": "/tmp/custom-alira.sqlite3"},
-                "worker_count": 2,
-            },
-            "DATA_STORE": {
-                "type": data_store,
-                "sqlite": {"database": "/tmp/obsolete.sqlite3"},
-                "mysql": {
-                    "base_url": "unused",
-                    "port": 3307,
-                    "user": "unused",
-                    "password": "unused",
-                    "database": "unused",
-                    "charset": "utf8mb4",
-                    "auto_commit": False,
-                },
-            },
-            "DATACACHE": {
-                "hot_cache_default_expire_seconds": 17,
-                "static_cache_default_expire_seconds": 29,
-            },
-            "CACHE": {
-                "store_type": cache_store,
-                "redis": {"url": "redis://unused", "pool_size": 99},
-                "hot_cache_default_expire_seconds": 99,
-                "static_cache_default_expire_seconds": 99,
-            },
-            "RUNTIME": {"cache_clean_interval": 41},
-        },
-    )
-    settings = runpy.run_path(config.__file__)
-    assert settings["SQLITE_DATABASE"] == "/tmp/custom-alira.sqlite3"
-    assert settings["WORKER_COUNT"] == 2
-    assert settings["HOT_CACHE_DEFAULT_EXPIRE_SECONDS"] == 17
-    assert settings["STATIC_CACHE_DEFAULT_EXPIRE_SECONDS"] == 29
+    assert settings["DEBUG_LEVEL"] == "WARN"
+    assert settings["TRACE"] is False
+    assert settings["LOG_BUFFER_SIZE"] == 32
+    assert settings["MAX_LOG_FILE_SIZE"] == 5242880
     assert settings["CACHE_CLEAN_INTERVAL"] == 41
     assert {
-        "DATA_STORE_TYPE",
-        "CACHE_STORE_TYPE",
-        "MEMO_REDIS_URL",
-        "REDIS_POOL_SIZE",
-        "MYSQL_BASE_URL",
-        "MYSQL_PORT",
-        "MYSQL_USER",
-        "MYSQL_PASSWORD",
-        "MYSQL_DATABASE",
-        "MYSQL_CHARSET",
-        "AUTO_COMMIT",
+        "BASE_URL", "WORKER_COUNT", "SQLITE_DATABASE", "SQLITE_EMBEDDING_OPTIONS",
+        "HOT_CACHE_DEFAULT_EXPIRE_SECONDS", "GENERATION_TTL", "CONTAINER_TTL",
+        "GRAPH_CACHE_TTL",
     }.isdisjoint(settings)
+
+
+def test_application_defaults_without_configuration(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    settings = runpy.run_path(config.__file__)
+    assert settings["ALIRA_BASE_DIR"] == "./.alira_data/"
+    assert settings["DEBUG_LEVEL"] == "DEBUG"
+    assert settings["TRACE"] is True
+    assert settings["CACHE_CLEAN_INTERVAL"] == 300

@@ -7,7 +7,7 @@ from alira.shared.application.version import compare_version
 
 
 def test_installed_distribution_matches_package_version():
-    assert version("alira") == __version__
+    assert version("alira-harness") == __version__
 
 
 def test_compare_version_uses_package_version():

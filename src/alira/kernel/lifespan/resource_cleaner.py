@@ -3,7 +3,7 @@ from typing import Callable, Awaitable, Union, Optional
 from functools import wraps
 
 
-from alira.utils.logger import logger
+from alira.shared.logger import logger
 from alira.shared.application.config import CACHE_CLEAN_INTERVAL
 
 

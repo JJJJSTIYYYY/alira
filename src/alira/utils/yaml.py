@@ -1,8 +1,9 @@
 from pathlib import Path
 import os
+import logging
 import yaml
 
-from alira.utils.logger import logger
+logger = logging.getLogger(__name__)
 
 # ==========================================================
 # Yaml

@@ -5,7 +5,7 @@ import sys
 from alira.kernel.lifespan.auto_init import AutoInit, apixis_core
 from alira.kernel.module import ModuleManager, module_manager
 from alira.kernel.lifespan.resource_cleaner import resource_cleaner
-from alira.utils.logger import logger
+from alira.shared.logger import logger
 
 initialization = importlib.import_module("alira.kernel.initialize")
 
@@ -31,13 +31,13 @@ def test_kernel_import_order_does_not_register_or_import_legacy_services():
             "from alira.kernel.module import ModuleManager, module_manager\n"
             "from alira.kernel.lifespan.resource_cleaner import resource_cleaner\n"
             "from alira.kernel.lifespan.auto_init import auto_init, apixis_core\n"
-            "from alira.utils.logger import logger\n"
+            "from alira.shared.logger import logger\n"
             "assert auto_init._services == []\n"
             "from alira.kernel.initialize import initialize\n"
             "initialize()\n"
             "assert auto_init._services == [logger, apixis_core, resource_cleaner, module_manager]\n"
-            "assert 'alira.modules.database' not in sys.modules\n"
-            "assert 'alira.modules.tool.mcp' not in sys.modules\n"
+            "assert 'alira.modules.database.src' not in sys.modules\n"
+            "assert 'alira.modules.tool.src.mcp' not in sys.modules\n"
             "assert ModuleManager() is module_manager\n"
         )], check=True, capture_output=True,
     )

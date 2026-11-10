@@ -1,0 +1,4 @@
+aiosqlite>=0.21.0
+my-llm-py>=2.0.1
+pydantic>=2.12
+sqlalchemy[asyncio]>=2.0.44,<3

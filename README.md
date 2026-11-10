@@ -1,101 +1,58 @@
 <div align="center">
 
-<img src="./docs/image/alira.png" href="https://github.com/JJJJSTIYYYY/alira" height="300" style="border-radius: 12px; display: block; margin: 0 auto;">
+<img src="./docs/image/alira.png" alt="Alira" height="300">
+
+# Alira
+
+**模块化的 AI Agent 底座与运行时**
 
 ![Python](https://img.shields.io/badge/Python-3.12+-3776AB?style=flat&logo=python)
-![Electron](https://img.shields.io/badge/Electron-37-47848F?style=flat&logo=electron)
-![Vue](https://img.shields.io/badge/Vue-3.5-4FC08D?style=flat&logo=vue.js)
 [![License](https://img.shields.io/badge/License-GPL%203.0-blue?style=flat)](./LICENSE)
-[![Discord](https://img.shields.io/badge/Discord-Join%20Us-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/tUCQthwK5)
-[![QQ群](https://custom-icon-badges.demolab.com/badge/QQ群-639459172-00BFFF?style=flat&logo=tencent-qq)](https://qun.qq.com/universal-share/share?ac=1&authKey=ommoQrT2zhzHU%2FUxv8pfGCJbNifW%2BJyUAFBkNdzkHTPUxdxCnlgxm5aNgGslTmdE&busi_data=eyJncm91cENvZGUiOiI2Mzk0NTkxNzIiLCJ0b2tlbiI6Im9ZZkdNUWZnSVV1Y2REeUhKNnlTbWEwc05Bb093djRzUXdXNE55dklBVnlBQk9XbGNpS0ZXSDlzK3orSW1sQ3YiLCJ1aW4iOiIzMTI5NDI0NTcyIn0%3D&data=OGTchcr80RAQg8Z8_GZTdvBb7kZDeM9B3hHcNqLaAX2ZK_KYq260C4CubblEBT1bK5fP6zgtnCk2D8fIoph1ZQ&svctype=4&tempid=h5_group_info)
 
-[源码](https://github.com/JJJJSTIYYYY/alira) ·
-[问题](https://github.com/JJJJSTIYYYY/alira/issues) ·
-[快速开始]()
+[快速开始](#快速开始) · [模块文档](./docs/README.md) · [问题反馈](https://github.com/JJJJSTIYYYY/alira/issues)
 
 </div>
 
----
+Alira 为构建 AI Agent 应用提供模型调用、上下文管理、工具接入与消息存储能力。
+通过模块组合所需功能，让同一套运行时适应不同的应用场景。
 
-## 🎯 这是什么？
+项目处于早期开发阶段，接口与功能仍在演进。
 
-Alira 是一个可拓展的**全栈的 AI Agent 协作平台**。它是一套完整的 Agent 底座与运行时——支持多智能体并行协作、沙箱代码执行、知识库检索以及高自由度的插件系统。
+## 主要能力
 
-## 🌟 有什么新内容？
+- **模块化运行**：按需选择启动模块，自动加载前置模块并安装所需依赖。
+- **Agent 编排**：基于 [Apixis](https://github.com/JJJJSTIYYYY/apixis) 的事件与图执行能力，组织 Agent 的执行流程。
+- **工具接入**：支持函数工具与 MCP，扩展 Agent 可调用的能力。
+- **消息与存储**：提供上下文管理、消息持久化与可选的 SQLite 向量检索。
 
-- [x] Alira 的事件与图执行底座由独立项目提供。**[-> Apixis](https://github.com/JJJJSTIYYYY/Apixis.git)**
-- [x] 存储层使用内存缓存，持久化数据通过 SQLAlchemy + aiosqlite 存入 SQLite。
-- [ ] 更简化的部署流程，使用 内存 + Sqlite 即可实现pip一键安装。
-- [ ] CLI Agent支持，无需使用 Electron 客户端，即可完成你的工作。
-- [x] 自研 Agent 底座，更小的外部依赖以及更可控的版本迭代。
-- [x] 自由的插件拓展点，你可以在 Agent 运行时的任何节点，自由的订阅事件以实现各种高自由度的插件，全凭你的想象！
-- [ ] **Alira预计加入分布式Agent集群，敬请期待！！！**
+## 快速开始
 
-- 消息存储支持可选的 SQLite 向量检索。其他向量库与检索工具可通过插件接入。
-- 沙箱预计沿用2.x的docker沙箱机制，但不再作为强制依赖。
-
-## 后端开发
-
-克隆仓库后，在仓库根目录执行：
+需要 Python 3.12+ 和 [uv](https://docs.astral.sh/uv/)。从源码启动：
 
 ```bash
-git clone git@github.com:JJJJSTIYYYY/alira.git
+git clone https://github.com/JJJJSTIYYYY/alira.git
 cd alira
 uv sync --locked
-uv run --with-requirements src/alira/modules/web/requirements.txt pytest
 uv run alira --web
 ```
 
-项目目录：
+默认可访问 <http://localhost:2712/health> 检查服务状态。
+Web 模块的依赖会在加载时自动安装。
 
-```text
-alira/
-├── pyproject.toml    # 打包、依赖与测试配置
-├── MANIFEST.in       # 源码分发内容
-├── uv.lock          # 依赖锁文件
-├── .python-version  # Python 版本
-├── src/
-│   └── alira/       # 应用源码，版本号统一定义在 _version.py
-│       └── modules/ # 业务模块
-│           ├── agent/    # Agent SDK、图与上下文
-│           ├── tool/     # 函数工具与 MCP
-│           ├── database/ # 数据、缓存与文件存储
-│           └── web/      # 按需加载的 HTTP 服务
-├── tests/           # 测试
-└── docs/            # 文档
-```
+只启动内核可运行 `uv run alira`；查看可用模块与启动参数可运行 `uv run alira --help`。
 
-本地 `config.yaml` 放在仓库根目录，运行数据默认保存在 `.alira_data/`；
-两者均不纳入版本控制。已有 `config.yaml` 中的数据路径继续生效。`uv sync` 在根目录创建 `.venv/`。
+PyPI 发行包名为 `alira-harness`，Python 导入名和命令均为 `alira`。
 
-`uv sync --locked` 会将本地项目安装为可编辑包，源码修改立即生效。测试从已安装的包导入，
-启动方式仍为 `uv run alira --web`。包版本通过 `alira.__version__` 获取；
-项目元数据、FastAPI 版本和启动横幅均使用 `src/alira/_version.py` 中的 `__version__`。
-构建 wheel 和源码包时执行 `uv build`。
+## 文档
 
-不传模块参数时，`uv run alira` 只启动内核。`--web` 等参数按模块声明的名称选择模块，并自动加载前置模块；可同时传入多个模块参数。
+[模块开发与依赖管理](./docs/README.md)：了解模块声明、依赖关系和生命周期。
 
-标准模块由 `kernel.module.ModuleManager` 管理，首个模块为 `modules/web`；声明、依赖与启停规则见 [模块文档](docs/README.md)。
+## 社区
 
-事件与图调度通过 PyPI 依赖 `apixis` 提供；Alira 保留 Agent SDK、工具、存储与服务层。
+[QQ群](https://qun.qq.com/universal-share/share?ac=1&authKey=ommoQrT2zhzHU%2FUxv8pfGCJbNifW%2BJyUAFBkNdzkHTPUxdxCnlgxm5aNgGslTmdE&busi_data=eyJncm91cENvZGUiOiI2Mzk0NTkxNzIiLCJ0b2tlbiI6Im9ZZkdNUWZnSVV1Y2REeUhKNnlTbWEwc05Bb093djRzUXdXNE55dklBVnlBQk9XbGNpS0ZXSDlzK3orSW1sQ3YiLCJ1aW4iOiIzMTI5NDI0NTcyIn0%3D&data=OGTchcr80RAQg8Z8_GZTdvBb7kZDeM9B3hHcNqLaAX2ZK_KYq260C4CubblEBT1bK5fP6zgtnCk2D8fIoph1ZQ&svctype=4&tempid=h5_group_info) · [Discord](https://discord.gg/tUCQthwK5)
 
-## 📚 使用文档
+欢迎通过 [Issues](https://github.com/JJJJSTIYYYY/alira/issues) 反馈问题、讨论想法，或提交 Pull Request。
 
-- [模块设计](./docs/README.md)
-- [Apixis 事件与图接口](https://github.com/JJJJSTIYYYY/Apixis/tree/master/docs)
-- 事件与图执行底座：[Apixis（Apache 协议开源）](https://github.com/JJJJSTIYYYY/Apixis.git)
+## 许可证
 
----
-
-## 📄 许可证
-
-本项目基于 **GNU GPL v3.0** 协议开源。
-
----
-
-__🏘️ 加入社区__
-
-[QQ群](https://qun.qq.com/universal-share/share?ac=1&authKey=ommoQrT2zhzHU%2FUxv8pfGCJbNifW%2BJyUAFBkNdzkHTPUxdxCnlgxm5aNgGslTmdE&busi_data=eyJncm91cENvZGUiOiI2Mzk0NTkxNzIiLCJ0b2tlbiI6Im9ZZkdNUWZnSVV1Y2REeUhKNnlTbWEwc05Bb093djRzUXdXNE55dklBVnlBQk9XbGNpS0ZXSDlzK3orSW1sQ3YiLCJ1aW4iOiIzMTI5NDI0NTcyIn0%3D&data=OGTchcr80RAQg8Z8_GZTdvBb7kZDeM9B3hHcNqLaAX2ZK_KYq260C4CubblEBT1bK5fP6zgtnCk2D8fIoph1ZQ&svctype=4&tempid=h5_group_info) | [Discord](https://discord.gg/tUCQthwK5)
-
-
-> ⭐️ 如果你喜欢我们的项目，欢迎你的Star!
+[GNU GPL v3.0](./LICENSE)

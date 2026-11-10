@@ -18,8 +18,8 @@ from apixis.core.event import (
 )
 from apixis.core.graph import AutoMerge, GraphManager
 
-from alira.modules.tool import FunctionToolManager, ToolNode
-from alira.shared.models.message import AliraAssistantMessage
+from alira.modules.tool.src import FunctionToolManager, ToolNode
+from alira.modules.agent.src.shared.message import AliraAssistantMessage
 
 pytestmark = pytest.mark.parametrize(
     "event_runtime_capacity",

@@ -19,7 +19,7 @@ from alira.kernel.module.dependencies import (
     resolve_requirements,
     run_uv,
 )
-from alira.utils.logger import logger
+from alira.shared.logger import logger
 
 
 class ModuleManager:
@@ -83,8 +83,10 @@ class ModuleManager:
         self._directories[module.name] = self.modules_dir / module.name
 
     def discover(self) -> Mapping[str, BaseModule]:
-        """Import only main.py in immediate child directories; skip legacy modules."""
+        """Import module declarations, skipping missing or empty main.py stubs."""
         for path in sorted(self.modules_dir.glob("*/main.py")):
+            if not path.read_text(encoding="utf-8").strip():
+                continue
             declaration = importlib.import_module(f"{self.package}.{path.parent.name}.main")
             instances = {
                 id(value): value for value in vars(declaration).values()

@@ -23,14 +23,14 @@ from apixis.core.graph import (
     get_graph_dispatch_name,
 )
 
-from alira.modules.agent.core.graph import AgentGraphCreator
-from alira.modules.tool import (
+from alira.modules.agent.src.core.graph import AgentGraphCreator
+from alira.modules.tool.src import (
     AutoInjection,
     ToolInjectionContext,
     ToolNode,
     tool,
 )
-from alira.shared.models.message import (
+from alira.modules.agent.src.shared.message import (
     AliraAssistantMessage,
     AliraToolMessage,
     AliraUserMessage,

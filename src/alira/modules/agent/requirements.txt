@@ -1,0 +1,4 @@
+httpx[socks]>=0.28.1
+inflect>=7.5.0
+my-llm-py[all]>=2.0.1
+pydantic>=2.12

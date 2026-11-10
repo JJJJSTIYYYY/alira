@@ -61,6 +61,21 @@ def test_discovery_rejects_ambiguous_declarations(tmp_path, monkeypatch, declara
         module_manager_factory(folder.parent, package=package).discover()
 
 
+@pytest.mark.parametrize("declaration", ["", "\n  \n"])
+def test_discovery_skips_empty_entry_without_importing_module(
+    tmp_path, monkeypatch, declaration, module_manager_factory,
+):
+    package = f"modules_{uuid4().hex}"
+    folder = tmp_path / package / "pending"
+    folder.mkdir(parents=True)
+    (folder.parent / "__init__.py").touch()
+    (folder / "__init__.py").write_text("raise AssertionError('pending module imported')")
+    (folder / "main.py").write_text(declaration)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    manager = module_manager_factory(folder.parent, package=package)
+    assert not manager.discover()
+
+
 async def test_load_order_selected_closure_and_unload_protection(manager):
     calls = []
     for name, dependencies in [("c", ["b"]), ("unrelated", []), ("b", ["a"]), ("a", [])]:

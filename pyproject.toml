@@ -3,24 +3,16 @@ requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "alira"
+name = "alira-harness"
 dynamic = ["version"]
-description = "Alira AI agent platform and runtime"
+description = "Alira Harness"
 readme = "README.md"
 requires-python = ">=3.12"
 license-files = ["LICENSE"]
 dependencies = [
-    "aiosqlite>=0.21.0",
-    "httpx[socks]>=0.28.1",
-    "inflect>=7.5.0",
-    "sqlalchemy[asyncio]>=2.0.44,<3",
-    "pyyaml>=6.0.3",
-    "redis>=8.0.1",
-    "fastmcp-slim[client]==3.4.7",
     "apixis>=1.1.7",
-    "pydantic>=2.12",
-    "my-llm-py[all]>=2.0.1",
     "packaging>=24.2",
+    "pyyaml>=6.0.3",
 ]
 
 [project.optional-dependencies]

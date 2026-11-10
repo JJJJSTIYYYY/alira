@@ -4,7 +4,7 @@ import asyncio
 from typing import Protocol
 
 from apixis import start_core, stop_core
-from alira.utils.logger import logger
+from alira.shared.logger import logger
 
 
 class LifecycleService(Protocol):

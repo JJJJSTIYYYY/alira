@@ -1,1 +1,1 @@
-"""HTTP service module; business imports are deferred until startup."""
+"""Web module; business implementation lives in src/."""
