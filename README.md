@@ -1,15 +1,15 @@
 <div align="center">
 
-<img src="./docs/image/alira.png" alt="Alira" height="300">
+<img src="https://raw.githubusercontent.com/JJJJSTIYYYY/alira/develop/docs/image/alira.png" alt="Alira" height="300">
 
 # Alira
 
 **模块化的 AI Agent 底座与运行时**
 
 ![Python](https://img.shields.io/badge/Python-3.12+-3776AB?style=flat&logo=python)
-[![License](https://img.shields.io/badge/License-GPL%203.0-blue?style=flat)](./LICENSE)
+[![License](https://img.shields.io/badge/License-GPL%203.0-blue?style=flat)](https://github.com/JJJJSTIYYYY/alira/blob/develop/LICENSE)
 
-[快速开始](#快速开始) · [模块文档](./docs/README.md) · [问题反馈](https://github.com/JJJJSTIYYYY/alira/issues)
+[快速开始](https://github.com/JJJJSTIYYYY/alira/blob/develop/README.md#快速开始) · [模块文档](https://github.com/JJJJSTIYYYY/alira/blob/develop/docs/README.md) · [问题反馈](https://github.com/JJJJSTIYYYY/alira/issues)
 
 </div>
 
@@ -45,7 +45,7 @@ PyPI 发行包名为 `alira-harness`，Python 导入名和命令均为 `alira`�
 
 ## 文档
 
-[模块开发与依赖管理](./docs/README.md)：了解模块声明、依赖关系和生命周期。
+[模块开发与依赖管理](https://github.com/JJJJSTIYYYY/alira/blob/develop/docs/README.md)：了解模块声明、依赖关系和生命周期。
 
 ## 社区
 
@@ -55,4 +55,4 @@ PyPI 发行包名为 `alira-harness`，Python 导入名和命令均为 `alira`�
 
 ## 许可证
 
-[GNU GPL v3.0](./LICENSE)
+[GNU GPL v3.0](https://github.com/JJJJSTIYYYY/alira/blob/develop/LICENSE)
