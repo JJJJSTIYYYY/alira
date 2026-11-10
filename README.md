@@ -1,6 +1,6 @@
 <div align="center">
 
-# Alira
+<img src="./docs/image/alira.png" height="300" style="border-radius: 12px; display: block; margin: 0 auto;">
 
 [GitHub 仓库](https://github.com/JJJJSTIYYYY/alira)
 
