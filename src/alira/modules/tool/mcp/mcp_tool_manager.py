@@ -357,6 +357,6 @@ class MCPToolManager(ToolManager):
 
 
 mcp_mgr = MCPToolManager()
-auto_init.register(mcp_mgr, group="mcp")
+auto_init.register(mcp_mgr)
 
 __all__ = ["MCPToolManager", "mcp_mgr"]

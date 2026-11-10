@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Lock, Thread
 from typing import TYPE_CHECKING
 
-from alira.kernel.auto_init import auto_init
+from alira.kernel.lifespan.auto_init import auto_init
 from alira.modules.database.utils.errors import StoreCode, StoreError
 from alira.modules.database.utils.handlers import service_handler
 from alira.shared.application.config import WORKER_COUNT
@@ -201,7 +201,7 @@ class StoreManager:
 
 
 _store_manager = StoreManager()
-auto_init.register(_store_manager, group="database")
+auto_init.register(_store_manager)
 
 
 async def query_store(action: str, payload: dict) -> dict:

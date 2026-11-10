@@ -35,16 +35,15 @@ source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
     { name = "apixis" },
-    { name = "fastapi" },
     { name = "fastmcp-slim", extra = ["client"] },
     { name = "httpx", extra = ["socks"] },
     { name = "inflect" },
     { name = "my-llm-py", extra = ["all"] },
+    { name = "packaging" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "redis" },
     { name = "sqlalchemy", extra = ["asyncio"] },
-    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
@@ -64,18 +63,17 @@ dev = [
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.21.0" },
     { name = "apixis", specifier = ">=1.1.7" },
-    { name = "fastapi", specifier = ">=0.139.2" },
     { name = "fastmcp-slim", extras = ["client"], specifier = "==3.4.7" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1" },
     { name = "inflect", specifier = ">=7.5.0" },
     { name = "my-llm-py", extras = ["all"], specifier = ">=2.0.1" },
+    { name = "packaging", specifier = ">=24.2" },
     { name = "pydantic", specifier = ">=2.12" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "redis", specifier = ">=8.0.1" },
     { name = "sentence-transformers", marker = "extra == 'embedding'", specifier = ">=5.7,<6" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.44,<3" },
     { name = "sqlite-vec", marker = "extra == 'embedding'", specifier = ">=0.1.6,<0.2" },
-    { name = "uvicorn", specifier = ">=0.51.0" },
 ]
 provides-extras = ["embedding"]
 
@@ -587,22 +585,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8a/0e/97c33bf5009bdbac74fd2beace167cab3f978feb69cc36f1ef79360d6c4e/exceptiongroup-1.3.1-py3-none-any.whl", hash = "sha256:a7a39a3bd276781e98394987d3a5701d0c4edffb633bb7a5144577f82c773598", size = 16740, upload-time = "2025-11-21T23:01:53.443Z" },
-]
-
-[[package]]
-name = "fastapi"
-version = "0.139.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "annotated-doc" },
-    { name = "pydantic" },
-    { name = "starlette" },
-    { name = "typing-extensions" },
-    { name = "typing-inspection" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/cd/95/d3f0ae10836324a2eab98a52b61210ac609f08200bf4bb0dc8132d32f78a/fastapi-0.139.2.tar.gz", hash = "sha256:333145a6891e9b5b3cfceb69baf817e8240cde4d4588ae5a10bf56ffacb6255e", size = 423428, upload-time = "2026-07-16T15:06:17.912Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5f/c7/cb03251d9dfb177246a9809a76f189d21df32dbd4a845951881d11323b7f/fastapi-0.139.2-py3-none-any.whl", hash = "sha256:b9ad015a835173d59865e2f5d8296fbc2b317bf56a2ba1a5bfbdd03de2fd4b1c", size = 130234, upload-time = "2026-07-16T15:06:19.557Z" },
 ]
 
 [[package]]

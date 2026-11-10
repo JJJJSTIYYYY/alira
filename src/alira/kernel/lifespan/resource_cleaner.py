@@ -3,7 +3,6 @@ from typing import Callable, Awaitable, Union, Optional
 from functools import wraps
 
 
-from alira.kernel.auto_init import auto_init
 from alira.utils.logger import logger
 from alira.shared.application.config import CACHE_CLEAN_INTERVAL
 
@@ -159,5 +158,3 @@ class ResourceCleaner:
 
 # Global singleton
 resource_cleaner = ResourceCleaner()
-
-auto_init.register(resource_cleaner, group="core")

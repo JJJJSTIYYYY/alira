@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import text
 
 import alira.modules.database as store_package
-from alira.kernel.auto_init import auto_init
+from alira.kernel.lifespan.auto_init import auto_init
 from alira.modules.database import StoreManager, query_store
 from alira.modules.database import manager as manager_module
 from alira.modules.database import runtime as runtime_module

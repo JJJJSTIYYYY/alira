@@ -1,7 +1,3 @@
-from alira.kernel.resource_cleaner import resource_cleaner
-from alira.kernel.auto_init import auto_init
+from alira.kernel.lifespan import auto_init, resource_cleaner
 
-__all__ = [
-    "auto_init",
-    "resource_cleaner"
-]
+__all__ = ["auto_init", "resource_cleaner"]

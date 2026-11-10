@@ -1,18 +1,122 @@
-# Alira 文档
+# 标准模块与依赖管理
 
-Alira 提供 Agent SDK、工具执行、消息存储和 HTTP 服务。
+本文保留当前已确定的模块设计。其余开发期参考文档集中在 `reference/`，暂不纳入版本管理。
 
-- 事件调度与图执行由独立依赖 [Apixis](https://github.com/JJJJSTIYYYY/Apixis) 提供。
-- 模型厂商适配器由独立依赖 [my-llm](https://github.com/JJJJSTIYYYY/my-llm) 提供。
+`ModuleManager` 扫描 `alira/modules/*/main.py`。没有 `main.py` 的目录不参与标准模块加载；
+当前只有 `web` 已对齐，Agent、工具和数据库继续使用原有接口。
+
+每个 `main.py` 必须导出一个继承 `BaseModule` 的实例。模块目录的 `__init__.py`、
+`main.py` 和构造方法只声明元数据，不导入业务子包或第三方业务依赖；所有业务导入、
+路由注册和服务初始化都放在 `startup()`。`startup()` 返回表示模块已就绪。
+`shutdown()` 还应能清理 `startup()` 失败或取消时已经获取的资源。
+
+```python
+from alira.kernel.module import BaseModule
 
 
-- [模型接入、Chat 消息结构与数据库初始化](my-llm-integration.md)
-- [数据库接口、本地用户与错误码](database.md)
-- [消息关键词检索、向量索引与游标分页](message-search.md)
-- [Provider 与模型预设、官方配置依据](provider-presets.md)
+class ExampleModule(BaseModule):
+    async def startup(self):
+        self.service = None
+        from .service import service
 
-- [工具管理器、事件调用与 MCP 生命周期](tool-managers.md)
+        self.service = service
+        await service.start()
 
-- [目录迁移对齐记录与待处理调用](refactor-alignment.md)
+    async def shutdown(self):
+        if self.service is not None:
+            await self.service.stop()
 
-- [日志器生命周期、背压与性能验证](logging.md)
+
+module = ExampleModule(
+    name="example",
+    version="1.0.0",
+    required_modules=["web"],
+)
+```
+
+`required_modules` 使用模块声明的 `name`，不是 Python 包名或 PyPI 包名。
+发现阶段只登记声明；加载时只检查选中模块及其前置模块的缺失依赖和循环依赖。前置模块就绪后才启动依赖它的模块，
+其余模块的安装和启动任务并行执行；共享 Python 环境的文件写入锁由 uv 管理。
+子模块不能通过覆盖 `install()` / `uninstall()` 改变依赖管理，安装和卸载由管理器负责。
+
+## Python 依赖
+
+默认读取 `main.py` 同目录的 `requirements.txt`，不存在时无需安装。
+`requirements_txt` 可指定绝对路径，或相对于 `alira/modules` 的路径；显式指定但不存在时报错。
+默认命名的 `requirements.txt` 随模块一起打包；自定义文件名需在 package-data 中声明。
+运行环境需要 PATH 中可用的 uv，且当前 Python 环境可写。
+已对齐的 web 模块将 FastAPI、Uvicorn 声明在自己的 requirements.txt 中，项目不再直接声明它们。
+尚未对齐模块的主依赖保持原状，其中 MCP 的传递依赖仍可能安装 Uvicorn。
+
+管理器复用 [uv 的依赖求解](https://docs.astral.sh/uv/pip/compile/)，支持版本范围、
+extras、环境标记、`-r` 包含文件和 `-c` 约束文件。先联合解析本次待加载模块，
+得到兼容的版本集合，再生成各模块自己的锁文件和完整依赖集合。
+这里的依赖包含传递依赖，不只统计 requirements.txt 中直接声明的包。
+本地包建议使用绝对 file URL；所有输入联合解析时的工作目录是 `alira/modules`。
+不支持锁文件中缺少版本号的依赖；它们无法参与版本固定和引用登记。
+
+管理器创建时已经安装的包，以及此前由本管理器加载的包，其版本均作为约束，
+禁止在运行期间隐式升级或降级。冲突在安装和 `startup()` 前报告。
+需要更改这些版本时，应先调整环境再重新启动应用。
+
+包名按照 Python 包规范归一化。相同包只登记一次，每个模块对同一包最多计一次引用。
+加载前为整批模块预留引用，防止并行加载或失败清理时删除其他模块正在使用的包。
+卸载时先 `shutdown()`，再释放引用并卸载引用归零的包；管理器创建前已经存在的包始终保留。
+安装、启动、关闭或卸载失败时，尚未完成的资源清理和引用登记保留为可重试状态。
+本管理器只负责自身引入的运行时依赖，不应同时由另一个管理器或外部安装器修改同一环境。
+
+## 管理接口
+
+```python
+from alira.kernel.module import module_manager
+
+manager = module_manager
+await manager.start()               # 只发现、登记模块，不安装依赖或启动业务
+await manager.load("example")     # 包括 required_modules 中的前置模块
+print(manager.loaded)
+print(manager.dependencies)        # DependencyInfo: version、modules、ref_count、preinstalled
+await manager.unload("example")   # 有其他模块依赖它时拒绝卸载
+await manager.stop()               # 按依赖的逆序关闭、卸载所有已加载模块
+```
+
+`module_manager` 是进程内全局单例；`ModuleManager()` 返回同一个对象，重复构造不会重置其状态。
+`await manager.start()` 只发现、登记模块；之后显式调用 `load("名称")` 才安装依赖和启动模块。
+直接调用不带参数的 `load()` 会加载全部已登记模块；命令行未选择模块时不会调用它。
+重复加载已运行模块不会重复启动或增加引用。`auto_init.start(restart=True)` 重启内核后仍需显式加载所需模块。
+公开的加载、卸载操作互斥，批内按依赖关系调度任务。加载失败时取消尚在执行的任务并清理
+未成功启动的模块；已经启动成功的独立模块保留运行，可通过 `stop()` 统一关闭。
+关闭失败时保留模块和依赖，卸载失败时保留依赖引用，调用 `unload()` / `stop()` 重试。
+
+## web 模块与进程入口
+
+`web/main.py` 只声明 `WebModule`。启动时才导入 `web/application.py` 和 `web/runtime.py`，
+创建 FastAPI 应用并自动扫描 `alira.modules.web.router`，注册各子模块或子包导出的 `APIRouter`，
+随后启动 Uvicorn，保留 `/health` 接口。路由文件统一放在 `src/alira/modules/web/router/`。
+监听地址沿用 `SERVER.base_url`，默认端口为 2712。
+
+```bash
+uv run alira --web
+```
+
+可通过多个模块名称参数选择启动项，例如 `uv run alira --web --example`。
+`--example` 要求存在声明名为 `example` 的标准模块；未对齐目录不会生成命令行选项。
+`uv run alira --help` 展示已发现模块，未知参数报错，不接受模块名缩写。
+不带模块参数的 `uv run alira` 只运行内核，所有已发现模块都保持未加载状态。
+
+启动顺序为：内核服务启动、模块管理器发现声明、解析命令行参数、联合解析选中模块及其
+前置模块的依赖、安装依赖、按依赖顺序执行 startup()。未选中模块不会解析或安装依赖；
+其缺失前置模块或 requirements 文件也不会阻止其他模块加载。
+
+运行完整开发测试时显式提供 web 依赖：
+
+```bash
+uv run --with-requirements src/alira/modules/web/requirements.txt pytest
+```
+
+`auto_init.py` 与 `resource_cleaner.py` 位于 `kernel/lifespan/`。
+`kernel/initialize.py` 集中注册 kernel 服务，顺序为日志、事件核心、资源清理器、全局模块管理器。
+重复初始化不会重复注册，也不导入或迁移尚未对齐的业务模块。
+该文件的 `lifespan()` 通过 `auto_init.start()` / `auto_init.stop()` 统一启停服务。
+`main.py` 负责进程信号、命令行模块选择和这一生命周期入口，FastAPI 逻辑由 web 模块拥有。
+所有服务按注册顺序启动、逆序停止，因此退出时先关闭模块，再关闭事件核心和日志服务。
+Ctrl+C 和 SIGTERM 都会进入这一清理流程；Uvicorn 的最后一条退出日志在 `logger.stop()` 排空并关闭写入线程前产生，服务器无需额外的日志作用域。

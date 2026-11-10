@@ -172,6 +172,7 @@ async def test_custom_messages_key_reaches_tool_node():
 async def test_server_lifespan_can_restart_with_local_events_and_health_check(
     monkeypatch,
     core_lifecycle,
+    kernel_lifecycle,
 ):
     from apixis.core.event import (
         BuiltinChannel,
@@ -181,15 +182,14 @@ async def test_server_lifespan_can_restart_with_local_events_and_health_check(
         unsubscribe,
     )
 
-    from alira.server import create_app
+    from alira.modules.web.application import create_app
 
     # Exercise the real event runtime without opening unrelated storage services.
     start = AsyncMock(wraps=core_lifecycle.start)
     stop = AsyncMock(wraps=core_lifecycle.stop)
     monkeypatch.setattr(core_lifecycle, "start", start)
     monkeypatch.setattr(core_lifecycle, "stop", stop)
-    monkeypatch.setattr("alira.server.auto_init", core_lifecycle)
-    monkeypatch.setattr("alira.server.auto_load_router", lambda app: None)
+    monkeypatch.setattr("alira.modules.web.application.auto_load_router", lambda app: None)
     app = create_app()
     for _ in range(2):
         received = asyncio.Event()
@@ -199,7 +199,7 @@ async def test_server_lifespan_can_restart_with_local_events_and_health_check(
             received.set()
 
         try:
-            async with app.router.lifespan_context(app):
+            async with kernel_lifecycle.lifespan(), app.router.lifespan_context(app):
                 pipe = get_event_pipe()
                 assert pipe.is_running
                 assert isinstance(pipe.get_channel(), BuiltinChannel)

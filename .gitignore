@@ -64,3 +64,6 @@ temp/
 *.sqlite3
 *.db
 test-results
+
+# Development reference documents, it will be added back to the repository when the project is released
+/docs/reference/

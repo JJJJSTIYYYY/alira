@@ -1,4 +1,4 @@
-"""Group isolation, failure recovery, cancellation, and lifecycle serialization."""
+"""Registration order, failure recovery, cancellation, and lifecycle serialization."""
 
 import asyncio
 from types import SimpleNamespace
@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from alira.kernel.auto_init import AutoInit, auto_init
+from alira.kernel.lifespan.auto_init import AutoInit, auto_init
 
 
 @pytest.fixture
@@ -31,65 +31,64 @@ def test_singleton_keeps_registrations(registry):
     assert AutoInit() is auto_init
 
 
-async def test_groups_keep_global_order_and_stop_in_reverse(registry):
+async def test_services_start_in_order_and_stop_in_reverse(registry):
     calls = []
-    for name, group in [("a", "core"), ("b", "tool"), ("c", "core")]:
-        registry.register(service(name, calls), group=group)
+    for name in ("a", "b", "c"):
+        registry.register(service(name, calls))
 
-    await registry.start("core")
-    await registry.start()  # Only the tool service still needs starting.
-    await registry.start("core")
-    await registry.stop("core")
-    await registry.start("core")
+    await registry.start()
+    await registry.start()
+    await registry.stop()
+    await registry.start()
     await registry.stop()
 
     assert calls == [
-        "start:a", "start:c", "start:b", "stop:c", "stop:a",
-        "start:a", "start:c", "stop:c", "stop:b", "stop:a",
+        "start:a", "start:b", "start:c", "stop:c", "stop:b", "stop:a",
+        "start:a", "start:b", "start:c", "stop:c", "stop:b", "stop:a",
     ]
 
 
-async def test_default_group_and_registration_after_start(registry):
+async def test_registration_after_start(registry):
     calls = []
     registry.register(service("a", calls))
     await registry.start()
     registry.register(service("b", calls))
-    registry.register(service("c", calls), "tool")
-    await registry.start("default")
+    registry.register(service("c", calls))
     await registry.start()
     assert calls == ["start:a", "start:b", "start:c"]
 
 
-async def test_empty_registry_is_safe_but_unknown_group_raises(registry):
+async def test_registration_during_start_is_started_in_the_same_pass(registry):
+    calls = []
+    parent = service("parent", calls)
+    child = service("child", calls)
+
+    async def start_parent():
+        calls.append("start:parent")
+        registry.register(child)
+
+    parent.start.side_effect = start_parent
+    registry.register(parent)
     await registry.start()
     await registry.stop()
-    registry.register(service("one", []), "core")
-    for operation in (registry.start, registry.stop):
-        with pytest.raises(ValueError, match="Unknown service group"):
-            await operation("missing")
-    with pytest.raises(ValueError, match="Unknown service group"):
-        await registry.start("missing", restart=True)
-    registry._services[0].start.assert_not_awaited()
-    registry._services[0].stop.assert_not_awaited()
+    assert calls == ["start:parent", "start:child", "stop:child", "stop:parent"]
 
 
-def test_registration_uses_identity_and_rejects_conflicting_groups(registry):
+async def test_empty_registry_is_safe(registry):
+    await registry.start()
+    await registry.stop()
+    await registry.start(restart=True)
+
+
+def test_registration_uses_identity(registry):
     first, second = service("same", []), service("same", [])
     # Equal and unhashable service objects must still register independently.
     second.start, second.stop = first.start, first.stop
     assert first == second
-    registry.register(first, "core")
-    registry.register(first, "core")
-    registry.register(second, "core")
+    registry.register(first)
+    registry.register(first)
+    registry.register(second)
     assert len(registry._services) == 2
-    with pytest.raises(ValueError, match="another group"):
-        registry.register(first, "tool")
-
-
-@pytest.mark.parametrize("group", ["", " ", None, 1])
-def test_registration_rejects_invalid_group(registry, group):
-    with pytest.raises(ValueError, match="non-empty string"):
-        registry.register(service("one", []), group)
 
 
 @pytest.mark.parametrize("method", ["start", "stop"])
@@ -103,20 +102,15 @@ def test_registration_checks_lifecycle_methods(registry, method):
         registry.register(instance)
 
 
-@pytest.mark.parametrize("group", [None, "tool"])
-async def test_explicit_restart_stops_then_starts_only_selection(registry, group):
+async def test_explicit_restart_stops_then_starts_all_services(registry):
     calls = []
-    registry.register(service("a", calls), "tool")
-    registry.register(service("b", calls), "core")
-    registry.register(service("c", calls), "tool")
+    for name in ("a", "b", "c"):
+        registry.register(service(name, calls))
     await registry.start()
     calls.clear()
 
-    await registry.start(group, restart=True)
-    assert calls == (
-        ["stop:c", "stop:b", "stop:a", "start:a", "start:b", "start:c"]
-        if group is None else ["stop:c", "stop:a", "start:a", "start:c"]
-    )
+    await registry.start(restart=True)
+    assert calls == ["stop:c", "stop:b", "stop:a", "start:a", "start:b", "start:c"]
 
 
 async def test_start_failures_are_reported_and_only_failed_services_retry(registry):
@@ -232,3 +226,65 @@ async def test_concurrent_lifecycle_operations_are_serialized(registry, followin
     release.set()
     await asyncio.wait_for(asyncio.gather(first, second), 1)
     assert calls == (["start"] if following == "start" else ["start", "stop:one"])
+
+
+async def test_module_manager_uses_the_registry_lifecycle_and_restart(registry, tmp_path, module_manager_factory):
+    from alira.kernel.module import BaseModule
+
+    calls = []
+
+    class Module(BaseModule):
+        async def startup(self):
+            calls.append("module:start")
+
+        async def shutdown(self):
+            calls.append("module:stop")
+
+    manager = module_manager_factory(tmp_path)
+    manager.register(Module("example", "1"))
+    registry.register(service("core", calls))
+    registry.register(manager)
+    await registry.start()
+    await registry.start()
+    assert not manager.loaded
+    await manager.load("example")
+    assert manager.loaded == {"example"}
+    await registry.start(restart=True)
+    assert not manager.loaded
+    await manager.load("example")
+    await registry.stop()
+    assert not manager.loaded
+    assert calls == [
+        "start:core", "module:start",
+        "module:stop", "stop:core", "start:core", "module:start",
+        "module:stop", "stop:core",
+    ]
+
+
+async def test_application_cleans_failed_modules_before_stopping_core(registry, tmp_path, monkeypatch, module_manager_factory):
+    from importlib import import_module
+
+    initialization = import_module("alira.kernel.initialize")
+    from alira.kernel.module import BaseModule
+
+    calls = []
+
+    class BrokenModule(BaseModule):
+        async def startup(self):
+            calls.append("module:start")
+            raise RuntimeError("startup failed")
+
+        async def shutdown(self):
+            calls.append("module:stop")
+
+    manager = module_manager_factory(tmp_path)
+    manager.register(BrokenModule("broken", "1"))
+    registry.register(service("core", calls))
+    monkeypatch.setattr(initialization, "auto_init", registry)
+    monkeypatch.setattr(initialization, "initialize", lambda: registry.register(manager))
+    with pytest.raises(ExceptionGroup, match="unhandled errors"):
+        async with initialization.lifespan():
+            await manager.load("broken")
+    assert calls == ["start:core", "module:start", "module:stop", "stop:core"]
+    assert not manager.loaded
+    assert not registry._pending_stop

@@ -31,7 +31,7 @@ Alira 是一个可拓展的**全栈的 AI Agent 协作平台**。它是一套完
 - [x] 自由的插件拓展点，你可以在 Agent 运行时的任何节点，自由的订阅事件以实现各种高自由度的插件，全凭你的想象！
 - [ ] **Alira预计加入分布式Agent集群，敬请期待！！！**
 
-- 消息存储支持可选的 SQLite 向量检索；配置与分页接口见[消息检索文档](./docs/message-search.md)。其他向量库与检索工具可通过插件接入。
+- 消息存储支持可选的 SQLite 向量检索。其他向量库与检索工具可通过插件接入。
 - 沙箱预计沿用2.x的docker沙箱机制，但不再作为强制依赖。
 
 ## 后端开发
@@ -42,8 +42,8 @@ Alira 是一个可拓展的**全栈的 AI Agent 协作平台**。它是一套完
 git clone git@github.com:JJJJSTIYYYY/alira.git
 cd alira
 uv sync --locked
-uv run pytest
-uv run python -m alira.server
+uv run --with-requirements src/alira/modules/web/requirements.txt pytest
+uv run alira --web
 ```
 
 项目目录：
@@ -59,7 +59,8 @@ alira/
 │       └── modules/ # 业务模块
 │           ├── agent/    # Agent SDK、图与上下文
 │           ├── tool/     # 函数工具与 MCP
-│           └── database/ # 数据、缓存与文件存储
+│           ├── database/ # 数据、缓存与文件存储
+│           └── web/      # 按需加载的 HTTP 服务
 ├── tests/           # 测试
 └── docs/            # 文档
 ```
@@ -68,15 +69,19 @@ alira/
 两者均不纳入版本控制。已有 `config.yaml` 中的数据路径继续生效。`uv sync` 在根目录创建 `.venv/`。
 
 `uv sync --locked` 会将本地项目安装为可编辑包，源码修改立即生效。测试从已安装的包导入，
-启动方式仍为 `uv run python -m alira.server`。包版本通过 `alira.__version__` 获取；
+启动方式仍为 `uv run alira --web`。包版本通过 `alira.__version__` 获取；
 项目元数据、FastAPI 版本和启动横幅均使用 `src/alira/_version.py` 中的 `__version__`。
 构建 wheel 和源码包时执行 `uv build`。
+
+不传模块参数时，`uv run alira` 只启动内核。`--web` 等参数按模块声明的名称选择模块，并自动加载前置模块；可同时传入多个模块参数。
+
+标准模块由 `kernel.module.ModuleManager` 管理，首个模块为 `modules/web`；声明、依赖与启停规则见 [模块文档](docs/README.md)。
 
 事件与图调度通过 PyPI 依赖 `apixis` 提供；Alira 保留 Agent SDK、工具、存储与服务层。
 
 ## 📚 使用文档
 
-- [总览](./docs/README.md)
+- [模块设计](./docs/README.md)
 - [Apixis 事件与图接口](https://github.com/JJJJSTIYYYY/Apixis/tree/master/docs)
 - 事件与图执行底座：[Apixis（Apache 协议开源）](https://github.com/JJJJSTIYYYY/Apixis.git)
 

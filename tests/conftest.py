@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -11,7 +12,23 @@ from apixis.core.graph import NodeGraph
 from alira.modules.tool.utils.manager import ToolManager
 from alira.utils.logger import logger
 from alira.kernel import auto_init
-from alira.kernel.auto_init import ApixisCore, AutoInit
+from alira.kernel.lifespan.auto_init import ApixisCore, AutoInit
+from alira.kernel.module import ModuleManager
+
+
+@pytest.fixture
+def module_manager_factory():
+    def create(modules_dir=None, *, package="alira.modules"):
+        class IsolatedModuleManager(ModuleManager):
+            _instance = None
+
+        manager = IsolatedModuleManager()
+        if modules_dir is not None:
+            manager.modules_dir = Path(modules_dir)
+        manager.package = package
+        return manager
+
+    return create
 
 
 @pytest_asyncio.fixture
@@ -22,13 +39,21 @@ async def core_lifecycle():
         _instance = None
 
     registry = IsolatedAutoInit()
-    registry.register(logger, group="core")
-    registry.register(ApixisCore(), group="core")
+    registry.register(logger)
+    registry.register(ApixisCore())
     try:
         yield registry
     finally:
         if registry._started_services or registry._pending_stop:
             await registry.stop()
+
+
+@pytest.fixture
+def kernel_lifecycle(core_lifecycle, monkeypatch):
+    initialization = importlib.import_module("alira.kernel.initialize")
+    monkeypatch.setattr(initialization, "auto_init", core_lifecycle)
+    monkeypatch.setattr(initialization, "initialize", lambda: None)
+    return initialization
 
 
 @pytest_asyncio.fixture(autouse=True, loop_scope="session")

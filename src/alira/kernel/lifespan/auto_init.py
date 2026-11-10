@@ -1,4 +1,4 @@
-"""Ordered, grouped lifecycle management for application-owned services."""
+"""Ordered lifecycle management for application-owned services."""
 
 import asyncio
 from typing import Protocol
@@ -16,8 +16,8 @@ class LifecycleService(Protocol):
 class AutoInit:
     """Singleton registry; services must support repeated start/stop calls.
 
-    Each service belongs to one group. Lifecycle operations are serialized on
-    the application event loop. Successful starts are remembered individually;
+    Lifecycle operations are serialized on the application event loop.
+    Successful starts are remembered individually;
     failed or cancelled transitions retain cleanup state so they can be retried.
     """
 
@@ -33,20 +33,13 @@ class AutoInit:
             return
 
         self._services: list[LifecycleService] = []
-        self._service_groups: dict[int, str] = {}
         self._started_services: set[int] = set()
         self._pending_stop: set[int] = set()
         self._lock = asyncio.Lock()
         self._initialized = True
 
-    def register(self, service: LifecycleService, group: str = "default") -> None:
-        """Register once by identity, preserving global registration order.
-
-        Re-registering the same instance in another group raises ValueError.
-        """
-        if not isinstance(group, str) or not group.strip():
-            raise ValueError("Service group must be a non-empty string")
-
+    def register(self, service: LifecycleService) -> None:
+        """Register once by identity, preserving registration order."""
         for method in ("start", "stop"):
             if not hasattr(service, method):
                 raise AttributeError(
@@ -55,42 +48,27 @@ class AutoInit:
             if not callable(getattr(service, method)):
                 raise TypeError(f"{service.__class__.__name__}.{method} must be callable")
 
-        key = id(service)
-        if key in self._service_groups:
-            if self._service_groups[key] != group:
-                raise ValueError("Service is already registered in another group")
+        if any(existing is service for existing in self._services):
             return
 
         self._services.append(service)
-        self._service_groups[key] = group
-        logger.debug(f"Registered service: {service.__class__.__name__} ({group})")
+        logger.debug(f"Registered service: {service.__class__.__name__}")
 
-    def _select_services(self, group: str | None) -> list[LifecycleService]:
-        if group is None:
-            return list(self._services)
-        if group not in self._service_groups.values():
-            raise ValueError(f"Unknown service group: {group!r}")
-        return [
-            service for service in self._services
-            if self._service_groups[id(service)] == group
-        ]
-
-    async def start(self, group: str | None = None, *, restart: bool = False) -> None:
-        """Start selected services in registration order (None selects all).
+    async def start(self, *, restart: bool = False) -> None:
+        """Start services in registration order, including newly registered ones.
 
         Already started services are skipped. Use restart=True after a runtime
-        failure to stop the selection in reverse order before starting it again.
+        failure to stop all services in reverse order before starting them again.
         A failed start is cleaned up before its next attempt. Ordinary failures
         are collected in an ExceptionGroup; successful services remain running.
         """
         async with self._lock:
-            services = self._select_services(group)
             if restart:
                 # Do not reopen resources while any previous cleanup has failed.
-                await self._stop_services(services)
+                await self._stop_services()
 
             errors: list[Exception] = []
-            for service in services:
+            for service in self._services:
                 key = id(service)
                 if key in self._started_services:
                     continue
@@ -109,27 +87,27 @@ class AutoInit:
             if errors:
                 raise ExceptionGroup("Failed to start services", errors)
 
-    async def stop(self, group: str | None = None) -> None:
-        """Stop selected services in reverse registration order.
+    async def stop(self) -> None:
+        """Stop services in reverse registration order.
 
         Also stop services started directly by their callers. Ordinary failures
         do not prevent the remaining services from stopping and are raised as an
         ExceptionGroup. Failed or cancelled cleanup can be retried.
         """
         async with self._lock:
-            await self._stop_services(self._select_services(group))
+            await self._stop_services()
 
     async def _stop_service(self, service: LifecycleService) -> None:
         key = id(service)
         self._started_services.discard(key)
         self._pending_stop.add(key)
+        logger.debug(f"Stopping: {service.__class__.__name__}")
         await service.stop()
         self._pending_stop.discard(key)
-        logger.debug(f"Stopped: {service.__class__.__name__}")
 
-    async def _stop_services(self, services: list[LifecycleService]) -> None:
+    async def _stop_services(self) -> None:
         errors: list[Exception] = []
-        for service in reversed(services):
+        for service in reversed(self._services):
             try:
                 await self._stop_service(service)
             except Exception as exc:
@@ -156,5 +134,3 @@ apixis_core = ApixisCore()
 
 
 auto_init = AutoInit()
-auto_init.register(logger, group="core")
-auto_init.register(apixis_core, group="core")

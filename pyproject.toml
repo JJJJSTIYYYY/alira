@@ -11,17 +11,16 @@ requires-python = ">=3.12"
 license-files = ["LICENSE"]
 dependencies = [
     "aiosqlite>=0.21.0",
-    "fastapi>=0.139.2",
     "httpx[socks]>=0.28.1",
     "inflect>=7.5.0",
     "sqlalchemy[asyncio]>=2.0.44,<3",
     "pyyaml>=6.0.3",
     "redis>=8.0.1",
-    "uvicorn>=0.51.0",
     "fastmcp-slim[client]==3.4.7",
     "apixis>=1.1.7",
     "pydantic>=2.12",
     "my-llm-py[all]>=2.0.1",
+    "packaging>=24.2",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +33,9 @@ embedding = [
 Repository = "https://github.com/JJJJSTIYYYY/alira"
 Issues = "https://github.com/JJJJSTIYYYY/alira/issues"
 
+[project.scripts]
+alira = "alira.main:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["alira", "alira.*"]
@@ -41,6 +43,9 @@ namespaces = false
 
 [tool.setuptools.dynamic]
 version = {attr = "alira._version.__version__"}
+
+[tool.setuptools.package-data]
+"alira.modules" = ["*/requirements.txt"]
 
 [tool.uv]
 cache-keys = [{file = "pyproject.toml"}, {file = "src/alira/_version.py"}]

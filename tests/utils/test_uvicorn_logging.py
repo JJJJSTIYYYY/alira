@@ -1,6 +1,5 @@
 """Uvicorn records retain their source and reach the shared console/file sink once."""
 
-import asyncio
 import importlib
 import logging
 import sys
@@ -152,7 +151,7 @@ def test_filtered_records_do_not_interpolate_arguments(output, monkeypatch, caps
 def test_repeated_configuration_replaces_handlers_and_does_not_enable_asgi_trace(
     output, tmp_path, capsys
 ):
-    from alira.server import create_app
+    from alira.modules.web.application import create_app
 
     for _ in range(2):
         config = uvicorn.Config(create_app(), log_config=get_uvicorn_log_config())
@@ -187,38 +186,58 @@ def test_handler_uses_standard_error_reporting_on_bad_record(output, capsys):
 
 
 @pytest.mark.parametrize("fail", [False, True])
-def test_server_entry_drains_final_logs_after_application_stop(
+def test_logger_lifecycle_drains_service_shutdown_logs_without_outer_context(
     output, tmp_path, monkeypatch, fail
 ):
-    server = importlib.import_module("alira.server")
+    from alira.kernel.lifespan.auto_init import AutoInit
 
-    def run(app, **kwargs):
-        uvicorn.Config(app, **kwargs)
-        thread = output._thread
-        assert thread is not None and thread.is_alive()
-        source = logging.getLogger("uvicorn.error")
-        source.info("before-application-start")
-        asyncio.run(Logger.start())
-        asyncio.run(Logger.stop())
-        assert output._thread is thread and thread.is_alive()
-        for i in range(10):  # More than buffer capacity, after lifespan shutdown.
-            source.info("after-application-stop-%d", i)
-        source.info("finished-server-process")
-        if fail:
-            raise RuntimeError("server failed")
+    entry = importlib.import_module("alira.main")
+    initialization = importlib.import_module("alira.kernel.initialize")
+    from alira.modules.web.application import create_app
 
-    monkeypatch.setattr(server.uvicorn, "run", run)
+    uvicorn.Config(create_app(), log_config=get_uvicorn_log_config())
+    source = logging.getLogger("uvicorn.error")
+    output.stop()
+
+    class Registry(AutoInit):
+        _instance = None
+
+    class Application:
+        async def start(self):
+            source.info("application-started")
+
+        async def stop(self):
+            assert output._thread is not None
+            for i in range(10):  # Exercise shutdown output beyond buffer capacity.
+                source.info("application-shutdown-%d", i)
+            source.info("finished-server-process")
+
+    registry = Registry()
+    registry.register(application_logging.logger)
+    registry.register(Application())
+    monkeypatch.setattr(initialization, "auto_init", registry)
+    monkeypatch.setattr(initialization, "initialize", lambda: None)
+
+    async def run(argv=None):
+        assert output._thread is None
+        async with initialization.lifespan():
+            assert output._thread is not None and output._thread.is_alive()
+            if fail:
+                raise RuntimeError("server failed")
+
+    monkeypatch.setattr(entry, "run", run)
     if fail:
         with pytest.raises(RuntimeError, match="server failed"):
-            server.run_server()
+            entry.main()
     else:
-        server.run_server()
+        entry.main()
     assert output._thread is None
     assert not output._pending
     text = file_text(tmp_path)
-    assert text.count("before-application-start") == 1
-    assert text.count("after-application-stop-") == 10
+    assert text.count("application-started") == 1
+    assert text.count("application-shutdown-") == 10
     assert text.count("finished-server-process") == 1
+    assert "Stopping: Logger" in text
     assert output.dropped_records == 0
 
 
