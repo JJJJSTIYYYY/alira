@@ -20,7 +20,7 @@
 - Keep implementations simple, readable, and free of redundant logic, dead code, and unnecessary abstractions.
 - Prefer straightforward control flow over excessive branching and deeply nested conditions.
 - Search for and reuse existing functions before introducing new ones.
-- Place reusable business-related functions and methods in `shared`, and business-agnostic utilities in `utils`.
+- Place module-owned reusable methods and public types in that module's `src/shared`; keep application-wide infrastructure in `src/alira/shared` and business-agnostic utilities in `src/alira/utils`.
 - Avoid unnecessary wrappers, obsolete code, and compatibility layers that no longer serve a purpose.
 
 ### 4. Abstraction and Module Boundaries
@@ -37,3 +37,17 @@
 - Before implementing protocol adaptation, message processing, graph scheduling, event handling, or related infrastructure, check whether the existing dependencies already provide the required functionality.
 - Avoid duplicating framework behavior or introducing parallel abstractions without a concrete requirement.
 - When existing framework capabilities are sufficient, integrate them directly rather than wrapping or reimplementing them unnecessarily.
+
+### 6. Layer Dependency Direction and Module Communication
+
+- The layer order from lower to upper is `utils -> shared -> kernel -> modules`. Dependencies point toward lower layers:
+  - `utils` must not depend on `shared`, `kernel`, or business modules.
+  - `shared` may depend on `utils`, but must not depend on `kernel` or business modules.
+  - `kernel` may depend on `shared` and `utils`, but must not import concrete business module implementations. Module discovery may import declarative `main.py` entries through `ModuleManager`.
+  - Business modules may depend on `kernel`, `shared`, and `utils`.
+- These boundaries apply to absolute imports, relative imports, dynamic imports, and imports under `TYPE_CHECKING`; do not bypass them by changing the import mechanism.
+- Global `src/alira/shared` owns application-wide configuration, logging, and version support. Business-specific contracts remain owned by their module, even when other modules use them.
+- Modules communicate through Apixis events. Business data requests, delivery, and results must not bypass event communication through direct calls to another module's internal services, caches, or mutable state.
+- A module's `src/shared` only defines reusable methods and public types. Other modules may import these definitions, but must not use them to exchange runtime data or access the owning module's internal state. Instances of shared types carrying business data are transmitted through Apixis events.
+- Declare runtime module dependencies through `BaseModule.required_modules` so prerequisite modules are ready before dependents start. Modules awaiting alignment retain their current implementation until their alignment is explicitly requested.
+- Preserve dependency-direction and import-order checks in `tests/test_package_exports.py` when changing package exports or moving implementations.
