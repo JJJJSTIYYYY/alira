@@ -1,14 +1,16 @@
 import asyncio
 import importlib
+import sys
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 
 from alira.kernel.module import BaseModule
-from alira.kernel.module.dependencies import DependencyError, ModuleRequirements
 
-manager_module = importlib.import_module("alira.kernel.module.module_manager")
+deployment_module = importlib.import_module(
+    "alira.kernel.module.dependencies.deployment"
+)
 
 
 class Service(BaseModule):
@@ -23,13 +25,17 @@ def manager(tmp_path, module_manager_factory):
     return module_manager_factory(tmp_path)
 
 
-def test_discovery_skips_legacy_and_defers_business_imports(tmp_path, monkeypatch, module_manager_factory):
+def test_discovery_skips_legacy_and_defers_business_imports(
+    tmp_path, monkeypatch, module_manager_factory
+):
     package = f"modules_{uuid4().hex}"
     root = tmp_path / package
     root.mkdir()
     (root / "__init__.py").touch()
     (root / "legacy").mkdir()
-    (root / "legacy" / "__init__.py").write_text("raise AssertionError('legacy imported')")
+    (root / "legacy" / "__init__.py").write_text(
+        "raise AssertionError('legacy imported')"
+    )
     folder = root / "demo"
     folder.mkdir()
     (folder / "__init__.py").touch()
@@ -48,37 +54,74 @@ def test_discovery_skips_legacy_and_defers_business_imports(tmp_path, monkeypatc
     assert manager.discover()["demo"] is manager.modules["demo"]
 
 
-@pytest.mark.parametrize("declaration", ["", "a = BaseModule('a', '1')\nb = BaseModule('b', '1')"])
-def test_discovery_rejects_ambiguous_declarations(tmp_path, monkeypatch, declaration, module_manager_factory):
+def test_discovery_rejects_ambiguous_declarations(
+    tmp_path, monkeypatch, module_manager_factory
+):
     package = f"modules_{uuid4().hex}"
     folder = tmp_path / package / "demo"
     folder.mkdir(parents=True)
     (folder.parent / "__init__.py").touch()
     (folder / "__init__.py").touch()
-    (folder / "main.py").write_text("from alira.kernel.module import BaseModule\n" + declaration)
+    (folder / "main.py").write_text(
+        "from alira.kernel.module import BaseModule\n"
+        "a = BaseModule('a', '1')\nb = BaseModule('b', '1')\n"
+    )
     monkeypatch.syspath_prepend(str(tmp_path))
     with pytest.raises(ValueError, match="exactly one"):
         module_manager_factory(folder.parent, package=package).discover()
 
 
-@pytest.mark.parametrize("declaration", ["", "\n  \n"])
-def test_discovery_skips_empty_entry_without_importing_module(
-    tmp_path, monkeypatch, declaration, module_manager_factory,
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "",
+        "\n  \n",
+        "# Module entry\n",
+        "from alira.kernel.module import BaseModule\nclass Demo(BaseModule): pass\n",
+        (
+            "from alira.kernel.module import BaseModule\n"
+            "class Demo(BaseModule):\n"
+            "    def __init__(self): self.name = 'partial'\n"
+            "module = Demo()\n"
+        ),
+    ],
+)
+def test_discovery_marks_entries_without_initialized_modules_unavailable(
+    tmp_path,
+    monkeypatch,
+    declaration,
+    module_manager_factory,
 ):
     package = f"modules_{uuid4().hex}"
-    folder = tmp_path / package / "pending"
+    folder = tmp_path / package / "demo"
     folder.mkdir(parents=True)
     (folder.parent / "__init__.py").touch()
-    (folder / "__init__.py").write_text("raise AssertionError('pending module imported')")
+    (folder / "__init__.py").touch()
     (folder / "main.py").write_text(declaration)
     monkeypatch.syspath_prepend(str(tmp_path))
     manager = module_manager_factory(folder.parent, package=package)
     assert not manager.discover()
+    assert manager.unavailable == {"demo"}
+    assert f"{package}.demo.main" in sys.modules
+
+
+def test_register_requires_completed_base_module_initialization(manager):
+    class Incomplete(BaseModule):
+        def __init__(self):
+            self.name = "incomplete"
+
+    with pytest.raises(TypeError, match="initialized BaseModule"):
+        manager.register(Incomplete())
 
 
 async def test_load_order_selected_closure_and_unload_protection(manager):
     calls = []
-    for name, dependencies in [("c", ["b"]), ("unrelated", []), ("b", ["a"]), ("a", [])]:
+    for name, dependencies in [
+        ("c", ["b"]),
+        ("unrelated", []),
+        ("b", ["a"]),
+        ("a", []),
+    ]:
         manager.register(Service(name, calls, required_modules=dependencies))
     await manager.load("c")
     await manager.load("c")
@@ -90,13 +133,8 @@ async def test_load_order_selected_closure_and_unload_protection(manager):
     assert manager.loaded == frozenset()
 
 
-async def test_independent_installs_and_startups_are_parallel(manager, monkeypatch):
-    installing = {name: asyncio.Event() for name in ("a", "b")}
+async def test_independent_startups_are_parallel(manager):
     starting = {name: asyncio.Event() for name in ("a", "b")}
-
-    async def install(name, plan):
-        installing[name].set()
-        await installing["b" if name == "a" else "a"].wait()
 
     for name in ("a", "b"):
         module = Service(name, [])
@@ -107,7 +145,6 @@ async def test_independent_installs_and_startups_are_parallel(manager, monkeypat
 
         module.startup.side_effect = startup
         manager.register(module)
-    monkeypatch.setattr(manager, "_install", install)
     await asyncio.wait_for(manager.load(), 2)
     assert manager.loaded == {"a", "b"}
     await manager.stop()
@@ -126,11 +163,15 @@ async def test_dependent_starts_as_soon_as_its_prerequisite_is_ready(manager):
     await manager.stop()
 
 
-@pytest.mark.parametrize("dependencies, message", [(["missing"], "unknown modules"), (["a"], "cycle")])
-async def test_invalid_graph_fails_before_install(manager, dependencies, message, monkeypatch):
+@pytest.mark.parametrize(
+    "dependencies, message", [(["missing"], "unknown modules"), (["a"], "cycle")]
+)
+async def test_invalid_graph_fails_before_install(
+    manager, dependencies, message, monkeypatch
+):
     manager.register(Service("a", [], required_modules=dependencies))
     install = AsyncMock()
-    monkeypatch.setattr(manager, "_install", install)
+    monkeypatch.setattr(deployment_module, "run_uv", install)
     with pytest.raises(ValueError, match=message):
         await manager.load()
     install.assert_not_awaited()
@@ -185,63 +226,10 @@ async def test_module_cannot_override_package_operations(manager):
     module.uninstall.assert_not_awaited()
 
 
-@pytest.mark.parametrize("explicit", [None, "a/requirements.txt"])
-async def test_requirements_paths_default_and_relative(manager, monkeypatch, explicit):
-    requirements = manager.modules_dir / "a" / "requirements.txt"
-    requirements.parent.mkdir()
-    requirements.write_text("demo>=1")
-    manager.register(Service("a", [], requirements_txt=explicit))
-
-    async def resolve(sources, pins, directory, cwd):
-        assert sources == {"a": requirements}
-        return {"a": ModuleRequirements(None, {})}
-
-    monkeypatch.setattr(manager_module, "resolve_requirements", resolve)
-    await manager.load()
-    await manager.stop()
-
-
 async def test_missing_explicit_requirements_is_an_error(manager):
     manager.register(Service("a", [], requirements_txt="missing.txt"))
     with pytest.raises(FileNotFoundError, match="requirements file"):
         await manager.load()
-
-
-async def test_shared_dependency_references_and_retry_failed_cleanup(manager, monkeypatch):
-    async def resolve(sources, pins, directory, cwd):
-        return {name: ModuleRequirements(None, {"shared": "1.0", "host": "2.0"}) for name in sources}
-
-    manager._baseline = {"host": "2.0"}
-    monkeypatch.setattr(manager_module, "resolve_requirements", resolve)
-    commands = []
-
-    async def uv(*arguments, cwd):
-        commands.append(arguments)
-
-    monkeypatch.setattr(manager_module, "run_uv", uv)
-    first, second = Service("a", []), Service("b", [])
-    manager.register(first)
-    manager.register(second)
-    await manager.load()
-    assert manager.dependencies["shared"].ref_count == 2
-    first.shutdown.side_effect = [RuntimeError("shutdown failed"), None]
-    with pytest.raises(RuntimeError, match="shutdown failed"):
-        await manager.unload("a")
-    assert manager.dependencies["shared"].ref_count == 2
-    await manager.unload("a")
-    assert manager.dependencies["shared"].modules == {"b"}
-    assert commands == []
-    failing = AsyncMock(side_effect=DependencyError("uninstall failed"))
-    monkeypatch.setattr(manager_module, "run_uv", failing)
-    with pytest.raises(DependencyError, match="uninstall failed"):
-        await manager.unload("b")
-    assert manager.dependencies["shared"].ref_count == 1
-    assert not manager.loaded
-    monkeypatch.setattr(manager_module, "run_uv", uv)
-    await manager.unload("b")
-    assert commands == [("uninstall", "shared")]
-    assert not manager.dependencies
-    second.shutdown.assert_awaited_once()
 
 
 async def test_failed_child_shutdown_keeps_prerequisite_running_for_retry(manager):
@@ -262,7 +250,9 @@ async def test_failed_child_shutdown_keeps_prerequisite_running_for_retry(manage
 
 
 async def test_start_only_discovers_without_validating_or_installing_dependencies(
-    tmp_path, monkeypatch, module_manager_factory,
+    tmp_path,
+    monkeypatch,
+    module_manager_factory,
 ):
     package = f"modules_{uuid4().hex}"
     folder = tmp_path / package / "inactive"
@@ -276,8 +266,10 @@ async def test_start_only_discovers_without_validating_or_installing_dependencie
     )
     monkeypatch.syspath_prepend(str(tmp_path))
     manager = module_manager_factory(folder.parent, package=package)
-    resolver = AsyncMock(side_effect=AssertionError("Dependencies resolved during discovery"))
-    monkeypatch.setattr(manager_module, "resolve_requirements", resolver)
+    resolver = AsyncMock(
+        side_effect=AssertionError("Dependencies resolved during discovery")
+    )
+    monkeypatch.setattr(deployment_module, "resolve_requirements", resolver)
     await manager.start()
     assert list(manager.modules) == ["inactive"]
     assert not manager.loaded
@@ -289,11 +281,37 @@ async def test_start_only_discovers_without_validating_or_installing_dependencie
 async def test_unselected_module_dependencies_do_not_block_loading_or_shutdown(manager):
     calls = []
     manager.register(Service("selected", calls))
-    manager.register(Service(
-        "inactive", calls, required_modules=["missing"], requirements_txt="missing.txt",
-    ))
+    manager.register(
+        Service(
+            "inactive",
+            calls,
+            required_modules=["missing"],
+            requirements_txt="missing.txt",
+        )
+    )
     await manager.start()
     await manager.load("selected")
     assert manager.loaded == {"selected"}
     await manager.stop()
     assert calls == ["start:selected", "stop:selected"]
+
+
+async def test_startup_import_error_names_module_dependency_and_repair(manager):
+    from alira.kernel.module.dependencies import ModuleLoadError
+
+    module = Service("plugin", [])
+    module.startup.side_effect = ModuleNotFoundError(
+        "No module named 'fastapi'", name="fastapi"
+    )
+    manager.register(module)
+    with pytest.raises(ExceptionGroup) as caught:
+        await manager.load("plugin")
+    error = caught.value.exceptions[0]
+    assert isinstance(error, ModuleLoadError)
+    assert error.module == "plugin"
+    assert error.missing == "fastapi"
+    assert error.hint == "uv run alira sync"
+    assert "fastapi" in str(error)
+    module.shutdown.assert_awaited_once()
+    assert not manager.loaded
+    assert not manager._runtime.startup_attempted

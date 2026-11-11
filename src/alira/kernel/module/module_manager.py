@@ -1,262 +1,223 @@
-"""Discover modules, order lifecycle operations and own shared dependencies."""
+"""Public module manager: serialize source, dependency and runtime operations."""
 
 import asyncio
-import importlib
-from collections.abc import Collection, Mapping
-from graphlib import CycleError, TopologicalSorter
-from importlib.metadata import distributions
+import shutil
+from collections.abc import Mapping
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import MappingProxyType
 from typing import ClassVar, Self
 
-from packaging.utils import canonicalize_name
-
-from alira.kernel.module.base_module import ALIRA_DIR, BaseModule
-from alira.kernel.module.dependencies import (
-    DependencyInfo,
-    ModuleRequirements,
-    resolve_requirements,
-    run_uv,
-)
-from alira.shared.logger import logger
+from alira.kernel.module.base_module import BaseModule
+from alira.kernel.module.catalog import ModuleCatalog, module_directory
+from alira.kernel.module.dependencies.deployment import ModuleDependencies
+from alira.kernel.module.dependencies.types import DependencyError, DependencyInfo
+from alira.kernel.module.registry import ModuleRegistry
+from alira.kernel.module.runtime import ModuleRuntime
+from alira.kernel.module.sources import install_source
 
 
 class ModuleManager:
-    """Process-wide singleton owning module lifecycle and package mutations.
-
-    main.py exports one BaseModule instance. Its imports and constructor must be
-    declaration-only; business packages are imported by startup(). Public load,
-    unload and stop operations are serialized; independent module starts run
-    concurrently within a load operation.
-    """
+    """Process-wide owner of module declarations, deployments and running services."""
 
     _instance: ClassVar[Self | None] = None
 
-    def __new__(cls) -> Self:
+    def __new__(cls, **kwargs) -> Self:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self):
+    def __init__(self, *, state_dir: Path | None = None):
         if getattr(self, "_initialized", False):
             return
-        self.modules_dir = ALIRA_DIR / "modules"
-        self.package = "alira.modules"
-        self._modules: dict[str, BaseModule] = {}
-        self._directories: dict[str, Path] = {}
-        self._loaded: set[str] = set()
-        self._started: set[str] = set()
-        self._claims: dict[str, dict[str, str]] = {}
-        self._references: dict[str, set[str]] = {}
-        self._versions: dict[str, str] = {}
-        self._baseline = {
-            canonicalize_name(dist.metadata["Name"]): dist.version for dist in distributions()
-        }
+        self._registry = ModuleRegistry(
+            Path(__file__).resolve().parents[2] / "modules", "alira.modules"
+        )
+        self._dependencies = ModuleDependencies(
+            Path(state_dir) if state_dir is not None else Path.home() / ".alira"
+        )
+        self._runtime = ModuleRuntime(self._registry)
         self._lock = asyncio.Lock()
         self._initialized = True
 
+    @classmethod
+    def _new_for_tests(cls, **kwargs) -> Self:
+        instance = object.__new__(cls)
+        instance.__init__(**kwargs)
+        return instance
+
+    @property
+    def modules_dir(self) -> Path:
+        return self._registry.directory
+
+    @modules_dir.setter
+    def modules_dir(self, directory: Path) -> None:
+        self._registry.directory = directory
+
+    @property
+    def package(self) -> str:
+        return self._registry.package
+
+    @package.setter
+    def package(self, package: str) -> None:
+        self._registry.package = package
+
     @property
     def modules(self) -> Mapping[str, BaseModule]:
-        return MappingProxyType(self._modules)
+        return MappingProxyType(self._registry.modules)
+
+    @property
+    def unavailable(self) -> frozenset[str]:
+        return frozenset(self._registry.unavailable)
 
     @property
     def loaded(self) -> frozenset[str]:
-        return frozenset(self._loaded)
+        return frozenset(self._runtime.loaded)
+
+    @property
+    def deployments(self) -> frozenset[str]:
+        """Module names recorded in the ledger, including interrupted installs."""
+        self._dependencies.restore()
+        return frozenset(self._dependencies.claims)
 
     @property
     def dependencies(self) -> dict[str, DependencyInfo]:
-        return {
-            name: DependencyInfo(name, self._versions[name], frozenset(owners), name in self._baseline)
-            for name, owners in self._references.items()
-        }
+        return self._dependencies.info
 
     def register(self, module: BaseModule) -> None:
-        """Register a declaration; validation of the complete graph happens at load."""
-        if not isinstance(module, BaseModule):
-            raise TypeError("Module declarations must be BaseModule instances")
-        if module.name in self._modules:
-            if self._modules[module.name] is module:
-                return
-            raise ValueError(f"Duplicate module name: {module.name}")
-        self._modules[module.name] = module
-        self._directories[module.name] = self.modules_dir / module.name
+        self._registry.register(module)
 
     def discover(self) -> Mapping[str, BaseModule]:
-        """Import module declarations, skipping missing or empty main.py stubs."""
-        for path in sorted(self.modules_dir.glob("*/main.py")):
-            if not path.read_text(encoding="utf-8").strip():
-                continue
-            declaration = importlib.import_module(f"{self.package}.{path.parent.name}.main")
-            instances = {
-                id(value): value for value in vars(declaration).values()
-                if isinstance(value, BaseModule)
-            }
-            if len(instances) != 1:
-                raise ValueError(f"{path} must declare exactly one BaseModule instance")
-            module = next(iter(instances.values()))
-            self.register(module)
-            self._directories[module.name] = path.parent
+        self._registry.discover()
         return self.modules
 
-    def _graph(self, names: Collection[str]) -> dict[str, set[str]]:
-        graph = {}
-
-        def select(name: str) -> None:
-            if name in graph:
-                return
-            if name not in self._modules:
-                raise ValueError(f"Unknown module: {name}")
-            dependencies = set(self._modules[name].required_modules)
-            missing = dependencies - self._modules.keys()
-            if missing:
-                raise ValueError(f"Module {name} requires unknown modules: {', '.join(sorted(missing))}")
-            graph[name] = dependencies
-            for dependency in dependencies:
-                select(dependency)
-
-        for name in names:
-            select(name)
-        try:
-            tuple(TopologicalSorter(graph).static_order())
-        except CycleError as exc:
-            raise ValueError(f"Module dependency cycle: {exc.args[1]}") from exc
-        return graph
-
-    def _requirements_path(self, name: str) -> Path | None:
-        declared = self._modules[name].requirements_txt
-        path = (
-            self.modules_dir / declared if declared is not None
-            else self._directories[name] / "requirements.txt"
-        ).resolve()
-        if path.is_file():
-            return path
-        if declared is not None:
-            raise FileNotFoundError(f"Module {name}: requirements file not found: {path}")
-        return None
-
     async def start(self) -> None:
-        """Discover declarations; installation and startup require explicit load()."""
         self.discover()
 
-    async def load(self, *names: str) -> None:
-        """Load selected modules and their prerequisites, or all declarations."""
+    def list(self) -> list[str]:
+        """List source directories without reading records or importing entries."""
+        return ModuleCatalog(self.modules_dir).names()
+
+    def _check_idle(self) -> None:
+        if self._runtime.startup_attempted:
+            raise DependencyError(
+                "Stop running modules before modifying their Python environment."
+            )
+
+    async def sync(self, *, no_install: bool = False, background: bool = False) -> None:
+        """Rebuild all dependency records from actual module sources."""
         async with self._lock:
-            graph = self._graph(names or self._modules.keys())
-            pending = graph.keys() - self._loaded
-            if not pending:
-                return
-            if pending & self._claims.keys():
-                raise RuntimeError("A previous failed load needs unload() cleanup before retrying")
-            with TemporaryDirectory(prefix="alira-modules-") as temporary:
-                plans = await resolve_requirements(
-                    {name: self._requirements_path(name) for name in sorted(pending)},
-                    self._baseline | self._versions, Path(temporary), self.modules_dir,
-                )
-                # Reserve all owners before parallel installs or failure cleanup.
-                for name, plan in plans.items():
-                    self._claims[name] = plan.packages
-                    for dependency, version in plan.packages.items():
-                        self._versions[dependency] = version
-                        self._references.setdefault(dependency, set()).add(name)
-                sorter = TopologicalSorter({name: graph[name] & pending for name in sorted(pending)})
-                sorter.prepare()
+            self._check_idle()
+            catalog = ModuleCatalog(self.modules_dir)
+            specifications = catalog.select(catalog.names())
+            await self._dependencies.rebuild(
+                specifications,
+                cwd=self.modules_dir,
+                no_install=no_install,
+                background=background,
+                prune=True,
+            )
+
+    async def add(
+        self, *names: str, no_install: bool = False, background: bool = False
+    ) -> None:
+        """Manage dependencies of existing modules and their prerequisites."""
+        async with self._lock:
+            self._check_idle()
+            specifications = ModuleCatalog(self.modules_dir).select(names)
+            await self._dependencies.add(
+                specifications,
+                cwd=self.modules_dir,
+                no_install=no_install,
+                background=background,
+            )
+
+    async def install(
+        self, source: str, *, ref: str | None = None, background: bool = False
+    ) -> None:
+        """Install validated sources and reuse add(), rolling back ordinary failures."""
+        self._check_idle()
+        async with (
+            self._dependencies.transaction(self.modules_dir, background=background),
+            install_source(self._registry, source, ref) as name,
+        ):
+            await self.add(name, background=background)
+
+    async def uninstall(self, *names: str, background: bool = False) -> None:
+        """Release dependencies, then move sources into the operating system trash."""
+        from send2trash import send2trash
+
+        self._check_idle()
+        directories = [
+            module_directory(self.modules_dir, name) for name in dict.fromkeys(names)
+        ]
+        for directory in directories:
+            if not (directory / "main.py").is_file():
+                raise DependencyError(f"Module not found: {directory.name}")
+        with TemporaryDirectory(prefix="alira-uninstall-") as temporary:
+            backup = Path(temporary)
+            for directory in directories:
+                shutil.copytree(directory, backup / directory.name, symlinks=True)
+            async with self._dependencies.transaction(
+                self.modules_dir, background=background
+            ):
                 try:
-                    async with asyncio.TaskGroup() as group:
-                        tasks = {}
-                        while sorter.is_active():
-                            for name in sorter.get_ready():
-                                task = group.create_task(
-                                    self._load_one(name, plans[name]), name=f"module:{name}"
-                                )
-                                tasks[task] = name
-                            done, _ = await asyncio.wait(
-                                tasks, return_when=asyncio.FIRST_COMPLETED
-                            )
-                            for task in done:
-                                task.result()
-                                sorter.done(tasks.pop(task))
-                except BaseException as exc:
+                    await self.remove(*names, background=background)
+                    for directory in directories:
+                        send2trash(str(directory))
+                except BaseException as failure:
                     errors = []
-                    for name in reversed(tuple(TopologicalSorter(graph).static_order())):
-                        if name in pending and name not in self._loaded:
+                    for directory in directories:
+                        if not directory.exists():
                             try:
-                                await self._unload_one(name)
-                            except Exception as cleanup_error:
-                                errors.append(cleanup_error)
+                                shutil.copytree(
+                                    backup / directory.name, directory, symlinks=True
+                                )
+                            except OSError as exc:
+                                errors.append(exc)
                     if errors:
                         raise BaseExceptionGroup(
-                            "Module load and cleanup failed", [exc, *errors]
+                            "Module uninstall failed and source restoration was incomplete",
+                            [failure, *errors],
                         ) from None
                     raise
 
-    async def _install(self, name: str, plan: ModuleRequirements) -> None:
-        if plan.lockfile is not None:
-            logger.info(f"Installing dependencies for module {name}")
-            await run_uv(
-                "install", "--requirements", str(plan.lockfile), "--no-deps",
-                cwd=self.modules_dir,
-            )
-            importlib.invalidate_caches()
-
-    async def _load_one(self, name: str, plan: ModuleRequirements) -> None:
-        await self._install(name, plan)
-        self._started.add(name)
-        await self._modules[name].startup()
-        self._loaded.add(name)
-        logger.success(f"Started module: {name}")
-
-    async def _uninstall(self, name: str) -> None:
-        packages = self._claims.get(name)
-        if packages is None:
-            return
-        removable = sorted(
-            package for package in packages
-            if self._references[package] == {name} and package not in self._baseline
-        )
-        if removable:
-            await run_uv("uninstall", *removable, cwd=self.modules_dir)
-            importlib.invalidate_caches()
-        for package in packages:
-            owners = self._references[package]
-            owners.remove(name)
-            if not owners:
-                del self._references[package]
-                del self._versions[package]
-        del self._claims[name]
-
-    async def _unload_one(self, name: str) -> None:
-        dependents = {
-            other for other in self._claims
-            if name in self._modules[other].required_modules
-        }
-        if dependents:
-            raise ValueError(f"Module {name} is required by: {', '.join(sorted(dependents))}")
-        if name in self._started:
-            await self._modules[name].shutdown()
-            self._started.remove(name)
-            self._loaded.discard(name)
-        await self._uninstall(name)
+    async def load(self, *names: str, install_missing: bool = False) -> None:
+        """Verify dependencies offline, then start services in dependency order."""
+        if install_missing:
+            await self.add(*(names or tuple(self._registry.modules)), background=True)
+        async with self._lock:
+            graph = self._registry.graph(names or self._registry.modules.keys())
+            pending = graph.keys() - self._runtime.loaded
+            if pending & self._runtime.startup_attempted:
+                raise RuntimeError(
+                    "A previous failed load needs unload() cleanup before retrying"
+                )
+            requirements = {
+                name: self._registry.requirements_path(name) for name in pending
+            }
+            if any(path is not None for path in requirements.values()):
+                self._dependencies.restore()
+            installed = self._dependencies.installed()
+            for name in sorted(pending):
+                self._dependencies.verify(name, requirements[name], installed)
+            await self._runtime.load(graph, pending)
 
     async def unload(self, name: str) -> None:
-        """Unload a module only after all of its dependents have been unloaded."""
         async with self._lock:
-            if name not in self._modules:
-                raise ValueError(f"Unknown module: {name}")
-            await self._unload_one(name)
+            await self._runtime.unload(name)
+
+    async def remove(self, *names: str, background: bool = False) -> None:
+        """Release dependency records without changing any module sources."""
+        async with self._lock:
+            self._check_idle()
+            await self._dependencies.remove(
+                names, cwd=self.modules_dir, background=background
+            )
 
     async def stop(self) -> None:
-        """Unload in reverse dependency order, retaining failed cleanup for retry."""
         async with self._lock:
-            errors = []
-            graph = self._graph(self._claims.keys() | self._started)
-            for name in reversed(tuple(TopologicalSorter(graph).static_order())):
-                try:
-                    await self._unload_one(name)
-                except Exception as exc:
-                    errors.append(exc)
-            if errors:
-                raise ExceptionGroup("Failed to unload modules", errors)
+            await self._runtime.stop()
 
 
 module_manager = ModuleManager()

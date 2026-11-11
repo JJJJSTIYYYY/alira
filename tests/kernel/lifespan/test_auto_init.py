@@ -10,11 +10,8 @@ from alira.kernel.lifespan.auto_init import AutoInit, auto_init
 
 
 @pytest.fixture
-def registry():
-    class IsolatedAutoInit(AutoInit):
-        _instance = None
-
-    return IsolatedAutoInit()
+def registry(auto_init_factory):
+    return auto_init_factory()
 
 
 def service(name, calls):
@@ -26,9 +23,30 @@ def service(name, calls):
 
 def test_singleton_keeps_registrations(registry):
     registry.register(service("one", []))
-    assert type(registry)() is registry
     assert len(registry._services) == 1
     assert AutoInit() is auto_init
+    assert registry is not auto_init
+    assert registry._services is not auto_init._services
+
+
+async def test_isolated_registry_factory_preserves_active_instances(auto_init_factory):
+    calls = []
+    first = auto_init_factory()
+    running = service("running", calls)
+    first.register(running)
+    await first.start()
+    try:
+        second = auto_init_factory()
+        assert second is not first
+        assert not second._services
+        assert not second._started_services
+        assert id(running) in first._started_services
+        assert AutoInit() is auto_init
+        await second.stop()
+        assert calls == ["start:running"]
+    finally:
+        await first.stop()
+    assert calls == ["start:running", "stop:running"]
 
 
 async def test_services_start_in_order_and_stop_in_reverse(registry):

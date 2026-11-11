@@ -1,10 +1,15 @@
 """Application-wide settings from the working directory's config.yaml."""
 
+from pathlib import Path
+
 from alira.utils.config import YamlConfig
 
 _config = YamlConfig("config.yaml")
 
-ALIRA_BASE_DIR = _config.get("SERVER.base_dir", "./.alira_data/")
+_base_dir = Path(_config.get("SERVER.base_dir", Path.home() / ".alira")).expanduser()
+ALIRA_BASE_DIR = str(
+    (_base_dir if _base_dir.is_absolute() else Path.home() / _base_dir).resolve()
+)
 
 DEBUG_LEVEL = _config.get("LOG.debug_level", "DEBUG")
 TRACE = _config.get("LOG.trace", True)

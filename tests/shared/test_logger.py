@@ -204,12 +204,12 @@ async def test_cross_loop_lifecycle_and_concurrent_flush(writer, tmp_path):
 
 
 async def test_explicit_file_write_preserves_text_and_json(writer, tmp_path):
-    log = Logger()
-    await log.write_log("logs", "text", "hello\nworld")
-    await log.write_log("logs", "json", {"中文": True})
-    assert (tmp_path / "logs/text.log").read_text() == "hello\nworld\n"
-    assert json.loads((tmp_path / "logs/json.jsonl").read_text()) == {"中文": True}
-    with pytest.raises(ValueError, match="inside ALIRA_BASE_DIR"):
+    log = Logger("test")
+    await log.write_log("details", "text", "hello\nworld")
+    await log.write_log("details", "json", {"中文": True})
+    assert (tmp_path / "logs/test/details/text.log").read_text() == "hello\nworld\n"
+    assert json.loads((tmp_path / "logs/test/details/json.jsonl").read_text()) == {"中文": True}
+    with pytest.raises(ValueError, match="inside the logger directory"):
         await log.write_log("..", "outside", "blocked")
 
 
@@ -345,6 +345,9 @@ def test_closed_stderr_does_not_kill_file_worker_or_hang_barriers(
 
 
 def test_process_starts_get_separate_files_and_loggers_share_suffix(tmp_path):
+    (tmp_path / "config.yaml").write_text(
+        "SERVER:\n  base_dir: " + json.dumps(str(tmp_path)) + "\n", encoding="utf-8",
+    )
     legacy = tmp_path / "first" / f"{datetime.now():%Y-%m-%d}.log"
     legacy.parent.mkdir()
     legacy.write_text("previous logs\n")
@@ -355,26 +358,26 @@ from alira.shared.logger import Logger, LogWriter
 
 module = import_module('alira.shared.logger')
 module.DEBUG_LEVEL = 'DEBUG'
-Logger._writer = LogWriter(sys.argv[1], 100, 1024 * 1024)
 with Logger.file_logging():
-    Logger('first').info(sys.argv[2])
-    Logger('second').info(sys.argv[2])
+    Logger('first').info(sys.argv[1])
+    Logger('second').info(sys.argv[1])
 print(LogWriter.STARTUP_SUFFIX)
 """
     suffixes = []
     for marker in ("first-start", "second-start"):
         result = subprocess.run(
-            [sys.executable, "-c", script, str(tmp_path), marker],
+            [sys.executable, "-c", script, marker],
             check=True,
             capture_output=True,
             text=True,
             timeout=10,
+            cwd=tmp_path,
         )
         suffix = result.stdout.splitlines()[-1]
         assert suffix.isdecimal() and len(suffix) == 9
         suffixes.append(suffix)
         for name in ("first", "second"):
-            paths = list((tmp_path / name).glob(f"*_{suffix}.log"))
+            paths = list((tmp_path / "logs" / name).glob(f"*_{suffix}.log"))
             assert len(paths) == 1
             assert marker in paths[0].read_text()
             other_marker = "second-start" if marker == "first-start" else "first-start"
@@ -476,7 +479,7 @@ def test_trace_flag_filters_without_formatting_and_supplies_default_message(
 async def test_explicit_file_write_uses_defaults_for_blank_names(writer, tmp_path, monkeypatch):
     monkeypatch.setattr(logging.time, "time", lambda: 1800000000.0)
     await Logger().write_log(" ", "", {"中文": False})
-    path = tmp_path / "logs/1800000000.0.jsonl"
+    path = tmp_path / "logs/Logger/1800000000.0.jsonl"
     assert json.loads(path.read_text()) == {"中文": False}
     assert "中文" in path.read_text()
 

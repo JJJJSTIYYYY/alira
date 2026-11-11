@@ -3,26 +3,42 @@
 import asyncio
 import importlib
 from pathlib import Path
+import sys
 
 import pytest
 import pytest_asyncio
 from apixis.core.event import aget_event_loop, aget_event_pipe, factory
 from apixis.core.graph import NodeGraph
 
-from alira.modules.tool.src.utils.manager import ToolManager
 from alira.shared.logger import logger
 from alira.kernel import auto_init
-from alira.kernel.lifespan.auto_init import ApixisCore, AutoInit
+from alira.kernel.lifespan import ApixisCore, AutoInit
+from alira.kernel.lifespan.resource_cleaner import ResourceCleaner
 from alira.kernel.module import ModuleManager
 
 
-@pytest.fixture
-def module_manager_factory():
-    def create(modules_dir=None, *, package="alira.modules"):
-        class IsolatedModuleManager(ModuleManager):
-            _instance = None
+@pytest.fixture(scope="session", autouse=True)
+def runtime_log_directory(tmp_path_factory):
+    """Keep process-global diagnostic output out of the user's data directory."""
+    writer = logger._writer
+    original = writer.root
+    writer.root = tmp_path_factory.mktemp("runtime-logs")
+    try:
+        yield
+    finally:
+        writer.stop()
+        writer.root = original
 
-        manager = IsolatedModuleManager()
+
+@pytest.fixture
+def module_manager_factory(tmp_path):
+    sequence = 0
+
+    def create(modules_dir=None, *, package="alira.modules"):
+        nonlocal sequence
+        state_dir = tmp_path / f"module-state-{sequence}"
+        sequence += 1
+        manager = ModuleManager._new_for_tests(state_dir=state_dir)
         if modules_dir is not None:
             manager.modules_dir = Path(modules_dir)
         manager.package = package
@@ -31,14 +47,21 @@ def module_manager_factory():
     return create
 
 
+@pytest.fixture
+def auto_init_factory():
+    return AutoInit._new_for_tests
+
+
+@pytest.fixture
+def resource_cleaner_factory():
+    return ResourceCleaner._new_for_tests
+
+
 @pytest_asyncio.fixture
-async def core_lifecycle():
+async def core_lifecycle(auto_init_factory):
     """Use real core services without starting unrelated application storage."""
 
-    class IsolatedAutoInit(AutoInit):
-        _instance = None
-
-    registry = IsolatedAutoInit()
+    registry = auto_init_factory()
     registry.register(logger)
     registry.register(ApixisCore())
     try:
@@ -69,18 +92,23 @@ async def cleanup_event_runtime(event_runtime_capacity, monkeypatch):
     managers = []
     original_services = list(auto_init._services)
     original_init = NodeGraph.__init__
-    original_manager_init = ToolManager.__init__
 
     def track_graph(self, *args, **kwargs):
         original_init(self, *args, **kwargs)
         graphs.append(self)
 
-    def track_manager(self, *args, **kwargs):
-        original_manager_init(self, *args, **kwargs)
-        managers.append(self)
-
     monkeypatch.setattr(NodeGraph, "__init__", track_graph)
-    monkeypatch.setattr(ToolManager, "__init__", track_manager)
+    # Collection imports the tool implementation for tool/agent test suites.
+    # Pure kernel tests must not import optional business dependencies for cleanup.
+    tool_module = sys.modules.get("alira.modules.tool.src.utils.manager")
+    if tool_module is not None:
+        original_manager_init = tool_module.ToolManager.__init__
+
+        def track_manager(self, *args, **kwargs):
+            original_manager_init(self, *args, **kwargs)
+            managers.append(self)
+
+        monkeypatch.setattr(tool_module.ToolManager, "__init__", track_manager)
     baseline = asyncio.all_tasks()
     pipe = await aget_event_pipe()
     event_loop = await aget_event_loop()

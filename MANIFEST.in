@@ -1,5 +1,6 @@
 include uv.lock .python-version
 recursive-include tests *.py *.txt
+recursive-include scripts *.py
 recursive-include docs *.md *.png *.jpeg
 prune docs/reference
 global-exclude __pycache__ *.py[cod] .DS_Store config.yaml

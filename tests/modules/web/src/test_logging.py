@@ -187,20 +187,15 @@ def test_handler_uses_standard_error_reporting_on_bad_record(output, capsys):
 
 @pytest.mark.parametrize("fail", [False, True])
 def test_logger_lifecycle_drains_service_shutdown_logs_without_outer_context(
-    output, tmp_path, monkeypatch, fail
+    output, tmp_path, monkeypatch, fail, auto_init_factory
 ):
-    from alira.kernel.lifespan.auto_init import AutoInit
-
-    entry = importlib.import_module("alira.main")
+    entry = importlib.import_module("alira.cli.entrypoint")
     initialization = importlib.import_module("alira.kernel.initialize")
     from alira.modules.web.src.application import create_app
 
     uvicorn.Config(create_app(), log_config=get_uvicorn_log_config())
     source = logging.getLogger("uvicorn.error")
     output.stop()
-
-    class Registry(AutoInit):
-        _instance = None
 
     class Application:
         async def start(self):
@@ -212,7 +207,7 @@ def test_logger_lifecycle_drains_service_shutdown_logs_without_outer_context(
                 source.info("application-shutdown-%d", i)
             source.info("finished-server-process")
 
-    registry = Registry()
+    registry = auto_init_factory()
     registry.register(application_logging.logger)
     registry.register(Application())
     monkeypatch.setattr(initialization, "auto_init", registry)

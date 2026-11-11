@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-ALIRA_DIR = Path(__file__).resolve().parents[2]
-
 
 class BaseModule:
     """Declare metadata without importing the module's business packages.
@@ -14,6 +12,8 @@ class BaseModule:
     belong to ModuleManager.
     """
 
+    _initialized: bool = False
+
     def __init__(
         self,
         name: str,
@@ -23,7 +23,6 @@ class BaseModule:
         required_modules: list[str] | None = None,
         requirements_txt: str | Path | None = None,
         author: str | None = None,
-        logo_banner: str | None = None,
     ):
         self.name = name
         self.version = version
@@ -31,13 +30,10 @@ class BaseModule:
         self.required_modules = required_modules or []
         self.requirements_txt = requirements_txt
         self.author = author
-        self.logo_banner = logo_banner
+        self._initialized = True
 
     async def startup(self) -> None:
         """Import business packages and start services; return when ready."""
-        if self.logo_banner:
-            print(self.logo_banner)
 
     async def shutdown(self) -> None:
-        """Release services, including resources acquired by a failed startup."""
-        raise NotImplementedError("Subclasses should implement shutdown().")
+        """Release acquired resources, including partial startup; no-op by default."""

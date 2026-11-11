@@ -55,7 +55,7 @@ class LogWriter:
 
     STARTUP_SUFFIX: ClassVar[str] = datetime.now().strftime("%H%M%S%f")[:-3]
 
-    def __init__(self, root: str, capacity: int, file_size: int, interval: float = 0.2):
+    def __init__(self, root: str | Path, capacity: int, file_size: int, interval: float = 0.2):
         if capacity <= 0 or file_size <= 0 or interval <= 0:
             raise ValueError(
                 "Log capacity, file size and flush interval must be positive"
@@ -272,7 +272,7 @@ class Logger:
     """Colored console logging with bounded, batched background file output."""
 
     _writer: ClassVar[LogWriter] = LogWriter(
-        ALIRA_BASE_DIR, LOG_BUFFER_SIZE, MAX_LOG_FILE_SIZE
+        Path(ALIRA_BASE_DIR) / "logs", LOG_BUFFER_SIZE, MAX_LOG_FILE_SIZE
     )
     _time_cache: ClassVar[tuple[int | None, str]] = (None, "")
 
@@ -524,24 +524,22 @@ class Logger:
         self._log("debug", message)
 
     async def write_log(self, log_folder: str, log_file: str, message: Any):
-        """
-        Append message to log file.
-        """
+        """Append a file under this logger's directory; log_folder is relative."""
 
         await asyncio.to_thread(self._write_log_sync, log_folder, log_file, message)
 
     def _write_log_sync(self, log_folder: str, log_file: str, message: Any):
         if not log_folder or not log_folder.strip():
-            log_folder = "logs"
+            log_folder = ""
 
         if not log_file or not log_file.strip():
             log_file = str(time.time())
 
         suffix = ".jsonl" if isinstance(message, dict) else ".log"
-        base = Path(ALIRA_BASE_DIR).resolve()
+        base = (Path(ALIRA_BASE_DIR) / "logs" / self.name).resolve()
         destination = (base / log_folder / f"{log_file}{suffix}").resolve()
         if not destination.is_relative_to(base):
-            raise ValueError("Log path must stay inside ALIRA_BASE_DIR")
+            raise ValueError("Log path must stay inside the logger directory")
         destination.parent.mkdir(parents=True, exist_ok=True)
         text = (
             json.dumps(message, ensure_ascii=False)

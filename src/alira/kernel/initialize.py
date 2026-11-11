@@ -2,16 +2,18 @@
 
 from contextlib import asynccontextmanager
 
-from alira.kernel.lifespan.auto_init import apixis_core, auto_init
+from alira.kernel.lifespan import apixis_core, auto_init, resource_cleaner
 from alira.kernel.module import module_manager
-from alira.kernel.lifespan.resource_cleaner import resource_cleaner
 from alira.shared.logger import logger
 
 
 def initialize() -> None:
     """Register kernel singletons in startup order, once by identity."""
     for service in (
-        logger, apixis_core, resource_cleaner, module_manager,
+        logger,
+        apixis_core,
+        resource_cleaner,
+        module_manager,
     ):
         auto_init.register(service)
 

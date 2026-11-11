@@ -3,7 +3,6 @@
 import asyncio
 from typing import Protocol
 
-from apixis import start_core, stop_core
 from alira.shared.logger import logger
 
 
@@ -38,6 +37,13 @@ class AutoInit:
         self._lock = asyncio.Lock()
         self._initialized = True
 
+    @classmethod
+    def _new_for_tests(cls):
+        """Create an isolated registry without replacing the process singleton."""
+        registry = object.__new__(cls)
+        registry.__init__()
+        return registry
+
     def register(self, service: LifecycleService) -> None:
         """Register once by identity, preserving registration order."""
         for method in ("start", "stop"):
@@ -46,7 +52,9 @@ class AutoInit:
                     f"{service.__class__.__name__} missing {method}() method"
                 )
             if not callable(getattr(service, method)):
-                raise TypeError(f"{service.__class__.__name__}.{method} must be callable")
+                raise TypeError(
+                    f"{service.__class__.__name__}.{method} must be callable"
+                )
 
         if any(existing is service for existing in self._services):
             return
@@ -80,7 +88,7 @@ class AutoInit:
                     await service.start()
                     self._started_services.add(key)
                     logger.debug(f"Started: {service.__class__.__name__}")
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - aggregate service failures and continue cleanup
                     logger.exception(f"Error starting {service.__class__.__name__}")
                     errors.append(exc)
 
@@ -110,27 +118,11 @@ class AutoInit:
         for service in reversed(self._services):
             try:
                 await self._stop_service(service)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - aggregate service failures and continue cleanup
                 logger.exception(f"Error stopping {service.__class__.__name__}")
                 errors.append(exc)
         if errors:
             raise ExceptionGroup("Failed to stop services", errors)
-
-
-class ApixisCore:
-    """first registered service to start/stop the apixis core automatically."""
-
-    async def start(self):
-        await start_core()
-
-    async def stop(self):
-        await stop_core()
-
-    def get_version(self) -> str:
-        from apixis import VERSION
-        return VERSION
-
-apixis_core = ApixisCore()
 
 
 auto_init = AutoInit()

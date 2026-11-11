@@ -1,5 +1,7 @@
 """Alira version comparison and startup banner rendering."""
 
+from packaging.version import Version
+
 from alira._version import __version__
 
 
@@ -16,19 +18,8 @@ def compare_version(v: str) -> int:
             - -1 if ``v`` is older (less than the current version).
             - 1  if ``v`` is newer (greater than the current version).
     """
-    v1_parts = [int(x) for x in __version__.split('.')]
-    v2_parts = [int(x) for x in v.split('.')]
-
-    max_len = max(len(v1_parts), len(v2_parts))
-    v1_parts += [0] * (max_len - len(v1_parts))
-    v2_parts += [0] * (max_len - len(v2_parts))
-
-    if v2_parts == v1_parts:
-        return 0
-    elif v2_parts < v1_parts:
-        return -1
-    else:
-        return 1
+    current, candidate = Version(__version__), Version(v)
+    return (candidate > current) - (candidate < current)
 
 
 def print_logo():

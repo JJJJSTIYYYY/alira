@@ -1,10 +1,11 @@
+"""Schedule registered application resource cleanup callbacks."""
+
 import asyncio
-from typing import Callable, Awaitable, Union, Optional
+from collections.abc import Awaitable, Callable
 from functools import wraps
 
-
-from alira.shared.logger import logger
 from alira.shared.application.config import CACHE_CLEAN_INTERVAL
+from alira.shared.logger import logger
 
 
 class ResourceCleaner:
@@ -21,7 +22,6 @@ class ResourceCleaner:
     _instance = None
 
     def __new__(cls):
-        # Singleton
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
@@ -29,20 +29,19 @@ class ResourceCleaner:
     def __init__(self):
         if getattr(self, "_initialized", False):
             return
-        
-        # Registered cleanup functions
-        self._cleaners: list[Callable[[], Union[int, Awaitable[int]]]] = []
-        # Background task
-        self._task: Optional[asyncio.Task] = None
-        # Default interval (seconds)
+
+        self._cleaners: list[Callable[[], int | Awaitable[int]]] = []
+        self._task: asyncio.Task | None = None
         self._interval = CACHE_CLEAN_INTERVAL
-        # Running flag
         self._running = False
         self._initialized = True
 
-    # -----------------------------
-    # Registration
-    # -----------------------------
+    @classmethod
+    def _new_for_tests(cls):
+        """Create an isolated cleaner without replacing the process singleton."""
+        cleaner = object.__new__(cls)
+        cleaner.__init__()
+        return cleaner
 
     def register(self, func: Callable):
         """
@@ -73,16 +72,10 @@ class ResourceCleaner:
 
         return wrapper
 
-    # -----------------------------
-    # Lifecycle
-    # -----------------------------
-
     async def start(self):
         """
         Start background cleanup loop.
 
-        Args:
-            interval: Cleanup interval in seconds
         """
         interval = CACHE_CLEAN_INTERVAL or 30
 
@@ -93,7 +86,6 @@ class ResourceCleaner:
         self._running = True
 
         self._task = asyncio.create_task(self._loop(), name="resource-cleaner")
-
 
     async def stop(self):
         """
@@ -112,11 +104,6 @@ class ResourceCleaner:
                 pass
 
             self._task = None
-
-
-    # -----------------------------
-    # Core loop
-    # -----------------------------
 
     async def _loop(self):
         """
@@ -142,19 +129,17 @@ class ResourceCleaner:
             try:
                 result = func()
 
-                # Support async + sync
                 if asyncio.iscoroutine(result):
                     result = await result
 
                 if isinstance(result, int):
                     total_removed += result
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - isolate failures between cleanup callbacks
                 logger.error(f"Error in {func.__name__}: {e}")
 
         if total_removed:
             logger.info(f"Cleaned total={total_removed}")
 
 
-# Global singleton
 resource_cleaner = ResourceCleaner()

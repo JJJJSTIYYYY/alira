@@ -1,16 +1,23 @@
 """Kernel lifecycle services and module management APIs."""
 
-from alira.kernel.lifespan.auto_init import (
+from alira.kernel.initialize import lifespan
+from alira.kernel.lifespan import (
     ApixisCore,
     AutoInit,
     LifecycleService,
+    ResourceCleaner,
     apixis_core,
     auto_init,
+    resource_cleaner,
 )
-from alira.kernel.lifespan.resource_cleaner import ResourceCleaner, resource_cleaner
-from alira.kernel.module import BaseModule, ModuleManager, module_manager
-from alira.kernel.module.dependencies import DependencyError, DependencyInfo
-from alira.kernel.initialize import lifespan
+from alira.kernel.module import (
+    BaseModule,
+    DependencyError,
+    DependencyInfo,
+    ModuleLoadError,
+    ModuleManager,
+    module_manager,
+)
 
 __all__ = [
     "ApixisCore",
@@ -19,6 +26,7 @@ __all__ = [
     "DependencyError",
     "DependencyInfo",
     "LifecycleService",
+    "ModuleLoadError",
     "ModuleManager",
     "ResourceCleaner",
     "apixis_core",
