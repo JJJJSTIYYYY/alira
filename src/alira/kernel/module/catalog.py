@@ -12,6 +12,19 @@ from alira.kernel.module.dependencies.types import DependencyError
 
 
 def module_directory(root: Path, name: str) -> Path:
+    """Validate a module name and return its directory beneath root.
+
+    Args:
+        root: Module source root; it need not exist yet.
+        name: Python identifier excluding keywords and names beginning with __.
+
+    Returns:
+        root / name, without creating it.
+
+    Raises:
+        DependencyError: The name is invalid, the target is a symlink or its resolved
+            parent escapes root. No filesystem mutation occurs.
+    """
     if (
         not isinstance(name, str)
         or not name.isidentifier()
@@ -94,6 +107,17 @@ def _module_declarations(tree: ast.Module) -> list[tuple[ast.Call, list[ast.expr
 
 @dataclass(frozen=True)
 class ModuleSpec:
+    """Immutable static module description used by dependency-management commands.
+
+    Attributes:
+        name: Declared module identifier.
+        directory: Source directory containing main.py.
+        requirements: Resolved requirements file, or None if no default file exists.
+        required_modules: Declared prerequisite module names, in declaration order.
+
+    This is metadata, not a BaseModule instance; obtaining it never starts services.
+    """
+
     name: str
     directory: Path
     requirements: Path | None
@@ -108,12 +132,30 @@ class ModuleSpec:
         default_name: str | None = None,
         modules_dir: Path | None = None,
     ) -> "ModuleSpec":
-        """Read literals in BaseModule(...) or super().__init__(...).
+        """Inspect main.py and requirements without importing or executing the entry.
 
-        Module management never evaluates expressions, calls constructors or
-        imports an entry. Dynamic metadata must be made declarative first.
-        During archive validation, modules_dir is the eventual installation
-        root; references to this module resolve against its extracted source.
+        Args:
+            directory: Existing module directory with a UTF-8 main.py.
+            name: Required declared name; a mismatch is rejected. None skips that check.
+            default_name: Fallback when no name is declared and name is not provided.
+                If both are absent, use directory.name.
+            modules_dir: Eventual installation root when validating an extracted archive.
+                Own-module requirements references are remapped into extracted sources.
+                None resolves explicit relative paths against directory.parent.
+
+        Returns:
+            ModuleSpec with prerequisite names and a resolved requirements path. A
+            missing default requirements.txt is represented by None.
+
+        Raises:
+            DependencyError: Entry I/O/syntax, ambiguous declarations, nonliteral or
+                invalid metadata, name mismatch, or an explicit missing requirements file.
+
+        Notes:
+            Recognizes BaseModule constructors, supported aliases, inherited
+            constructors and explicit/super base initialization. Metadata uses literals
+            or supported top-level constants; functions and arbitrary expressions are
+            never evaluated. An undeclared entry still yields fallback static metadata.
         """
         entry = directory / "main.py"
         try:
@@ -125,6 +167,7 @@ class ModuleSpec:
         constants = {"__version__": __version__}
 
         def literal(node):
+            """Read a supported top-level constant reference or evaluate an AST literal only."""
             if isinstance(node, ast.Name) and node.id in constants:
                 return constants[node.id]
             return ast.literal_eval(node)
@@ -205,10 +248,22 @@ class ModuleSpec:
 
 
 class ModuleCatalog:
+    """Static source-directory catalogue used without runtime module imports.
+
+    Args:
+        directory: Root containing module directories and their main.py entries.
+    """
+
     def __init__(self, directory: Path):
+        """Store the source root without scanning or reading deployment records."""
         self.directory = directory
 
     def names(self) -> list[str]:
+        """Return sorted visible directory names containing main.py.
+
+        Hidden and __-prefixed directories are excluded. A missing root yields an
+        empty list. Entry contents, dependencies and deployment records are not read.
+        """
         return (
             sorted(
                 path.name
@@ -228,10 +283,25 @@ class ModuleCatalog:
         *,
         prepared: Mapping[str, ModuleSpec] | None = None,
     ) -> dict[str, ModuleSpec]:
+        """Read a selected source closure and order prerequisites before dependents.
+
+        Args:
+            names: Initial module names; empty input returns an empty mapping.
+            prepared: Optional name/spec overrides for staged, not-yet-published sources.
+                Other prerequisite specifications are read from this catalogue's root.
+
+        Returns:
+            Name/spec mapping in topological order, including transitive prerequisites.
+
+        Raises:
+            DependencyError: A selection or prerequisite is missing, metadata is invalid
+                or the selected graph contains a cycle. No entry code is executed.
+        """
         selected = {}
         prepared = prepared or {}
 
         def visit(name):
+            """Collect a specification and its prerequisite closure once per name."""
             if name in selected:
                 return
             spec = prepared.get(name)

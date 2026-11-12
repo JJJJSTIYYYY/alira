@@ -78,7 +78,8 @@ class NoApplicationImports(importlib.abc.MetaPathFinder):
         if fullname == "alira.cli.application" or fullname == "alira.modules" or fullname.startswith(("alira.modules.", "cli_modules")):
             raise AssertionError("management imported application or module code: " + fullname)
 sys.meta_path.insert(0, NoApplicationImports())
-from alira.kernel.lifespan import AutoInit, ApixisCore, ResourceCleaner, auto_init, resource_cleaner
+from alira.kernel.comlink import ApixisCore
+from alira.kernel.lifespan import AutoInit, ResourceCleaner, auto_init, resource_cleaner
 from alira.shared.logger import Logger
 from alira.kernel.module import ModuleManager, module_manager
 from alira.kernel.module.dependencies.ledger import DependencyLedger

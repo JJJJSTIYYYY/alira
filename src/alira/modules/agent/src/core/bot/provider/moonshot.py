@@ -18,6 +18,7 @@ class MoonShotProvider(BaseProvider):
         super().__init__(
             "moonshot",
             ProviderProfile(
+                provider=Attribute(default_value="moonshot"),
                 protocol=None,
                 base_url=Config(default_value="https://api.moonshot.ai/v1"),
                 api_key=InputParameter(path="$.api_key", default_value=omit, supports=True),

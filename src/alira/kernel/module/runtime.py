@@ -9,15 +9,40 @@ from alira.shared.logger import logger
 
 
 class ModuleRuntime:
-    """Track runtime transitions after the caller verifies and locks the graph."""
+    """Run verified module lifecycles while retaining incomplete cleanup state.
+
+    Attributes:
+        registry: Declaration owner supplying module hooks and dependency metadata.
+        loaded: Names whose startup succeeded and shutdown has not succeeded.
+        startup_attempted: Names needing cleanup, including partial startup failures.
+
+    ModuleManager must serialize callers and verify graphs/dependencies first.
+    This component does not install Python packages or provide its own lock.
+    """
 
     def __init__(self, registry: ModuleRegistry):
+        """Initialize empty runtime state for registry without invoking module hooks."""
         self.registry = registry
         self.loaded: set[str] = set()
         self.startup_attempted: set[str] = set()
 
     async def load(self, graph: dict[str, set[str]], pending: set[str]) -> None:
-        """Start a verified graph; retain cleanup state after failed transitions."""
+        """Start a verified pending set with dependency-aware concurrency.
+
+        Args:
+            graph: Acyclic mapping of registered names to known prerequisites.
+            pending: Names in graph that still require startup. Existing loaded
+                prerequisites are treated as ready.
+
+        Raises:
+            BaseExceptionGroup: Startup tasks failed, or startup and cleanup both failed.
+            asyncio.CancelledError: The operation was cancelled; cleanup is attempted.
+
+        Notes:
+            Successfully started modules remain loaded after another task fails.
+            Attempted modules not marked loaded are stopped in reverse graph order.
+            Failed shutdowns remain tracked so callers can explicitly retry cleanup.
+        """
         sorter = TopologicalSorter(
             {name: graph[name] & pending for name in sorted(pending)}
         )
@@ -53,6 +78,7 @@ class ModuleRuntime:
             raise
 
     async def _start_one(self, name: str) -> None:
+        """Track one startup attempt, wrap ImportError as ModuleLoadError and mark success loaded."""
         self.startup_attempted.add(name)
         try:
             await self.registry.modules[name].startup()
@@ -67,10 +93,11 @@ class ModuleRuntime:
         logger.success(f"[module:{name}] started")
 
     async def _stop_one(self, name: str) -> None:
-        """Stop services; Python imports/handlers remain cached, so this is not hot reload.
+        """Stop one module only when no attempted dependents remain.
 
-        Deployed dependency ownership persists until an explicit remove operation.
-        Module shutdown must unregister its own handlers and release its resources.
+        A successful shutdown clears both runtime sets. Failure/cancellation preserves
+        retry state. Import caches and dependency claims remain untouched; modules
+        must unregister handlers and release owned resources themselves.
         """
         dependents = {
             other
@@ -87,11 +114,29 @@ class ModuleRuntime:
             self.loaded.discard(name)
 
     async def unload(self, name: str) -> None:
+        """Invoke cleanup for one registered module, if it has pending state.
+
+        Args:
+            name: Registered module identifier.
+
+        Raises:
+            ValueError: Unknown name or an attempted dependent prevents shutdown.
+            Exception: The shutdown hook failed; tracked state is kept for retry.
+        """
         if name not in self.registry.modules:
             raise ValueError(f"Unknown module: {name}")
         await self._stop_one(name)
 
     async def stop(self) -> None:
+        """Attempt reverse-dependency cleanup for every attempted module.
+
+        Raises:
+            ExceptionGroup: Ordinary shutdown failures, collected after other eligible
+                modules have been attempted. Failed dependents protect prerequisites.
+            asyncio.CancelledError: Shutdown was cancelled; remaining state is retained.
+
+        Successfully cleaned modules leave both runtime sets; registrations persist.
+        """
         errors = []
         graph = self.registry.graph(self.startup_attempted)
         for name in reversed(tuple(TopologicalSorter(graph).static_order())):

@@ -45,6 +45,26 @@ class Generation:
         if not self.identity:
             raise ValueError("Can not initialize an unbounded Generation.")
 
+    def get_node_id(self, role: Literal["user", "assistant", "tool"]):
+        """Get the node ID bound with this generation for a given role."""
+
+        if role == "user":
+            suffix = "-user"
+        elif role == "assistant" or role == "tool":
+            suffix = "-alira"
+        else:
+            raise ValueError(
+                f"Invalid role: {role}. Must be one of 'user', 'assistant', 'tool'."
+            )
+
+        if isinstance(self.generation_id, str):
+            return self.generation_id + suffix
+
+        return type(self.generation_id)((gid + suffix) for gid in self.generation_id)
+
+    def get_parent_node_id(self):
+        """Get the parent node ID for this generation."""
+        return self.parent_node_id
 
 _current_generation: ContextVar["Generation | None"] = ContextVar(
     "agent_generation",

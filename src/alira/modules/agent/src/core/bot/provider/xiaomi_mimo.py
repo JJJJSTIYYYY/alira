@@ -18,6 +18,7 @@ class XiaomiMiMOProvider(BaseProvider):
         super().__init__(
             "mimo",
             ProviderProfile(
+                provider=Attribute(default_value="mimo"),
                 protocol=None,
                 base_url=Config(default_value="https://api.xiaomimimo.com/v1"),
                 api_key=InputParameter(path="$.api_key", default_value=omit, supports=True),

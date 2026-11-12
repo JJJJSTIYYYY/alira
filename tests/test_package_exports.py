@@ -1,9 +1,9 @@
 """Public package exports work without import cycles or eager business imports."""
 
 import ast
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -11,7 +11,7 @@ import pytest
 @pytest.mark.parametrize("first_import", [
     "alira.utils.config", "alira.utils.yaml", "alira.shared.application.config",
     "alira.shared.logger", "alira.kernel.module",
-    "alira.kernel.lifespan.apixis_core", "alira.kernel.module.registry",
+    "alira.kernel.comlink", "alira.kernel.comlink.apixis_core", "alira.kernel.module.registry",
     "alira.kernel.module.runtime", "alira.kernel.module.dependencies.deployment",
     "alira.cli",
 ])
@@ -27,6 +27,7 @@ utils = import_module("alira.utils")
 shared = import_module("alira.shared")
 kernel = import_module("alira.kernel")
 lifespan = import_module("alira.kernel.lifespan")
+comlink = import_module("alira.kernel.comlink")
 modules = import_module("alira.kernel.module")
 dependencies = import_module("alira.kernel.module.dependencies")
 cli = import_module("alira.cli")
@@ -34,7 +35,7 @@ commands = import_module("alira.cli.commands")
 assert not any(name in sys.modules for name in ("pydantic", "my_llm", "fastapi", "uvicorn"))
 assert not any(name.startswith("alira.modules.") for name in sys.modules)
 assert kernel.auto_init._services == []
-for package in (utils, shared, kernel, lifespan, modules, dependencies, cli, commands):
+for package in (utils, shared, kernel, lifespan, comlink, modules, dependencies, cli, commands):
     assert len(package.__all__) == len(set(package.__all__))
     for name in package.__all__:
         assert getattr(package, name) is not None
@@ -44,7 +45,15 @@ assert utils.YamlConfig is import_module("alira.utils.config").YamlConfig
 assert shared.config is import_module("alira.shared.application.config")
 assert kernel.module_manager is import_module("alira.kernel.module").module_manager
 assert kernel.lifespan is import_module("alira.kernel.initialize").lifespan
-assert kernel.apixis_core is lifespan.apixis_core
+assert kernel.apixis_core is comlink.apixis_core
+assert kernel.ApixisCore is comlink.ApixisCore
+upstream = import_module("apixis")
+namespace = {{}}
+exec("from alira.kernel.comlink import *", namespace)
+assert namespace.keys() == set(comlink.__all__) | {{"__builtins__"}}
+for name in upstream.__all__:
+    assert namespace[name] is getattr(upstream, name)
+assert namespace["apixis_core"] is kernel.apixis_core
 assert kernel.DependencyError is modules.DependencyError is dependencies.DependencyError
 '''
     subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, text=True)
@@ -96,6 +105,6 @@ raise SystemExit(pytest.main([
 ]))
 '''
     result = subprocess.run(
-        [sys.executable, "-c", script], cwd=root, capture_output=True, text=True, timeout=30,
+        [sys.executable, "-c", script], cwd=root, capture_output=True, text=True, timeout=30, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr

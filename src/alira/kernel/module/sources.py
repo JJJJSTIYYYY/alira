@@ -17,7 +17,28 @@ from alira.kernel.module.registry import ModuleRegistry
 
 
 def prepare_source(source: str, directory: Path, ref: str | None = None) -> Path:
-    """Accept a local ZIP or a public GitHub repository URL."""
+    """Download or extract an archive into caller-owned staging without executing code.
+
+    Args:
+        source: Local ZIP path, relative to the current working directory unless
+            absolute, or a public https://github.com/owner/repo URL.
+        directory: Existing staging directory for downloaded and extracted files.
+            The contents child directory must not already exist.
+        ref: Optional GitHub branch, tag or commit; invalid for local ZIPs.
+
+    Returns:
+        Extracted module root with main.py, either archive-root or one wrapper
+        directory deep. Adds an empty __init__.py if absent; does not check src/.
+
+    Raises:
+        DependencyError: Unsupported source URL, unsafe archive paths/types,
+            download/unpacking failure or ambiguous/missing entry structure.
+
+    Notes:
+        Rejects absolute/traversal paths, Windows drive paths, symlinks and special
+        files. GitHub downloads use a bounded socket timeout. Caller owns staging
+        cleanup; name, src/ and declaration checks happen in prepare_module_source.
+    """
     parsed = urlsplit(source)
     if parsed.scheme == "https":
         parts = parsed.path.strip("/").split("/")
@@ -96,7 +117,27 @@ def prepare_source(source: str, directory: Path, ref: str | None = None) -> Path
 async def install_source(
     registry: ModuleRegistry, source: str, ref: str | None = None
 ) -> AsyncIterator[str]:
-    """Validate and stage a module without executing any of its Python code."""
+    """Stage one validated source and temporarily publish its final module directory.
+
+    Args:
+        registry: Supplies the destination module root; runtime registrations are
+            not changed or initialized by this context manager.
+        source: Local ZIP or GitHub repository source accepted by prepare_source.
+        ref: Optional GitHub revision.
+
+    Yields:
+        Declared module name after the source has been atomically moved into place.
+
+    Raises:
+        DependencyError: Source validation failed or the destination already exists.
+        OSError: Copying, staging or moving source failed.
+        BaseExceptionGroup: Context-body failure and failed source rollback.
+
+    Notes:
+        Normal exit retains source. An exceptional body exit attempts to move it
+        back into staging for cleanup. This protects sources only; the caller must
+        manage dependency transactions. Forced termination cannot execute rollback.
+    """
     registry.directory.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix="alira-install-") as temporary:
         spec = await prepare_module_source(
@@ -130,7 +171,26 @@ async def install_source(
 async def prepare_module_source(
     source: str, directory: Path, modules_dir: Path, ref: str | None = None
 ) -> ModuleSpec:
-    """Download, extract and inspect an entry without executing module code."""
+    """Extract a source asynchronously and inspect its static module specification.
+
+    Args:
+        source: ZIP path or GitHub repository URL.
+        directory: Existing extraction workspace owned by the caller.
+        modules_dir: Eventual module root for resolving explicit requirements paths.
+        ref: Optional GitHub revision, rejected for local archives.
+
+    Returns:
+        ModuleSpec pointing to extracted sources containing main.py and src/.
+
+    Raises:
+        DependencyError: Unsafe/invalid source structure or static declaration.
+        asyncio.CancelledError: Cancellation after joining the extraction worker;
+            caller-owned staging is safe to clean once this coroutine exits.
+
+    Notes:
+        Blocking download/extraction runs in a thread. Cancellation waits for that
+        worker instead of deleting its workspace underneath it. No entry is imported.
+    """
     preparing = asyncio.create_task(
         asyncio.to_thread(prepare_source, str(source), directory, ref)
     )

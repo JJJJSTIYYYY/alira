@@ -280,6 +280,31 @@ def test_dependency_error_has_actionable_nonzero_cli_exit(monkeypatch, capsys):
     assert "uv run alira sync" in error
 
 
+def test_discovery_load_error_has_clean_nonzero_cli_exit(
+    tmp_path, monkeypatch, capsys, module_manager_factory
+):
+    package = f"modules_{uuid4().hex}"
+    root = tmp_path / package
+    folder = root / "demo"
+    folder.mkdir(parents=True)
+    (root / "__init__.py").touch()
+    (folder / "__init__.py").touch()
+    (folder / "main.py").write_text(
+        "from alira.kernel.module import BaseModule\n"
+        "module = BaseModule('other', '1')\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(
+        cli, "module_manager", module_manager_factory(root, package=package)
+    )
+    with pytest.raises(SystemExit) as caught:
+        cli.main(["--modules", "demo"])
+    assert caught.value.code == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err == "Module name 'other' does not match directory 'demo'\n"
+
+
 def test_grouped_dependency_errors_keep_actionable_cli_output(monkeypatch, capsys):
     from alira.kernel.module.dependencies import DependencyError
 

@@ -7,27 +7,44 @@ from alira.shared.logger import logger
 
 
 class LifecycleService(Protocol):
-    async def start(self) -> None: ...
+    """Structural contract for a kernel-owned asynchronous service.
 
-    async def stop(self) -> None: ...
+    Implement start and stop without arguments. Start returns when the service
+    is ready; stop releases complete or partially acquired resources. Hooks must
+    support repeated calls and retry after failure or cancellation.
+    """
+
+    async def start(self) -> None:
+        """Acquire service resources and return when ready; propagate startup failures."""
+        ...
+
+    async def stop(self) -> None:
+        """Release service resources, including partial startup; allow cleanup retries."""
+        ...
 
 
 class AutoInit:
-    """Singleton registry; services must support repeated start/stop calls.
+    """Process-wide ordered lifecycle registry for application services.
 
-    Lifecycle operations are serialized on the application event loop.
-    Successful starts are remembered individually;
-    failed or cancelled transitions retain cleanup state so they can be retried.
+    Services start in registration order and stop in reverse order. Each transition
+    is serialized on the owning event loop. Successful starts and incomplete
+    cleanup are tracked separately; ordinary hook failures are grouped, while
+    cancellation propagates immediately with cleanup state retained.
+
+    Use auto_init rather than constructing independent production registries.
+    Construction and registration do not invoke lifecycle hooks.
     """
 
     _instance = None
 
     def __new__(cls):
+        """Return the process registry singleton without replacing an existing instance."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
     def __init__(self):
+        """Initialize service and retry bookkeeping once; repeated construction preserves it."""
         if getattr(self, "_initialized", False):
             return
 
@@ -45,7 +62,20 @@ class AutoInit:
         return registry
 
     def register(self, service: LifecycleService) -> None:
-        """Register once by identity, preserving registration order."""
+        """Append a service once by object identity, preserving startup order.
+
+        Args:
+            service: Object with callable start and stop methods whose results can
+                be awaited. The same instance may be registered repeatedly as a no-op.
+
+        Raises:
+            AttributeError: A required lifecycle method is absent.
+            TypeError: A required method is not callable.
+
+        Notes:
+            Does not start the service or verify whether its call result is awaitable.
+            Services registered after a start are picked up by the next start call.
+        """
         for method in ("start", "stop"):
             if not hasattr(service, method):
                 raise AttributeError(
@@ -63,12 +93,22 @@ class AutoInit:
         logger.debug(f"Registered service: {service.__class__.__name__}")
 
     async def start(self, *, restart: bool = False) -> None:
-        """Start services in registration order, including newly registered ones.
+        """Start eligible services in registration order, collecting ordinary errors.
 
-        Already started services are skipped. Use restart=True after a runtime
-        failure to stop all services in reverse order before starting them again.
-        A failed start is cleaned up before its next attempt. Ordinary failures
-        are collected in an ExceptionGroup; successful services remain running.
+        Args:
+            restart: Stop all services in reverse order before starting again. A
+                failed stop aborts restart so old resources are not reopened unsafely.
+
+        Raises:
+            ExceptionGroup: One or more lifecycle hooks failed. Ordinary start errors
+                do not prevent later services from being attempted; successes remain
+                running. The group contains the original service exceptions.
+            asyncio.CancelledError: Startup was cancelled; pending cleanup is retained.
+
+        Notes:
+            Already started services are skipped unless restarting. A service with a
+            previous failed/cancelled start is stopped before another start attempt.
+            Hooks are awaited sequentially, and the registry lock covers the transition.
         """
         async with self._lock:
             if restart:
@@ -96,16 +136,22 @@ class AutoInit:
                 raise ExceptionGroup("Failed to start services", errors)
 
     async def stop(self) -> None:
-        """Stop services in reverse registration order.
+        """Stop all registered services in reverse order, even if not started here.
 
-        Also stop services started directly by their callers. Ordinary failures
-        do not prevent the remaining services from stopping and are raised as an
-        ExceptionGroup. Failed or cancelled cleanup can be retried.
+        Raises:
+            ExceptionGroup: Ordinary cleanup errors, raised after attempting remaining
+                services. Failed cleanup is tracked for a later stop/start retry.
+            asyncio.CancelledError: Cleanup was cancelled; its pending state is retained.
+
+        Notes:
+            Services started directly by a caller are also stopped. Successful cleanup
+            clears start/pending flags but does not remove services from registration.
         """
         async with self._lock:
             await self._stop_services()
 
     async def _stop_service(self, service: LifecycleService) -> None:
+        """Mark cleanup pending, await one stop hook, and clear pending state only on success."""
         key = id(service)
         self._started_services.discard(key)
         self._pending_stop.add(key)
@@ -114,6 +160,7 @@ class AutoInit:
         self._pending_stop.discard(key)
 
     async def _stop_services(self) -> None:
+        """Attempt every reverse-order cleanup and group ordinary failures; caller holds the lock."""
         errors: list[Exception] = []
         for service in reversed(self._services):
             try:

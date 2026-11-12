@@ -10,6 +10,11 @@ from alira.kernel.module.dependencies.types import DependencyError
 
 
 def _included_paths(content: str, source: Path):
+    """Yield resolved local -r/-c includes; retain remote references for uv to resolve.
+
+    Supports comments, quoted paths and line continuations. Malformed options and
+    unsupported URL schemes raise DependencyError with source-line context.
+    """
     content = content.replace("\\\r\n", "").replace("\\\n", "")
     for number, line in enumerate(content.splitlines(), 1):
         try:
@@ -50,7 +55,23 @@ def _included_paths(content: str, source: Path):
 
 
 def requirements_fingerprint(path: Path | None) -> str | None:
-    """Hash local -r/-c inputs; preserve remote URLs without fetching content."""
+    """Hash requirements bytes and recursively included local inputs without resolution.
+
+    Args:
+        path: Root requirements file, or None for a module with no requirements.
+
+    Returns:
+        SHA-256 hexadecimal fingerprint, or None for absent requirements. Includes
+        content and root-relative paths; repeated/cyclic includes are visited once.
+
+    Raises:
+        DependencyError: A local input is unreadable, not UTF-8 or has invalid include
+            syntax. Missing includes are errors rather than silently ignored.
+
+    Notes:
+        Remote include URLs are hashed as text in their parent but never fetched;
+        their remote content is resolved only during an explicit deployment.
+    """
     if path is None:
         return None
     root = path.resolve()
@@ -58,6 +79,7 @@ def requirements_fingerprint(path: Path | None) -> str | None:
     digest = hashlib.sha256()
 
     def visit(source: Path) -> None:
+        """Hash one local input and traverse its includes once, rejecting unreadable content."""
         if source in visited:
             return
         visited.add(source)

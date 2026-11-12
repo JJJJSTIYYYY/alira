@@ -445,6 +445,7 @@ def test_builtin_effort_mappings_have_an_ordered_contiguous_prefix(provider, mod
 )
 def test_provider_catalogues_explicitly_declare_every_profile_field(provider):
     catalogue = BaseProvider.get(provider)
+    assert catalogue.get_profile().provider == Attribute(default_value=provider)
     tree = ast.parse(inspect.getsource(type(catalogue)))
     contracts = {
         "ProviderProfile": {field.name for field in fields(ProviderProfile)},
@@ -546,6 +547,9 @@ def test_required_provider_classes_and_exact_string_selection():
     bot = AliraBot(provider=" OpenAI ", model="gpt-5.4", api_key="test")
     assert bot.provider.name == "openai" and bot.model == "gpt-5.4"
     assert bot.llm.stdio_protocol == "middleware"
+    assert bot.compare_profiles("openai", "gpt-5.4") is True
+    assert bot.compare_profiles("deepseek", "gpt-5.4") is False
+    assert bot.compare_profiles("openai", "gpt-5.4-mini") is False
     for provider, model in (
         (
             ProviderProfile(

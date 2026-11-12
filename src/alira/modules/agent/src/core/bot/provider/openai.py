@@ -20,6 +20,7 @@ class OpenAIPorvider(BaseProvider):
         super().__init__(
             "openai",
             ProviderProfile(
+                provider=Attribute(default_value="openai"),
                 protocol=None,
                 base_url=Config(default_value="https://api.openai.com/v1"),
                 api_key=InputParameter(path="$.api_key", default_value=omit, supports=True),

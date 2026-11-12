@@ -2,9 +2,9 @@ import importlib
 import subprocess
 import sys
 
-from alira.kernel.lifespan import apixis_core
-from alira.kernel.module import ModuleManager, module_manager
+from alira.kernel.comlink import apixis_core
 from alira.kernel.lifespan.resource_cleaner import resource_cleaner
+from alira.kernel.module import ModuleManager, module_manager
 from alira.shared.logger import logger
 
 initialization = importlib.import_module("alira.kernel.initialize")
@@ -27,7 +27,8 @@ def test_kernel_import_order_does_not_register_or_import_legacy_services():
             "import sys\n"
             "from alira.kernel.module import ModuleManager, module_manager\n"
             "from alira.kernel.lifespan.resource_cleaner import resource_cleaner\n"
-            "from alira.kernel.lifespan import auto_init, apixis_core\n"
+            "from alira.kernel.comlink import apixis_core\n"
+            "from alira.kernel.lifespan import auto_init\n"
             "from alira.shared.logger import logger\n"
             "assert auto_init._services == []\n"
             "from alira.kernel.initialize import initialize\n"

@@ -18,6 +18,7 @@ class AnthropicProvider(BaseProvider):
         super().__init__(
             "anthropic",
             ProviderProfile(
+                provider=Attribute(default_value="anthropic"),
                 protocol=None,
                 base_url=Config(default_value="https://api.anthropic.com"),
                 api_key=InputParameter(path="$.api_key", default_value=omit, supports=True),

@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from alira.kernel.module import BaseModule
+from alira.kernel.module.dependencies import ModuleLoadError
 
 deployment_module = importlib.import_module(
     "alira.kernel.module.dependencies.deployment"
@@ -54,8 +55,18 @@ def test_discovery_skips_legacy_and_defers_business_imports(
     assert manager.discover()["demo"] is manager.modules["demo"]
 
 
-def test_discovery_rejects_ambiguous_declarations(
-    tmp_path, monkeypatch, module_manager_factory
+@pytest.mark.parametrize(
+    "declaration, message",
+    [
+        ("a = BaseModule('a', '1')\nb = BaseModule('b', '1')\n", "exactly one"),
+        (
+            "module = BaseModule('other', '1')\n",
+            "Module name 'other' does not match directory 'demo'",
+        ),
+    ],
+)
+def test_discovery_rejects_invalid_declarations(
+    tmp_path, monkeypatch, module_manager_factory, declaration, message
 ):
     package = f"modules_{uuid4().hex}"
     folder = tmp_path / package / "demo"
@@ -63,12 +74,14 @@ def test_discovery_rejects_ambiguous_declarations(
     (folder.parent / "__init__.py").touch()
     (folder / "__init__.py").touch()
     (folder / "main.py").write_text(
-        "from alira.kernel.module import BaseModule\n"
-        "a = BaseModule('a', '1')\nb = BaseModule('b', '1')\n"
+        "from alira.kernel.module import BaseModule\n" + declaration
     )
     monkeypatch.syspath_prepend(str(tmp_path))
-    with pytest.raises(ValueError, match="exactly one"):
-        module_manager_factory(folder.parent, package=package).discover()
+    manager = module_manager_factory(folder.parent, package=package)
+    with pytest.raises(ModuleLoadError, match=message):
+        manager.discover()
+    assert not manager.modules
+    assert not manager.loaded
 
 
 @pytest.mark.parametrize(
@@ -110,8 +123,25 @@ def test_register_requires_completed_base_module_initialization(manager):
         def __init__(self):
             self.name = "incomplete"
 
-    with pytest.raises(TypeError, match="initialized BaseModule"):
+    with pytest.raises(ModuleLoadError, match="initialized BaseModule"):
         manager.register(Incomplete())
+    assert not manager.modules
+
+
+@pytest.mark.parametrize("declaration", [None, object()])
+def test_register_rejects_non_module_declarations(manager, declaration):
+    with pytest.raises(ModuleLoadError, match="initialized BaseModule"):
+        manager.register(declaration)
+    assert not manager.modules
+
+
+def test_register_rejects_duplicate_names_but_allows_the_same_instance(manager):
+    original = Service("demo", [])
+    manager.register(original)
+    manager.register(original)
+    with pytest.raises(ModuleLoadError, match="Duplicate module name: demo"):
+        manager.register(Service("demo", []))
+    assert dict(manager.modules) == {"demo": original}
 
 
 async def test_load_order_selected_closure_and_unload_protection(manager):
@@ -172,9 +202,20 @@ async def test_invalid_graph_fails_before_install(
     manager.register(Service("a", [], required_modules=dependencies))
     install = AsyncMock()
     monkeypatch.setattr(deployment_module, "run_uv", install)
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(ModuleLoadError, match=message):
         await manager.load()
     install.assert_not_awaited()
+    manager.modules["a"].startup.assert_not_awaited()
+    assert not manager.loaded
+
+
+async def test_load_rejects_unknown_module_before_startup(manager):
+    module = Service("known", [])
+    manager.register(module)
+    with pytest.raises(ModuleLoadError, match="Unknown module: missing"):
+        await manager.load("missing")
+    module.startup.assert_not_awaited()
+    assert not manager.loaded
 
 
 async def test_startup_failure_stops_partial_resources_and_blocks_dependents(manager):
@@ -297,8 +338,6 @@ async def test_unselected_module_dependencies_do_not_block_loading_or_shutdown(m
 
 
 async def test_startup_import_error_names_module_dependency_and_repair(manager):
-    from alira.kernel.module.dependencies import ModuleLoadError
-
     module = Service("plugin", [])
     module.startup.side_effect = ModuleNotFoundError(
         "No module named 'fastapi'", name="fastapi"

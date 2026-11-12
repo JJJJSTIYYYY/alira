@@ -18,6 +18,7 @@ class DeepseekProvider(BaseProvider):
         super().__init__(
             "deepseek",
             ProviderProfile(
+                provider=Attribute(default_value="deepseek"),
                 protocol=None,
                 base_url=Config(default_value="https://api.deepseek.com"),
                 api_key=InputParameter(path="$.api_key", default_value=omit, supports=True),

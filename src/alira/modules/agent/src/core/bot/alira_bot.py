@@ -4,22 +4,19 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
-from typing import Any, Literal, Self
+from typing import Any, Self
 
 from my_llm import (
     FunctionTool,
     InstructionMessage,
     Message,
     MessageStream,
-    ModelProfile,
-    ProviderProfile,
-    ResolvedProfile,
     TextContent,
 )
 
 from alira.modules.agent.src.core.bot.provider import BaseProvider
 from alira.modules.tool.src import BaseTool, ToolNode
-from alira.modules.agent.src.core.utils.context import RoleSchema, to_prompt
+from alira.modules.agent.src.runtime.model.context import RoleSchema, to_prompt
 from alira.modules.agent.src.shared.message import AliraAssistantMessage
 
 
@@ -211,8 +208,6 @@ class AliraBot:
             **parameters,
         )
 
-    def compare_profiles(
-        self, provider: ProviderProfile, model: ModelProfile
-    ) -> tuple[ResolvedProfile, int] | Literal[True]:
-        """Return True if the provider and model are identical, or a tuple of the resolved profile and a hash key."""
-        return self.llm.compare(provider, model)
+    def compare_profiles(self, provider: str, model: str) -> bool:
+        """Compare provider and model IDs using this bot's middleware protocol."""
+        return self.llm.compare(provider, model, "middleware")

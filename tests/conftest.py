@@ -2,19 +2,20 @@
 
 import asyncio
 import importlib
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from apixis.core.event import aget_event_loop, aget_event_pipe, factory
 from apixis.core.graph import NodeGraph
 
-from alira.shared.logger import logger
 from alira.kernel import auto_init
-from alira.kernel.lifespan import ApixisCore, AutoInit
+from alira.kernel.comlink import ApixisCore
+from alira.kernel.lifespan import AutoInit
 from alira.kernel.lifespan.resource_cleaner import ResourceCleaner
 from alira.kernel.module import ModuleManager
+from alira.shared.logger import logger
 
 
 @pytest.fixture(scope="session", autouse=True)

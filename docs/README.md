@@ -66,6 +66,29 @@ module = ExampleModule(
 模块间通过 Apixis 通信，业务数据的发送、请求和结果返回均通过事件完成。
 模块不通过直接调用其他模块的内部服务、访问其缓存或共享可变状态来交换数据。
 
+插件统一从 `alira.kernel.comlink` 导入通信能力，无需直接从 Apixis 导包：
+
+```python
+from alira.kernel.comlink import *
+
+
+async def request_example(payload):
+    async with apixis_core.wait_for_event("example.reply") as waiter:
+        await apixis_core.post_event(
+            event_type=EventType.TRANSIENT,
+            event_name="example.request",
+            context=payload,
+        )
+        return (await waiter.wait(time_out=30)).context
+```
+
+`comlink` 通过 `__all__` 重导出 Apixis 的公开事件、图和类型接口，`import *` 不导出内部实现。
+`apixis_core` 提供 `post_event`、`subscribe`、`unsubscribe`、`wait_for_event`、`await_for`、`get_handler` 和 `is_registered`。
+订阅与等待接口直接复用 Apixis，参数及返回值保持一致；发布事件只保证入队，等待处理结果应使用事件等待接口。
+请求/响应场景先进入 `wait_for_event` 再发送请求，使用可关联到本次请求的结果事件名；上例的固定名称只用于演示。
+模块在 `startup()` 中通过 `apixis_core.subscribe(..., group="模块名")` 注册处理器，
+在 `shutdown()` 中通过 `apixis_core.unsubscribe(group="模块名")` 清理；内核统一负责 Apixis 的 start/stop。
+
 各模块的 `src/shared/` 只定义可供其他模块复用的共享方法和公共类型，不承担模块间的数据传递。
 其他模块可以导入这些定义；消息、请求等类型的实例承载业务数据时，仍通过 Apixis 事件传递。
 共享方法不作为绕过事件通信、读取或修改所属模块运行时数据的入口。
@@ -231,9 +254,11 @@ cache:
 ```text
 kernel/
 ├── initialize.py             # 内核服务注册顺序和整体生命周期
+├── comlink/
+│   ├── __init__.py           # 插件通信统一导入入口，重导出 Apixis 公开 API
+│   └── apixis_core.py        # Apixis 生命周期和事件通信接口
 ├── lifespan/
 │   ├── auto_init.py          # 通用服务注册、启停和失败恢复
-│   ├── apixis_core.py        # Apixis 核心生命周期
 │   └── resource_cleaner.py   # 资源清理调度
 └── module/
     ├── base_module.py        # 模块声明和生命周期契约

@@ -20,12 +20,22 @@ from alira.kernel.module.sources import prepare_module_source
 
 @dataclass(frozen=True)
 class PackageSource:
+    """Immutable archive/repository source selection read from a package manifest.
+
+    Attributes:
+        source: Resolved local ZIP path or GitHub repository URL.
+        ref: Optional GitHub revision; None selects its default branch.
+    """
+
     source: str
     ref: str | None = None
 
 
 class _PackageLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects duplicate mapping keys instead of silently overwriting."""
+
     def construct_mapping(self, node, deep=False):
+        """Construct a safe mapping and reject a key count reduced by duplicate keys."""
         mapping = super().construct_mapping(node, deep=deep)
         if len(mapping) != len(node.value):
             raise yaml.constructor.ConstructorError(
@@ -35,7 +45,25 @@ class _PackageLoader(yaml.SafeLoader):
 
 
 def read_package(path: Path) -> list[PackageSource]:
-    """Resolve local archives relative to the manifest, never the current cwd."""
+    """Read a strict source manifest and resolve local paths relative to its location.
+
+    Args:
+        path: Manifest path; relative paths are based on the current working
+            directory and ~ is expanded. The filename need not literally be package.yml.
+
+    Returns:
+        Ordered PackageSource list from a nonempty modules list. Each entry must
+        contain a nonempty source string and may contain a nonempty ref string.
+        No other fields are accepted; local source paths are resolved relative
+        to the manifest's parent, not the command's working directory.
+
+    Raises:
+        DependencyError: File/encoding/YAML failure, duplicate keys or invalid schema.
+
+    Notes:
+        Reads YAML only. Archive existence, source safety, declared module names
+        and GitHub-only ref validation are checked during source preparation.
+    """
     path = path.expanduser().resolve()
     try:
         data = yaml.load(path.read_text(encoding="utf-8"), Loader=_PackageLoader)
@@ -95,11 +123,30 @@ def _source_tree(directory: Path) -> dict[Path, bytes | None]:
 async def install_package_sources(
     modules_dir: Path, sources: list[PackageSource]
 ) -> AsyncIterator[None]:
-    """Prepare the complete set before publishing; preserve matching retry inputs.
+    """Validate a source set and publish new modules in prerequisite order.
 
-    Each source rename is atomic. Ordinary publication failures undo new moves;
-    SIGKILL may leave a subset published, which the next invocation verifies and
-    reuses. No dependency records or interpreter packages are changed here.
+    Args:
+        modules_dir: Final module root and parent of same-filesystem staging.
+        sources: Parsed source selections; caller provides a nonempty validated list.
+
+    Yields:
+        None after all sources and the selected prerequisite graph have been
+        checked and new directories atomically moved. Existing identical content
+        is reused; __pycache__ is ignored during comparison.
+
+    Raises:
+        DependencyError: Invalid sources, duplicate names, differing existing
+            content, symlinks, missing prerequisites or cycles.
+        OSError: Source I/O or publication failed.
+        BaseExceptionGroup: Publication/resolution failure plus incomplete rollback.
+
+    Notes:
+        Ordinary publication errors and a body DependencyResolutionError withdraw
+        newly published sources. Other body failures retain sources so sync can
+        repair a solved deployment. Forced termination can leave a published
+        subset; a repeated manifest verifies matching content and fills gaps.
+        Does not modify dependency records or packages itself. Staging stays alive
+        until context exit; callers provide all dependency synchronization logic.
     """
     modules_dir.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix=".alira-package-", dir=modules_dir) as temporary:

@@ -14,7 +14,24 @@ EMPTY_LOCK = b'lock-version = "1.0"\ncreated-by = "alira"\nrequires-python = ">=
 
 
 async def run_uv(*arguments: str, cwd: Path, capture: bool = True) -> None:
-    """Wait for uv; visible mode inherits the terminal and streams progress."""
+    """Execute uv pip against the current interpreter and wait for completion.
+
+    Args:
+        *arguments: pip subcommand and arguments, passed as separate argv elements
+            without a shell. The --python target is appended as sys.executable.
+        cwd: Existing process working directory, not a uv project to modify.
+        capture: True discards stdout and captures stderr for failures. False
+            inherits terminal streams so foreground progress appears in real time.
+
+    Raises:
+        DependencyError: uv could not be launched or returned a nonzero status.
+        asyncio.CancelledError: Caller cancellation after killing and joining uv.
+
+    Notes:
+        Both modes wait for the subprocess; neither detaches it. Cancellation may
+        leave partial Python package changes, requiring source-driven sync. Import
+        caches are invalidated after successful completion. No shell is invoked.
+    """
     try:
         process = await asyncio.create_subprocess_exec(
             "uv",
@@ -50,6 +67,11 @@ async def run_uv(*arguments: str, cwd: Path, capture: bool = True) -> None:
 async def _compile(
     sources: list[Path], constraints: Path, directory: Path, cwd: Path
 ) -> ModuleRequirements:
+    """Compile requirement sources under pins into a new workspace's PEP 751 lock.
+
+    Returns a ModuleRequirements closure with canonical names and exact versions.
+    Non-versioned lock entries raise DependencyError; caller owns workspace lifetime.
+    """
     directory.mkdir()
     lockfile = directory / "pylock.toml"
     await run_uv(
@@ -81,7 +103,30 @@ async def resolve_requirements(
     directory: Path,
     cwd: Path,
 ) -> dict[str, ModuleRequirements]:
-    """Solve the selected management set together, then find each exact closure."""
+    """Jointly solve module requirements, then compute each exact pinned closure.
+
+    Args:
+        sources: Module names mapped to requirements files or None.
+        pins: Canonical distribution/version constraints, normally the kernel closure.
+        directory: Existing empty caller-owned workspace for generated locks and pins.
+        cwd: Working directory for the combined resolution. Per-file closure
+            resolution uses each requirements file's parent directory.
+
+    Returns:
+        Module-name-to-ModuleRequirements mapping. Modules without requirements get
+        empty packages and no individual lock. The complete combined pylock.toml
+        is written under directory/combined, even when no sources exist.
+
+    Raises:
+        DependencyError: uv solving failed, a lock lacks exact versions or individual
+            closure compilation failed. Individual closures share the joint pins.
+        OSError: Working directory or generated-file I/O failed.
+
+    Notes:
+        Does not install/update/remove packages or write the persistent ledger.
+        Generated lock paths are valid only while the caller retains directory.
+        Resolution may use the network and honors requirement include directives.
+    """
     plans = {
         name: ModuleRequirements(None, {})
         for name, path in sources.items()
