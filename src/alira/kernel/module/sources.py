@@ -99,22 +99,10 @@ async def install_source(
     """Validate and stage a module without executing any of its Python code."""
     registry.directory.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix="alira-install-") as temporary:
-        preparing = asyncio.create_task(
-            asyncio.to_thread(prepare_source, str(source), Path(temporary), ref)
+        spec = await prepare_module_source(
+            source, Path(temporary), registry.directory, ref
         )
-        try:
-            root = await asyncio.shield(preparing)
-        except asyncio.CancelledError:
-            await asyncio.gather(preparing, return_exceptions=True)
-            raise
-        if not (root / "src").is_dir():
-            raise DependencyError("Module source must contain main.py and src/")
-        fallback = Path(urlsplit(source).path).stem
-        if root.name != "contents" and root.name.isidentifier():
-            fallback = root.name
-        spec = ModuleSpec.read(
-            root, default_name=fallback, modules_dir=registry.directory
-        )
+        root = spec.directory
         destination = module_directory(registry.directory, spec.name)
         if destination.exists() or destination.is_symlink():
             raise DependencyError(
@@ -137,3 +125,23 @@ async def install_source(
                         [failure, exc],
                     ) from None
                 raise
+
+
+async def prepare_module_source(
+    source: str, directory: Path, modules_dir: Path, ref: str | None = None
+) -> ModuleSpec:
+    """Download, extract and inspect an entry without executing module code."""
+    preparing = asyncio.create_task(
+        asyncio.to_thread(prepare_source, str(source), directory, ref)
+    )
+    try:
+        root = await asyncio.shield(preparing)
+    except asyncio.CancelledError:
+        await asyncio.gather(preparing, return_exceptions=True)
+        raise
+    if not (root / "src").is_dir():
+        raise DependencyError("Module source must contain main.py and src/")
+    fallback = Path(urlsplit(source).path).stem
+    if root.name != "contents" and root.name.isidentifier():
+        fallback = root.name
+    return ModuleSpec.read(root, default_name=fallback, modules_dir=modules_dir)

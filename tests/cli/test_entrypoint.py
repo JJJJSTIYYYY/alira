@@ -163,6 +163,15 @@ async def test_cli_module_commands_finish_without_starting_modules(
     assert calls == []
 
 
+async def test_cli_package_install_uses_batch_operation(application, monkeypatch):
+    manager, calls, _ = application
+    operation = AsyncMock()
+    monkeypatch.setattr(manager, "install_package", operation)
+    await cli.run(["install", "-r", "package.yml"])
+    operation.assert_awaited_once_with("package.yml")
+    assert calls == []
+
+
 @pytest.mark.parametrize(
     "arguments",
     [
@@ -172,6 +181,9 @@ async def test_cli_module_commands_finish_without_starting_modules(
         ["sync", "--unknown"],
         ["list", "child"],
         ["install", "one.zip", "two.zip"],
+        ["install"],
+        ["install", "one.zip", "-r", "package.yml"],
+        ["install", "-r", "package.yml", "--ref", "v1"],
     ],
 )
 async def test_cli_rejects_invalid_deployment_commands_without_starting_kernel(

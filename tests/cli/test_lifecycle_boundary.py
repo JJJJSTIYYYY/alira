@@ -21,6 +21,7 @@ from alira.kernel.module.dependencies.uv import EMPTY_LOCK
         ["add", "demo", "--no-install"],
         ["remove", "demo"],
         ["install", "plugin.zip"],
+        ["install", "-r", "package.yml"],
         ["uninstall", "demo"],
         *[
             [name, "--help"]
@@ -44,6 +45,7 @@ def test_management_never_imports_entries_or_enters_kernel_lifecycle(
             "raise AssertionError('installed entry executed')\nfrom alira.kernel.module import BaseModule\nmodule=BaseModule('plugin','1')\n",
         )
         archive.writestr("src/__init__.py", "")
+    (tmp_path / "package.yml").write_text("modules:\n  - source: plugin.zip\n")
     state = tmp_path / "state"
     ledger = DependencyLedger(state)
     ledger.write(

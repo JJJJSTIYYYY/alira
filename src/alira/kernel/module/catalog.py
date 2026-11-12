@@ -2,6 +2,7 @@
 
 import ast
 import keyword
+from collections.abc import Mapping
 from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
@@ -221,16 +222,24 @@ class ModuleCatalog:
             else []
         )
 
-    def select(self, names: tuple[str, ...] | list[str]) -> dict[str, ModuleSpec]:
+    def select(
+        self,
+        names: tuple[str, ...] | list[str],
+        *,
+        prepared: Mapping[str, ModuleSpec] | None = None,
+    ) -> dict[str, ModuleSpec]:
         selected = {}
+        prepared = prepared or {}
 
         def visit(name):
             if name in selected:
                 return
-            directory = module_directory(self.directory, name)
-            if not (directory / "main.py").is_file():
-                raise DependencyError(f"Module not found: {name}")
-            spec = ModuleSpec.read(directory, name=name)
+            spec = prepared.get(name)
+            if spec is None:
+                directory = module_directory(self.directory, name)
+                if not (directory / "main.py").is_file():
+                    raise DependencyError(f"Module not found: {name}")
+                spec = ModuleSpec.read(directory, name=name)
             selected[name] = spec
             for dependency in spec.required_modules:
                 visit(dependency)
@@ -238,14 +247,9 @@ class ModuleCatalog:
         for name in names:
             visit(name)
         try:
-            tuple(
-                TopologicalSorter(
-                    {
-                        name: set(spec.required_modules)
-                        for name, spec in selected.items()
-                    }
-                ).static_order()
-            )
+            order = TopologicalSorter(
+                {name: set(spec.required_modules) for name, spec in selected.items()}
+            ).static_order()
+            return {name: selected[name] for name in order}
         except CycleError as exc:
             raise DependencyError(f"Module dependency cycle: {exc.args[1]}") from exc
-        return selected

@@ -274,3 +274,231 @@ def test_download_error_is_actionable(tmp_path, monkeypatch):
     monkeypatch.setattr(sources, "urlopen", fail)
     with pytest.raises(DependencyError, match="Cannot download module source"):
         prepare_source("https://github.com/owner/repo", tmp_path)
+
+
+def package_file(tmp_path, archives):
+    import yaml
+
+    path = tmp_path / "package.yml"
+    path.write_text(
+        yaml.safe_dump({"modules": [{"source": str(path)} for path in archives]})
+    )
+    return path
+
+
+async def test_package_installs_dependent_sources_together_then_syncs_once(
+    source_manager, tmp_path, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    # Order is deliberately reversed; no entry may execute during installation.
+    child = module_zip(
+        tmp_path / "child.zip",
+        entry="raise AssertionError('entry executed')\nmodule=BaseModule('child','1',required_modules=['base'])\n",
+    )
+    base = module_zip(tmp_path / "base.zip", name="base")
+    manifest = package_file(tmp_path, [child, base])
+    ledger = source_manager._dependencies.ledger
+    ledger.path.parent.mkdir()
+    ledger.path.write_text("broken json")
+    sync = AsyncMock(wraps=source_manager.sync)
+    monkeypatch.setattr(source_manager, "sync", sync)
+    await source_manager.install_package(manifest)
+    sync.assert_awaited_once_with(background=False)
+    assert source_manager.list() == ["base", "child"]
+    assert source_manager.deployments == {"base", "child"}
+    assert not source_manager.modules
+    assert not list(source_manager.modules_dir.glob(".alira-package-*"))
+
+
+async def test_package_retry_reuses_identical_sources_without_overwriting(
+    source_manager, tmp_path
+):
+    archive = module_zip(tmp_path / "plugin.zip")
+    manifest = package_file(tmp_path, [archive])
+    await source_manager.install_package(manifest)
+    target = source_manager.modules_dir / "plugin/main.py"
+    timestamp = target.stat().st_mtime_ns
+    bytecode = target.parent / "__pycache__/main.cpython-312.pyc"
+    bytecode.parent.mkdir()
+    bytecode.write_bytes(b"compiled cache")
+    await source_manager.install_package(manifest)
+    assert target.stat().st_mtime_ns == timestamp
+    assert bytecode.read_bytes() == b"compiled cache"
+    target.write_text("user changes")
+    records = source_manager._dependencies.ledger.snapshot()
+    with pytest.raises(DependencyError, match="different content"):
+        await source_manager.install_package(manifest)
+    assert target.read_text() == "user changes"
+    assert source_manager._dependencies.ledger.snapshot() == records
+
+
+@pytest.mark.parametrize(
+    "failure", ["missing", "duplicate", "cycle", "unsafe", "structure"]
+)
+async def test_package_validates_entire_source_set_before_any_publication(
+    source_manager, tmp_path, failure
+):
+    first = module_zip(tmp_path / "first.zip", name="first")
+    if failure == "unsafe":
+        second = tmp_path / "second.zip"
+        with ZipFile(second, "w") as archive:
+            archive.writestr("../escaped", "blocked")
+    elif failure == "structure":
+        second = tmp_path / "second.zip"
+        with ZipFile(second, "w") as archive:
+            archive.writestr("main.py", "")
+    else:
+        second = module_zip(
+            tmp_path / "second.zip",
+            entry=(
+                "module=BaseModule('second','1',required_modules=['missing'])\n"
+                if failure == "missing"
+                else "module=BaseModule('first','1')\n"
+                if failure == "duplicate"
+                else "module=BaseModule('second','1',required_modules=['second'])\n"
+            ),
+        )
+    with pytest.raises(DependencyError):
+        await source_manager.install_package(package_file(tmp_path, [first, second]))
+    assert source_manager.list() == []
+    assert not source_manager._dependencies.ledger.path.exists()
+    assert not list(source_manager.modules_dir.glob(".alira-package-*"))
+    assert not (source_manager.modules_dir / "escaped").exists()
+
+
+async def test_package_publication_failure_restores_preexisting_sources(
+    source_manager, tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    first = module_zip(tmp_path / "first.zip", name="first")
+    second = module_zip(tmp_path / "second.zip", name="second")
+    original = Path.rename
+
+    def fail_second(path, target):
+        if target == source_manager.modules_dir / "second":
+            raise OSError("source move failed")
+        return original(path, target)
+
+    monkeypatch.setattr(Path, "rename", fail_second)
+    with pytest.raises(OSError, match="source move failed"):
+        await source_manager.install_package(package_file(tmp_path, [first, second]))
+    assert source_manager.list() == []
+    assert not source_manager._dependencies.ledger.path.exists()
+
+
+async def test_package_cancelled_preparation_publishes_nothing(
+    source_manager, tmp_path, monkeypatch
+):
+    first = module_zip(tmp_path / "first.zip", name="first")
+    second = module_zip(tmp_path / "second.zip", name="second")
+    manifest = package_file(tmp_path, [first, second])
+    entered, release = Event(), Event()
+    original = sources.prepare_source
+
+    def pause_second(source, directory, ref):
+        if source == str(second):
+            entered.set()
+            assert release.wait(2)
+        return original(source, directory, ref)
+
+    monkeypatch.setattr(sources, "prepare_source", pause_second)
+    task = asyncio.create_task(source_manager.install_package(manifest))
+    assert await asyncio.to_thread(entered.wait, 1)
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert source_manager.list() == []
+    assert not list(source_manager.modules_dir.glob(".alira-package-*"))
+    assert not source_manager._dependencies.ledger.path.exists()
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_package_dependency_failure_keeps_sources_for_sync_repair(
+    source_manager, tmp_path, monkeypatch, cancelled
+):
+    from unittest.mock import AsyncMock
+
+    manifest = package_file(tmp_path, [module_zip(tmp_path / "plugin.zip")])
+    original = source_manager._dependencies.rebuild
+    failure = (
+        asyncio.CancelledError() if cancelled else DependencyError("install failed")
+    )
+    monkeypatch.setattr(
+        source_manager._dependencies, "rebuild", AsyncMock(side_effect=failure)
+    )
+    with pytest.raises(type(failure)):
+        await source_manager.install_package(manifest)
+    assert source_manager.list() == ["plugin"]
+    monkeypatch.setattr(source_manager._dependencies, "rebuild", original)
+    await source_manager.sync()
+    assert source_manager.deployments == {"plugin"}
+
+
+async def test_package_resolution_failure_withdraws_only_new_sources(
+    source_manager, tmp_path, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    from alira.kernel.module.dependencies import DependencyResolutionError
+
+    base = module_zip(tmp_path / "base.zip", name="base")
+    await source_manager.install(str(base))
+    before = source_manager._dependencies.ledger.snapshot()
+    new = module_zip(tmp_path / "new.zip", name="new")
+    rebuild = source_manager._dependencies.rebuild
+    monkeypatch.setattr(
+        source_manager._dependencies,
+        "rebuild",
+        AsyncMock(side_effect=DependencyResolutionError("conflicting requirements")),
+    )
+    with pytest.raises(DependencyResolutionError, match="conflicting"):
+        await source_manager.install_package(package_file(tmp_path, [base, new]))
+    assert source_manager.list() == ["base"]
+    assert source_manager._dependencies.ledger.snapshot() == before
+    monkeypatch.setattr(source_manager._dependencies, "rebuild", rebuild)
+    await source_manager.sync()
+    assert source_manager.deployments == {"base"}
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "",
+        "[bad",
+        "modules: []",
+        "modules: {}",
+        "modules: [null]",
+        "modules: [one.zip]",
+        "modules: [{source: 1}]",
+        "modules: [{source: ''}]",
+        "modules: [{source: one.zip, ref: 1}]",
+        "modules: [{source: one.zip, typo: v1}]",
+        "modules: [{source: one.zip}]\nother: true",
+        "modules: [{source: one.zip, source: two.zip}]",
+        "modules: [{source: one.zip}]\nmodules: [{source: two.zip}]",
+        "!!python/object/apply:os.system ['exit 1']",
+    ],
+)
+def test_package_rejects_invalid_manifest(tmp_path, content):
+    from alira.kernel.module.package import read_package
+
+    path = tmp_path / "package.yml"
+    path.write_text(content)
+    with pytest.raises(DependencyError, match="package"):
+        read_package(path)
+
+
+def test_package_local_paths_are_relative_to_manifest_and_refs_are_preserved(tmp_path):
+    from alira.kernel.module.package import PackageSource, read_package
+
+    path = tmp_path / "package.yml"
+    path.write_text(
+        "modules:\n  - source: archives/plugin.zip\n  - source: https://github.com/owner/repo\n    ref: v1\n"
+    )
+    assert read_package(path) == [
+        PackageSource(str(tmp_path / "archives/plugin.zip")),
+        PackageSource("https://github.com/owner/repo", "v1"),
+    ]

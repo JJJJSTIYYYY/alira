@@ -55,9 +55,22 @@ PyPI 发行包名为 `alira-harness`，Python 导入名和命令均为 `alira`�
 | `uv run alira remove web` | 移除依赖管理记录并清理独占依赖，保留源码 |
 | `uv run alira install ./example.zip` | 安装模块源码并自动执行 add |
 | `uv run alira install https://github.com/owner/repo --ref v1.0.0` | 从 GitHub 安装模块及依赖 |
+| `uv run alira install -r package.yml` | 批量安装清单中的模块，再一次性执行全量 sync |
 | `uv run alira uninstall example` | 清理依赖并将模块源码送入系统回收站 |
 | `uv run alira --modules web` | 启动 web，自动加载前置模块 |
 | `uv run alira --modules web --install-missing` | 显式先部署选定模块依赖，再启动 web |
+
+批量安装清单示例（本地 ZIP 路径相对于 `package.yml`）：
+
+```yaml
+modules:
+  - source: ./packages/example.zip
+  - source: https://github.com/owner/another-module
+    ref: v1.0.0
+```
+
+命令会先检查全部源码和前置模块，再安装源码、统一同步依赖。解析失败会撤回新增源码；安装中断后运行 `uv run alira sync` 补齐。
+源码安装被强制中断时，重跑同一清单即可继续，内容不同的已有模块会报错并保留。
 
 ## 文档
 

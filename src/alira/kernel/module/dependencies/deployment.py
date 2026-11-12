@@ -21,6 +21,7 @@ from alira.kernel.module.dependencies.requirements import requirements_fingerpri
 from alira.kernel.module.dependencies.types import (
     DependencyError,
     DependencyInfo,
+    DependencyResolutionError,
     sync_hint,
 )
 from alira.kernel.module.dependencies.uv import EMPTY_LOCK, resolve_requirements, run_uv
@@ -197,15 +198,16 @@ class ModuleDependencies:
         """Resolve one complete desired management set without reading old locks."""
         protected = kernel_packages()
         sources = {name: spec.requirements for name, spec in specifications.items()}
-        fingerprints = {
-            name: requirements_fingerprint(path) for name, path in sources.items()
-        }
         with TemporaryDirectory(prefix="alira-resolve-") as temporary:
             directory = Path(temporary)
             try:
+                fingerprints = {
+                    name: requirements_fingerprint(path)
+                    for name, path in sources.items()
+                }
                 plans = await resolve_requirements(sources, protected, directory, cwd)
             except Exception as exc:
-                raise DependencyError(
+                raise DependencyResolutionError(
                     f"dependency resolution failed: {exc}", hint=sync_hint()
                 ) from exc
             lock = (directory / "combined" / "pylock.toml").read_bytes()

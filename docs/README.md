@@ -100,6 +100,7 @@ utils 不依赖其他 Alira 层；shared 不依赖 kernel 或业务模块；kern
 | `uv run alira remove web` | 从记录移除 web，卸载其他模块和内核均不再需要的依赖；保留源码 |
 | `uv run alira install ./example.zip` | 检查、安装源码，再复用 add 安装依赖 |
 | `uv run alira install https://github.com/owner/repo --ref v1.0.0` | 从 GitHub 指定分支、标签或提交安装；省略 ref 使用默认分支 |
+| `uv run alira install -r package.yml` | 先准备整份清单的源码，再执行一次全量 sync |
 | `uv run alira uninstall example` | 复用 remove 清理依赖，将源码移入系统回收站 |
 
 `add/remove/uninstall` 支持多个名称。名称不存在、前置模块缺失、依赖冲突或移除被依赖模块时明确报错。
@@ -121,13 +122,44 @@ ZIP 根目录或一层包装目录内至少包含 `main.py` 和 `src/`。
 模块名称、`required_modules` 和 `requirements_txt` 使用字面量或模块顶层常量（可带类型注解）；不执行函数来推断元数据。
 声明名必须是合法 Python 包标识符，并与最终目录名一致；没有名称声明时使用 ZIP/仓库名。
 `__init__.py` 缺失时补空文件，不执行入口或任何模块源码。模块目录为当前 Alira 包的 `modules/<name>/`，
-源码开发环境即 `src/alira/modules/<name>/`；已有目录一律报错，不覆盖、不静默跳过。
+源码开发环境即 `src/alira/modules/<name>/`；单模块 install 遇到已有目录一律报错，不覆盖、不静默跳过。
 验证后通过目标文件系统中的暂存目录原子移动到模块目录，然后调用 add。
 
-install/uninstall 失败时尽量恢复源码、依赖记录和此前 Python 包版本；优先使用原锁文件中的下载地址与哈希恢复依赖。
+单模块 install/uninstall 失败时尽量恢复源码、依赖记录和此前 Python 包版本；优先使用原锁文件中的下载地址与哈希恢复依赖。
 即使旧包恢复失败，仍继续清理新装包并恢复记录，同时报告原始错误和恢复错误，提示执行 sync。
 uninstall 使用 Send2Trash 调用真正的操作系统回收站；回收站不可用时明确失败并尝试回滚，绝不改为永久删除源码。
 源码操作不会删除或移动其他模块；依赖管理命令不会删除源码。
+
+### 从 package.yml 批量安装
+
+```bash
+uv run alira install -r package.yml
+# 等同于 install --package package.yml
+```
+
+```yaml
+modules:
+  - source: ./packages/example.zip
+  - source: https://github.com/owner/another-module
+    ref: v1.0.0
+```
+
+清单必须包含非空的 `modules` 列表，每项包含 `source` 和可选的 GitHub `ref`，不接受其他字段或重复键。
+本地路径相对于清单所在目录，支持 `~`；`ref` 可指定分支、标签或提交，建议使用固定提交以便重复安装。
+模块名由源码静态声明决定，不能重复。清单内的前置模块无需按依赖顺序排列；外部前置模块必须已经存在。
+全部归档先下载、解压、校验结构、名称、路径和模块依赖图，随后按前置模块优先的顺序逐个原子迁移源码；不导入或执行模块入口。
+源码准备失败不会安装任何新模块。普通迁移错误会尝试撤回本次新迁移的目录，已有源码不受影响。
+
+整批源码到位后复用 `sync`，全量解析所有实际模块，重新写入记录、锁文件并同步环境，保护内核依赖。
+这具有完整 sync 的语义：源码仍在但曾被 remove 的模块重新纳入管理，不属于内核或模块的 Python 包会被清理。
+依赖解析失败时撤回本次新增源码，保留此前的模块、环境和记录，避免新引入的冲突阻塞后续 sync。
+解析成功后，安装失败或 Ctrl+C 中断时保留已经校验的源码；恢复网络后执行 `uv run alira sync` 即可补齐。
+损坏或缺失的旧记录不会阻止批量安装后的全量同步，因此这一步无需回滚 JSON/lock 或 Python 包。
+
+若 SIGKILL 或掉电发生在源码迁移过程中，可能仅有部分模块到位；这些模块的前置源码已先迁入，可通过 sync 修复当前集合，
+重新执行同一条 `install -r` 则会补齐清单中的剩余模块再同步。
+重复执行时会逐文件核对已有模块内容（忽略生成的 `__pycache__`），完全相同则复用，不覆盖；任何内容差异或符号链接均报错。
+这一重试规则仅适用于清单安装，单模块 install 的同名冲突行为不变。强制中断遗留的隐藏暂存目录不参与模块发现或依赖扫描。
 
 ## Python 依赖与恢复
 
@@ -210,6 +242,7 @@ kernel/
     ├── registry.py           # 声明发现、登记、路径和依赖图
     ├── runtime.py            # 模块并行启动、退出和失败清理
     ├── sources.py            # ZIP/GitHub 源码安装与失败回滚
+    ├── package.py            # 清单校验、整批源码安装及可重复执行
     └── dependencies/
         ├── types.py          # 依赖信息、解析结果和错误契约
         ├── deployment.py     # 依赖归属、校验、同步和释放
@@ -227,6 +260,7 @@ from alira.kernel.module import module_manager
 
 manager = module_manager
 await manager.install("./example.zip")  # 安装源码并管理依赖
+await manager.install_package("package.yml")  # 整批安装源码，再执行全量同步
 await manager.add("example")        # 管理选定模块及前置模块依赖
 await manager.sync()                # 从源码全量重建并同步环境
 await manager.start()               # 此时才导入并登记运行时模块

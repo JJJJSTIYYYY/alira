@@ -30,7 +30,7 @@ def build_parser() -> ArgumentParser:
         ),
         ("add", "Add existing modules to dependency management", add),
         ("remove", "Release dependencies, preserving module sources", remove),
-        ("install", "Install a module from a local ZIP or GitHub", install),
+        ("install", "Install a module or a package.yml source set", install),
         (
             "uninstall",
             "Remove dependencies and send module sources to the system trash",

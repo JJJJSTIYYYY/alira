@@ -11,7 +11,13 @@ from typing import ClassVar, Self
 from alira.kernel.module.base_module import BaseModule
 from alira.kernel.module.catalog import ModuleCatalog, module_directory
 from alira.kernel.module.dependencies.deployment import ModuleDependencies
-from alira.kernel.module.dependencies.types import DependencyError, DependencyInfo
+from alira.kernel.module.dependencies.types import (
+    DependencyError,
+    DependencyInfo,
+    DependencyResolutionError,
+    sync_hint,
+)
+from alira.kernel.module.package import install_package_sources, read_package
 from alira.kernel.module.registry import ModuleRegistry
 from alira.kernel.module.runtime import ModuleRuntime
 from alira.kernel.module.sources import install_source
@@ -181,6 +187,29 @@ class ModuleManager:
                             [failure, *errors],
                         ) from None
                     raise
+
+    async def install_package(
+        self, path: Path | str, *, background: bool = False
+    ) -> None:
+        """Publish a complete source set, then sync once using source-driven repair.
+
+        Resolution failures withdraw new sources; installation failures leave
+        them for sync. Repeating the manifest completes interrupted publication.
+        """
+        sources = read_package(Path(path))
+        self._check_idle()
+        async with install_package_sources(self.modules_dir, sources):
+            try:
+                await self.sync(background=background)
+            except DependencyResolutionError:
+                raise
+            except (DependencyError, OSError) as exc:
+                raise DependencyError(
+                    f"Package sources are installed; dependency synchronization failed: {exc}",
+                    hint=None
+                    if isinstance(exc, DependencyError) and exc.hint
+                    else sync_hint(),
+                ) from exc
 
     async def load(self, *names: str, install_missing: bool = False) -> None:
         """Verify dependencies offline, then start services in dependency order."""

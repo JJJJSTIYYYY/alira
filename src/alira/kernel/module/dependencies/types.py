@@ -27,6 +27,10 @@ class ModuleLoadError(DependencyError):
     """A module's deferred business imports failed during startup."""
 
 
+class DependencyResolutionError(DependencyError):
+    """The desired source requirements cannot be resolved; environment unchanged."""
+
+
 @dataclass(frozen=True)
 class DependencyInfo:
     name: str
