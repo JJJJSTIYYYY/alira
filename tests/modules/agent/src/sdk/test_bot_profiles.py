@@ -72,7 +72,7 @@ async def test_disabled_reasoning_is_ignored_and_request_reaches_transport(monke
             headers={"content-type": "text/event-stream"},
         )
 
-    clients = install_sdk(monkeypatch, "openai_responses", handler)
+    install_sdk(monkeypatch, "openai_responses", handler)
     provider = BaseProvider.get("deepseek")
     provider.profile.add_models(
         replace(
@@ -82,9 +82,10 @@ async def test_disabled_reasoning_is_ignored_and_request_reaches_transport(monke
             ),
         )
     )
-    async with provider.create_llm("deepseek-flash", api_key="test") as llm:
-        await llm.generate(
-            messages=[UserMessage(role="user", content=[TextContent("hi")])],
-            reasoning=True,
-        )
-    assert requests and all(client.is_closed for client in clients)
+    llm = provider.create_llm("deepseek-flash")
+    await llm.generate(
+        messages=[UserMessage(role="user", content=[TextContent("hi")])],
+        reasoning=True,
+        api_key="test",
+    )
+    assert requests

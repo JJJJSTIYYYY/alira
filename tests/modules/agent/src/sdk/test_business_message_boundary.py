@@ -71,7 +71,7 @@ async def test_middleware_sdk_requests_exclude_business_fields(
         AliraUserMessage(content=[TextContent("continue")], **business_fields),
     ]
     before = deepcopy(messages)
-    async with MyLLM(
+    llm = MyLLM(
         provider=ProviderProfile(
             protocol=Config(default_value=protocol),
             api_key=InputParameter(path="$.api_key", default_value="test"),
@@ -83,18 +83,18 @@ async def test_middleware_sdk_requests_exclude_business_fields(
         ),
         stdio_protocol="middleware",
         enable_message_cache=cache,
-    ) as llm:
-        # Repeat a batch to exercise warm-cache preparation as well.
-        for _ in range(2):
-            result = await llm.generate(
-                messages=messages, tools=[weather.get_schema()], stream=streaming
-            )
-            if streaming:
-                async with result:
-                    async for _ in result:
-                        pass
-                result = result.result
-            assert result.content[0].text == "hello"
+    )
+    # Repeat a batch to exercise warm-cache preparation as well.
+    for _ in range(2):
+        result = await llm.generate(
+            messages=messages, tools=[weather.get_schema()], stream=streaming
+        )
+        if streaming:
+            async with result:
+                async for _ in result:
+                    pass
+            result = result.result
+        assert result.content[0].text == "hello"
 
     assert messages == before
     assert len(requests) == 2

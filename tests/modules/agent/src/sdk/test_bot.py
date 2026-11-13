@@ -108,6 +108,7 @@ async def test_invoke_orders_context_and_delegates_standard_messages_and_options
             )
         ],
         [AliraSystemMessage(content=[TextContent("global")])],
+        api_key="invoke-test-key",
         reasoning=True,
         max_tokens=40,
     )
@@ -116,6 +117,7 @@ async def test_invoke_orders_context_and_delegates_standard_messages_and_options
     assert "Your name: Alice" in sent["messages"][1].content[0].text
     assert sent["messages"][2].content[0].text == "weather"
     assert sent["tools"] == [weather.get_schema()]
+    assert sent["api_key"] == "invoke-test-key"
     assert sent["reasoning"] is True and sent["max_tokens"] == 40
     assert isinstance(result, AliraAssistantMessage)
     assert result.content[1] == call
@@ -123,20 +125,27 @@ async def test_invoke_orders_context_and_delegates_standard_messages_and_options
     assert result.extensions == {}
     await bot.invoke([UserMessage(role="user", content=[TextContent("hi")])], tools=[])
     assert generate.await_args.kwargs["tools"] == []
+    assert generate.await_args.kwargs["api_key"] is None
+    assert bot.llm.provider.api_key.default_value == "test"
     assert bot.tool_schemas
 
 
 @pytest.mark.asyncio
-async def test_stream_returns_library_object_without_wrapping(monkeypatch):
+@pytest.mark.parametrize("api_key", [None, "stream-test-key"])
+async def test_stream_returns_library_object_without_wrapping(monkeypatch, api_key):
     bot = make_bot()
     stream = object()
     generate = AsyncMock(return_value=stream)
     monkeypatch.setattr(bot.llm, "generate", generate)
     assert (
-        await bot.stream([UserMessage(role="user", content=[TextContent("hi")])])
+        await bot.stream(
+            [UserMessage(role="user", content=[TextContent("hi")])], api_key=api_key
+        )
         is stream
     )
     assert generate.await_args.kwargs["stream"] is True
+    assert generate.await_args.kwargs["api_key"] == api_key
+    assert bot.llm.provider.api_key.default_value == "test"
 
 
 def test_input_and_role_validation():

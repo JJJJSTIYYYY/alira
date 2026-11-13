@@ -135,7 +135,7 @@ async def test_native_reasoning_tool_roundtrip(
             200, text=response, headers={"content-type": "text/event-stream"}
         )
 
-    clients = install_sdk(monkeypatch, "openai_responses", handler)
+    install_sdk(monkeypatch, "openai_responses", handler)
     preset = BaseProvider.get(provider)
     profile = replace(
         preset.get_profile(),
@@ -149,57 +149,56 @@ async def test_native_reasoning_tool_roundtrip(
         }
     ]
     initial = {"role": "user", "content": "Check the weather in Tokyo."}
-    async with MyLLM(
+    llm = MyLLM(
         provider=profile,
         model=preset.get_model(model),
         stdio_protocol="openai_responses",
-    ) as llm:
-        if streaming:
-            stream = await llm.generate(messages=[initial], tools=tools, stream=True)
-            async with stream:
-                events = [event async for event in stream]
-            result = stream.result
-            visible = "".join(
-                event["delta"]
-                for event in events
-                if event["type"]
-                in {
-                    "response.reasoning_text.delta",
-                    "response.reasoning_summary_text.delta",
-                }
-            )
-            assert visible == ("" if kind == "encrypted" else text)
-        else:
-            result = await llm.generate(messages=[initial], tools=tools)
-        assert (
-            next(entry for entry in result if entry["type"] == "reasoning") == original
+    )
+    if streaming:
+        stream = await llm.generate(messages=[initial], tools=tools, stream=True)
+        async with stream:
+            events = [event async for event in stream]
+        result = stream.result
+        visible = "".join(
+            event["delta"]
+            for event in events
+            if event["type"]
+            in {
+                "response.reasoning_text.delta",
+                "response.reasoning_summary_text.delta",
+            }
         )
-        call = next(entry for entry in result if entry["type"] == "function_call")
-        assert call["call_id"] == "call_weather"
-        history = [
-            initial,
-            *result,
-            {
-                "type": "function_call_output",
-                "call_id": "call_weather",
-                "output": "sunny",
-            },
-        ]
-        saved_history = deepcopy(history)
-        await llm.generate(messages=history, tools=tools)
-        replay = next(
-            entry for entry in requests[1]["input"] if entry["type"] == "reasoning"
-        )
-        assert replay == original
-        output = next(
-            entry
-            for entry in requests[1]["input"]
-            if entry["type"] == "function_call_output"
-        )
-        assert output["call_id"] == call["call_id"]
-        assert history == saved_history
+        assert visible == ("" if kind == "encrypted" else text)
+    else:
+        result = await llm.generate(messages=[initial], tools=tools)
+    assert (
+        next(entry for entry in result if entry["type"] == "reasoning") == original
+    )
+    call = next(entry for entry in result if entry["type"] == "function_call")
+    assert call["call_id"] == "call_weather"
+    history = [
+        initial,
+        *result,
+        {
+            "type": "function_call_output",
+            "call_id": "call_weather",
+            "output": "sunny",
+        },
+    ]
+    saved_history = deepcopy(history)
+    await llm.generate(messages=history, tools=tools)
+    replay = next(
+        entry for entry in requests[1]["input"] if entry["type"] == "reasoning"
+    )
+    assert replay == original
+    output = next(
+        entry
+        for entry in requests[1]["input"]
+        if entry["type"] == "function_call_output"
+    )
+    assert output["call_id"] == call["call_id"]
+    assert history == saved_history
     assert item == original
-    assert clients and all(client.is_closed for client in clients)
 
 
 @pytest.mark.parametrize("provider,model", RAW_PRESETS)
@@ -222,26 +221,25 @@ async def test_native_reasoning_feedback_without_tools_follows_profile(
             headers={"content-type": "text/event-stream"},
         )
 
-    clients = install_sdk(monkeypatch, "openai_responses", handler)
+    install_sdk(monkeypatch, "openai_responses", handler)
     preset = BaseProvider.get(provider)
-    async with MyLLM(
+    llm = MyLLM(
         provider=replace(
             preset.get_profile(),
             api_key=InputParameter(path="$.api_key", default_value="test"),
         ),
         model=preset.get_model(model),
         stdio_protocol="openai_responses",
-    ) as llm:
-        initial = {"role": "user", "content": "hi"}
-        result = await llm.generate(messages=[initial])
-        assert next(entry for entry in result if entry["type"] == "reasoning") == item
-        await llm.generate(
-            messages=[
-                initial,
-                *result,
-                {"role": "user", "content": "continue"},
-            ]
-        )
+    )
+    initial = {"role": "user", "content": "hi"}
+    result = await llm.generate(messages=[initial])
+    assert next(entry for entry in result if entry["type"] == "reasoning") == item
+    await llm.generate(
+        messages=[
+            initial,
+            *result,
+            {"role": "user", "content": "continue"},
+        ]
+    )
     replay = [entry for entry in requests[1]["input"] if entry["type"] == "reasoning"]
     assert replay == ([item] if provider == "deepseek" else [])
-    assert all(client.is_closed for client in clients)

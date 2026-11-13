@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import replace
 
 from my_llm import (
     ModelProfile,
     MyLLM,
     ProviderProfile,
-    resolve_profiles,
 )
 from my_llm.codec.openai.chat.prebuilt import chat_semantic_loss_hook
 
@@ -90,17 +88,10 @@ class BaseProvider:
             f"unknown model {model!r} for {self.name!r}; choose from {available}"
         )
 
-    def create_llm(self, model: str, *, api_key: str | None = None) -> MyLLM:
+    def create_llm(self, model: str) -> MyLLM:
+        """Create the model runtime; pass per-call credentials to generate()."""
         selected = self.get_model(model)
         profile = self.get_profile()
-        if api_key is not None:
-            binding = resolve_profiles(profile, selected).parameter(
-                "api_key", source="input"
-            )
-            if binding is not None:
-                profile = replace(
-                    profile, api_key=replace(binding, default_value=api_key)
-                )
         llm = MyLLM(
             provider=profile,
             model=selected,

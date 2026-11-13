@@ -62,7 +62,6 @@ async def test_chat_hook_compensates_visible_reasoning_and_tool_images(monkeypat
             supports_vision=Config(default_value=True),
             supports_function_calling=Config(default_value=True),
         ),
-        api_key="test",
     )
     source = ImageSource("base64", data="YWJj", media_type="image/png")
     assistant = AssistantMessage(
@@ -79,15 +78,15 @@ async def test_chat_hook_compensates_visible_reasoning_and_tool_images(monkeypat
     result = ToolMessage(
         role="tool", call_id="c1", content=[TextContent("image:"), ImageContent(source)]
     )
-    async with bot:
-        await bot.invoke(
-            [
-                UserMessage(role="user", content=[TextContent("look")]),
-                assistant,
-                result,
-            ],
-            tools=[weather],
-        )
+    await bot.invoke(
+        [
+            UserMessage(role="user", content=[TextContent("look")]),
+            assistant,
+            result,
+        ],
+        tools=[weather],
+        api_key="test",
+    )
     sent = requests[0]["messages"]
     assert sent[1]["reasoning_content"] == "visible"
     assert "opaque" not in json.dumps(sent)
@@ -115,7 +114,7 @@ async def test_sdk_reasoning_survives_database_and_cache_restart(
         create_user_and_conversation,
     )
 
-    bot = AliraBot(provider=provider, model=model, api_key="test")
+    bot = AliraBot(provider=provider, model=model)
     protocol = bot.llm.resolved_profile.protocol
     requests = []
 
@@ -137,33 +136,33 @@ async def test_sdk_reasoning_survives_database_and_cache_restart(
     try:
         await create_user_and_conversation(db, monkeypatch)
         payload = {"user_uid": "user-1", "conversation_uid": "conv-1"}
-        async with bot:
-            user = AliraUserMessage(content=[TextContent("hi")])
-            answer = await bot.invoke([user])
-            record = answer.to_record()
-            assert (await db.append_message({**payload, "message": record}))["success"]
-            assert (await cache.set_messages({**payload, "messages": [record]}))[
-                "success"
-            ]
-            await db.stop()
-            await db.start()
-            await cache.stop()
-            await cache.start()
-            row = (await db.list_messages(payload))["messages"][0]
-            cached = (await cache.get_messages(payload))["messages"][0]
-            restored = AliraMessageExtension.from_record(row)
-            assert restored.to_wire() == answer.to_wire()
-            assert (
-                AliraMessageExtension.from_record(cached).to_wire() == answer.to_wire()
-            )
-            await bot.invoke(
-                [
-                    user,
-                    restored,
-                    UserMessage(role="user", content=[TextContent("continue")]),
-                ]
-            )
-            assert "visible reasoning" in json.dumps(requests[1])
+        user = AliraUserMessage(content=[TextContent("hi")])
+        answer = await bot.invoke([user], api_key="test")
+        record = answer.to_record()
+        assert (await db.append_message({**payload, "message": record}))["success"]
+        assert (await cache.set_messages({**payload, "messages": [record]}))[
+            "success"
+        ]
+        await db.stop()
+        await db.start()
+        await cache.stop()
+        await cache.start()
+        row = (await db.list_messages(payload))["messages"][0]
+        cached = (await cache.get_messages(payload))["messages"][0]
+        restored = AliraMessageExtension.from_record(row)
+        assert restored.to_wire() == answer.to_wire()
+        assert (
+            AliraMessageExtension.from_record(cached).to_wire() == answer.to_wire()
+        )
+        await bot.invoke(
+            [
+                user,
+                restored,
+                UserMessage(role="user", content=[TextContent("continue")]),
+            ],
+            api_key="test",
+        )
+        assert "visible reasoning" in json.dumps(requests[1])
     finally:
         await db.stop()
         await cache.stop()

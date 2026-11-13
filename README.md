@@ -85,3 +85,13 @@ modules:
 ## 许可证
 
 [GNU GPL v3.0](https://github.com/JJJJSTIYYYY/alira/blob/develop/LICENSE)
+
+```Alira
+
+```
+
+<div align="center">
+
+<img src="https://raw.githubusercontent.com/JJJJSTIYYYY/alira/develop/docs/image/alira-icon.png" alt="Alira" height="150">
+
+</div>

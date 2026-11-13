@@ -12,6 +12,7 @@ from my_llm import (
     Message,
     MessageStream,
     TextContent,
+    Usage
 )
 
 from alira.modules.agent.src.core.bot.provider import BaseProvider
@@ -23,7 +24,7 @@ from alira.modules.agent.src.shared.message import AliraAssistantMessage
 class AliraBot:
     """Use my-llm-py profiles and middleware messages/tools for every provider.
 
-    Profiles configure model/connection behavior; my-llm-py owns SDK clients,
+    Profiles configure model/connection behavior; my-llm-py owns per-request SDK clients,
     protocol conversion, stream assembly and terminal validation.
     """
 
@@ -32,34 +33,21 @@ class AliraBot:
         *,
         provider: str,
         model: str,
-        api_key: str | None = None,
         role_schema: RoleSchema | None = None,
     ) -> None:
         """Select a registered provider and an exact model ID.
 
-        ``api_key`` overrides credentials on the profile's active binding.
         CustomProvider catalogues are registered through BaseProvider before
         selecting them by name.
         Unknown providers/models and invalid profiles fail before inference.
         """
         self.provider = BaseProvider.get(provider)
-        self.llm = self.provider.create_llm(model, api_key=api_key)
+        self.llm = self.provider.create_llm(model)
         self.model = self.llm.model.model.default_value
         self.role_schema = None
         self._tool_schemas: list[FunctionTool] = []
         if role_schema is not None:
             self.bind_role_schema(role_schema)
-
-    async def __aenter__(self) -> Self:
-        await self.llm.__aenter__()
-        return self
-
-    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
-        await self.aclose()
-
-    async def aclose(self) -> None:
-        """Close MyLLM's shared SDK clients after all requests have finished."""
-        await self.llm.aclose()
 
     @property
     def name(self) -> str:
@@ -172,11 +160,13 @@ class AliraBot:
         messages: list[Message],
         system_prompt: list[Message] | None = None,
         *,
+        api_key: str | None = None,
         tools: Iterable[BaseTool] | ToolNode | None = None,
         **parameters: Any,
     ) -> AliraAssistantMessage:
         """Generate a complete middleware assistant message without executing tools.
 
+        ``api_key`` overrides authentication for this call; None uses the profile.
         ``parameters`` are my-llm-py generate options, including reasoning,
         max_tokens and extra_body. Provider-specific parameters belong in profiles.
         """
@@ -184,6 +174,7 @@ class AliraBot:
             messages=self._messages(messages, system_prompt),
             tools=self.tool_schemas if tools is None else self._schemas(tools),
             stream=False,
+            api_key=api_key,
             **parameters,
         )
         return AliraAssistantMessage.from_middleware(response)
@@ -193,11 +184,13 @@ class AliraBot:
         messages: list[Message],
         system_prompt: list[Message] | None = None,
         *,
+        api_key: str | None = None,
         tools: Iterable[BaseTool] | ToolNode | None = None,
         **parameters: Any,
     ) -> MessageStream:
         """Return the library stream: use async with, then read stream.result.
 
+        ``api_key`` overrides authentication for this call; None uses the profile.
         Events are middleware MessageEvent objects; result is an AssistantMessage.
         The library closes requests on success, early exit, cancellation and failure.
         """
@@ -205,9 +198,18 @@ class AliraBot:
             messages=self._messages(messages, system_prompt),
             tools=self.tool_schemas if tools is None else self._schemas(tools),
             stream=True,
+            api_key=api_key,
             **parameters,
         )
 
-    def compare_profiles(self, provider: str, model: str) -> bool:
+    def reuseable(self, new_provider: str, new_model: str) -> bool:
         """Compare provider and model IDs using this bot's middleware protocol."""
-        return self.llm.compare(provider, model, "middleware")
+        return self.llm.compare(new_provider, new_model, "middleware")
+
+    def clear_messages_cache(self) -> None:
+        """Clear the message translation cache for this bot's provider and model."""
+        self.llm.clear_cache()
+
+    def get_last_usage(self) -> Usage | None:
+        """Return the last usage dictionary for this bot's provider and model."""
+        return self.llm.get_last_usage()

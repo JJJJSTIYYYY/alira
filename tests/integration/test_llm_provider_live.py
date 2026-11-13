@@ -58,15 +58,15 @@ async def test_live_chat(streaming):
     bot = AliraBot(
         provider="live-test",
         model=os.environ["ALIRA_LIVE_MODEL"],
-        api_key=os.environ["ALIRA_LIVE_API_KEY"],
     )
-    async with bot:
-        history = [AliraUserMessage(content=[TextContent("Reply with exactly: OK")])]
-        if streaming:
-            stream = await bot.stream(history)
-            async with stream:
-                async for event in stream:
-                    assert isinstance(event, MessageEvent)
-            assert stream.result.content
-        else:
-            assert (await bot.invoke(history)).content
+    history = [AliraUserMessage(content=[TextContent("Reply with exactly: OK")])]
+    if streaming:
+        stream = await bot.stream(history, api_key=os.environ["ALIRA_LIVE_API_KEY"])
+        async with stream:
+            async for event in stream:
+                assert isinstance(event, MessageEvent)
+        assert stream.result.content
+    else:
+        assert (
+            await bot.invoke(history, api_key=os.environ["ALIRA_LIVE_API_KEY"])
+        ).content
