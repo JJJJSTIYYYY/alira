@@ -13,7 +13,7 @@ import pytest
     "alira.shared.logger", "alira.kernel.module",
     "alira.kernel.comlink", "alira.kernel.comlink.apixis_core", "alira.kernel.module.registry",
     "alira.kernel.module.runtime", "alira.kernel.module.dependencies.deployment",
-    "alira.cli",
+    "alira.cli", "alira.cli.commands.init", "alira.kernel.module.scaffold",
 ])
 def test_public_exports_are_complete_and_independent_of_import_order(first_import):
     script = f'''
@@ -55,6 +55,7 @@ for name in upstream.__all__:
     assert namespace[name] is getattr(upstream, name)
 assert namespace["apixis_core"] is kernel.apixis_core
 assert kernel.DependencyError is modules.DependencyError is dependencies.DependencyError
+assert kernel.ModuleStatus is modules.ModuleStatus is import_module("alira.kernel.module.base_module").ModuleStatus
 '''
     subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, text=True)
 

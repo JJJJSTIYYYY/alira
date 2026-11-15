@@ -100,7 +100,7 @@ async def test_cli_deployment_and_removal_survive_process_restarts(deployment_cl
     # An already deployed module must start without an installer executable.
     runtime_environment = os.environ | {"PATH": str(root / "no-executables")}
     process = subprocess.Popen(  # noqa: ASYNC220 - exercise an independent CLI runtime process
-        [sys.executable, str(script), "--modules", "demo"],
+        [sys.executable, str(script), "run", "demo"],
         cwd=root,
         env=runtime_environment,
         stdout=subprocess.PIPE,
@@ -143,7 +143,7 @@ async def test_cli_reports_removed_dependency_and_repair_command(deployment_cli)
     failed = run_cli(
         root,
         script,
-        "--modules",
+        "run",
         "demo",
         env=os.environ | {"PATH": str(root / "no-executables")},
     )
@@ -238,7 +238,7 @@ async def test_management_preserves_kernel_project_files_and_host_environment(
 
 async def test_real_sync_no_install_and_corrupt_record_recovery(deployment_cli):
     root, site, script = deployment_cli
-    resolved = run_cli(root, script, "sync", "--no-install")
+    resolved = run_cli(root, script, "sync", "-n")
     assert resolved.returncode == 0, resolved.stderr
     assert installed(site) == {}
     state = root / "state"

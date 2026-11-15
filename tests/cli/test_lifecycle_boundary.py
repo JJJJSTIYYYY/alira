@@ -14,18 +14,26 @@ from alira.kernel.module.dependencies.uv import EMPTY_LOCK
     "arguments",
     [
         ["--help"],
+        ["-h"],
+        ["run", "--help"],
+        ["run", "-h"],
+        ["init", "example"],
         ["list"],
         ["sync"],
         ["sync", "--no-install"],
+        ["sync", "-n"],
         ["add", "demo"],
         ["add", "demo", "--no-install"],
+        ["add", "demo", "-n"],
         ["remove", "demo"],
         ["install", "plugin.zip"],
         ["install", "-r", "package.yml"],
+        ["install", "--package", "package.yml"],
         ["uninstall", "demo"],
         *[
-            [name, "--help"]
-            for name in ("list", "sync", "add", "remove", "install", "uninstall")
+            [name, flag]
+            for name in ("init", "list", "sync", "add", "remove", "install", "uninstall")
+            for flag in ("--help", "-h")
         ],
     ],
 )
@@ -62,7 +70,8 @@ def test_management_never_imports_entries_or_enters_kernel_lifecycle(
         },
         EMPTY_LOCK,
     )
-    readonly = arguments == ["list"] or "--help" in arguments
+    help_requested = any(flag in arguments for flag in ("--help", "-h"))
+    readonly = arguments == ["list"] or help_requested
     if readonly or arguments[0] == "sync":
         ledger.path.write_text("{broken-json")
         ledger.lockfile.write_text("broken-lock")
@@ -129,7 +138,10 @@ assert "alira.cli.application" not in sys.modules
     assert "\033" not in result.stdout
     if arguments == ["list"]:
         assert result.stdout.splitlines() == ["NAME", "demo", "pending"]
-    if "--help" in arguments:
+    if arguments == ["init", "example"]:
+        assert (modules / "example/src/shared/events.py").is_file()
+        assert ledger.snapshot() == snapshot
+    if help_requested:
         assert result.stdout.startswith("usage: alira")
     if readonly:
         assert ledger.snapshot() == snapshot

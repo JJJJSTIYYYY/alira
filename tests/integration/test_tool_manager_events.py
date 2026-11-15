@@ -9,7 +9,6 @@ import pytest
 from apixis.core.event import (
     ApixEventHandler,
     ApixEventPipe,
-    BuiltinChannel,
     EventType,
     factory,
     get_event_pipe,
@@ -39,7 +38,7 @@ def event_runtime_capacity(request, monkeypatch):
     monkeypatch.setattr(
         factory,
         "ApixEventPipe",
-        lambda: ApixEventPipe(builtin=BuiltinChannel(maxsize=queue_capacity)),
+        lambda: ApixEventPipe(maxsize=queue_capacity),
     )
     return capacity
 

@@ -83,7 +83,7 @@ async def test_process_signals_stop_web_before_core(tmp_path, exit_signal):
         f"runtime.BASE_URL = 'http://127.0.0.1:{port}'\n"
         "from alira.kernel.module import module_manager\n"
         "module_manager._registry.requirements_path = lambda name: None\n"
-        "main.main(['--modules', 'web'])\n"
+        "main.main(['run', 'web'])\n"
     )
     process = subprocess.Popen(
         [sys.executable, "-c", script], cwd=tmp_path,

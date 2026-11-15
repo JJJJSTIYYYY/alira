@@ -1,6 +1,6 @@
 """Module declarations, dependency contracts and the public module manager."""
 
-from alira.kernel.module.base_module import BaseModule
+from alira.kernel.module.base_module import BaseModule, ModuleStatus
 from alira.kernel.module.dependencies import (
     DependencyError,
     DependencyInfo,
@@ -14,5 +14,6 @@ __all__ = [
     "DependencyInfo",
     "ModuleLoadError",
     "ModuleManager",
+    "ModuleStatus",
     "module_manager",
 ]

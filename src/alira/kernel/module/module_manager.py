@@ -8,18 +8,20 @@ from tempfile import TemporaryDirectory
 from types import MappingProxyType
 from typing import ClassVar, Self
 
-from alira.kernel.module.base_module import BaseModule
+from alira.kernel.module.base_module import BaseModule, ModuleStatus
 from alira.kernel.module.catalog import ModuleCatalog, module_directory
 from alira.kernel.module.dependencies.deployment import ModuleDependencies
 from alira.kernel.module.dependencies.types import (
     DependencyError,
     DependencyInfo,
     DependencyResolutionError,
+    ModuleLoadError,
     sync_hint,
 )
 from alira.kernel.module.package import install_package_sources, read_package
 from alira.kernel.module.registry import ModuleRegistry
 from alira.kernel.module.runtime import ModuleRuntime
+from alira.kernel.module.scaffold import initialize_module
 from alira.kernel.module.sources import install_source
 
 
@@ -189,6 +191,54 @@ class ModuleManager:
         """
         self.discover()
 
+    async def check_health(self, *names: str) -> dict[str, ModuleStatus]:
+        """Collect health reports from selected registered modules.
+
+        Args:
+            *names: Registered module names. No names selects all registered
+                modules, including those not loaded. Repeated names are checked
+                once; explicit selections do not include prerequisites implicitly.
+
+        Returns:
+            A new mapping from module name to its health report, in selection order
+            or registration order when no names are given. An empty registry returns
+            an empty mapping. Reports retain each module's health flag and message.
+            If a hook raises an Exception, its report uses health=False and a
+            message containing the exception type and text; other checks continue.
+
+        Raises:
+            ModuleLoadError: Any selected name is unknown. All names are validated
+                before invoking health hooks.
+
+        Notes:
+            Call discover or start first if declarations have not been registered.
+            This method does not discover, load or stop modules, read deployment
+            records or install packages. Checks run in order under the manager's
+            operation lock, so loading and unloading wait until they finish.
+            Health hooks must not call manager operations that acquire that lock.
+            No timeout is imposed; callers may use asyncio.timeout around the call.
+            Cancellation propagates and releases the operation lock.
+
+        Example:
+            statuses = await module_manager.check_health("web")
+            print(statuses["web"]["health"])
+        """
+        async with self._lock:
+            selected = dict.fromkeys(names or self._registry.modules)
+            unknown = selected.keys() - self._registry.modules.keys()
+            if unknown:
+                raise ModuleLoadError(f"Unknown modules: {', '.join(sorted(unknown))}")
+            statuses: dict[str, ModuleStatus] = {}
+            for name in selected:
+                try:
+                    statuses[name] = await self._registry.modules[name].health()
+                except Exception as exc:
+                    statuses[name] = {
+                        "health": False,
+                        "message": f"{type(exc).__name__}: {exc}",
+                    }
+            return statuses
+
     def list(self) -> list[str]:
         """List source module directory names without executing their entries.
 
@@ -204,6 +254,34 @@ class ModuleManager:
             raise DependencyError(
                 "Stop running modules before modifying their Python environment."
             )
+
+    async def init(self, name: str) -> Path:
+        """Create a new module skeleton in the current module source directory.
+
+        Args:
+            name: Python module identifier, excluding keywords and __-prefixed names.
+                The generated declaration uses this name and version "0.1.0".
+
+        Returns:
+            Path to modules_dir / name containing main.py, an empty requirements.txt,
+            package markers and src/shared/events.py, as in the development guide.
+            The declaration includes editable startup, shutdown and health hooks.
+
+        Raises:
+            DependencyError: The name is invalid, points outside modules_dir, is a
+                symlink, or already has an existing source file or directory.
+            OSError: Creating, writing or publishing the source skeleton failed.
+
+        Notes:
+            Serializes with manager operations but does not require services to stop.
+            Does not import or register the module, resolve or install dependencies,
+            or read or write deployment records. Use add to deploy dependencies and
+            discover or start to register the declaration when ready to load it.
+            Existing sources are preserved. Failed staging writes leave no partial
+            module in the destination; no overwrite or merge mode is provided.
+        """
+        async with self._lock:
+            return initialize_module(self.modules_dir, name)
 
     async def sync(self, *, no_install: bool = False, background: bool = False) -> None:
         """Rebuild all dependency records and synchronize the current interpreter.

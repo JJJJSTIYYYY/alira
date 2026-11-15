@@ -2,6 +2,8 @@
 
 本文保留当前已确定的模块设计。其余开发期参考文档集中在 `reference/`，暂不纳入版本管理。
 
+新模块的生命周期、事件通信与 Apixis 1.4.0 示例见[Alira 模块开发指南](alira-module-development.md)。
+
 `ModuleManager` 扫描 `alira/modules/*/main.py`，导入入口后检查是否导出了已完成 `BaseModule` 初始化的实例。
 没有有效实例的入口记为不可用；当前只有 `web` 提供标准模块入口，Agent、工具和数据库继续使用原有接口。
 
@@ -31,6 +33,11 @@ src/alira/modules/<module>/
 路由注册和服务初始化都放在 `startup()`。`startup()` 返回表示模块已就绪。
 `startup()` 和 `shutdown()` 都有默认实现；无清理需求的模块可以只覆盖 `startup()`。
 有资源的模块必须在 `shutdown()` 中清理，包括启动失败或取消时已获取的部分资源。
+
+模块可以覆盖 `async health() -> ModuleStatus` 报告自身健康，返回 `health: bool` 与 `message: str`。
+`ModuleStatus` 从 `alira.kernel.module` 或 `alira.kernel` 导入。基类默认返回
+`{"health": False, "message": "Health check is not implemented."}`；`True` 表示健康，`False` 表示不健康或尚未确认健康，具体模块按自有资源定义检查逻辑。
+此接口不改变生命周期，管理器不会自动调用；检查应支持启动前和关闭后调用，超时由调用方控制。
 
 ```python
 from alira.kernel.module import BaseModule
@@ -73,7 +80,7 @@ from alira.kernel.comlink import *
 
 
 async def request_example(payload):
-    async with apixis_core.wait_for_event("example.reply") as waiter:
+    async with apixis_core.expect_event("example.reply") as waiter:
         await apixis_core.post_event(
             event_type=EventType.TRANSIENT,
             event_name="example.request",
@@ -83,9 +90,12 @@ async def request_example(payload):
 ```
 
 `comlink` 通过 `__all__` 重导出 Apixis 的公开事件、图和类型接口，`import *` 不导出内部实现。
-`apixis_core` 提供 `post_event`、`subscribe`、`unsubscribe`、`wait_for_event`、`await_for`、`get_handler` 和 `is_registered`。
-订阅与等待接口直接复用 Apixis，参数及返回值保持一致；发布事件只保证入队，等待处理结果应使用事件等待接口。
-请求/响应场景先进入 `wait_for_event` 再发送请求，使用可关联到本次请求的结果事件名；上例的固定名称只用于演示。
+`apixis_core` 提供 `post_event`、`post_and_wait`、`subscribe`、`unsubscribe`、`expect_event`、`wait_event`、
+`get_handler`、`is_registered` 和 `get_event_runtime_status`，均直接复用 Apixis 1.4.0 的公开接口，保留签名、默认值和返回类型。
+`post_event` 只等待事件入队，`post_and_wait` 等待本次事件前台处理完并返回事件，调用方检查 `has_error`。
+请求/响应场景先进入 `expect_event` 再发送请求，使用可关联到本次请求的结果事件名；上例的固定名称只用于演示。
+只等待其他地方产生的事件使用 `wait_event`；查询运行时概况使用主线程上的 `get_event_runtime_status()`。
+发布和等待接口支持工作线程中的异步调用，前提是核心已在主线程运行；内核统一管理核心生命周期。
 模块在 `startup()` 中通过 `apixis_core.subscribe(..., group="模块名")` 注册处理器，
 在 `shutdown()` 中通过 `apixis_core.unsubscribe(group="模块名")` 清理；内核统一负责 Apixis 的 start/stop。
 
@@ -110,11 +120,12 @@ utils 不依赖其他 Alira 层；shared 不依赖 kernel 或业务模块；kern
 ## 管理命令
 
 所有管理命令均在应用生命周期外执行，不注册或启停内核服务，不打印 Logo，不执行模块入口代码。
-运行入口 `uv run alira --modules web` 维持原有生命周期：内核启动后才导入、加载所选模块及前置模块。
+运行入口 `uv run alira run web` 维持原有生命周期：内核启动后才导入、加载所选模块及前置模块。
 管理命令读取目录和静态声明，运行时模块发现则通过已初始化的 `BaseModule` 实例判断可用性。
 
 | 命令 | 职责 |
 | --- | --- |
+| `uv run alira init example` | 在当前 Alira 包的 `modules/example/` 创建最小模块骨架；不导入入口或安装依赖，已有目录报错 |
 | `uv run alira list` | 只列出 `alira/modules` 中含 `main.py` 的模块目录；不读取 JSON/lock，不解析模块依赖或 Python 依赖 |
 | `uv run alira sync` | 全量扫描模块并联合求解 Python 依赖，重建 JSON/lock，安装缺包、更新版本、卸载不再需要的包 |
 | `uv run alira sync --no-install` | 只解析并重建记录，不修改 Python 环境 |
@@ -123,8 +134,17 @@ utils 不依赖其他 Alira 层；shared 不依赖 kernel 或业务模块；kern
 | `uv run alira remove web` | 从记录移除 web，卸载其他模块和内核均不再需要的依赖；保留源码 |
 | `uv run alira install ./example.zip` | 检查、安装源码，再复用 add 安装依赖 |
 | `uv run alira install https://github.com/owner/repo --ref v1.0.0` | 从 GitHub 指定分支、标签或提交安装；省略 ref 使用默认分支 |
-| `uv run alira install -r package.yml` | 先准备整份清单的源码，再执行一次全量 sync |
+| `uv run alira install --package package.yml` | 先准备整份清单的源码，再执行一次全量 sync |
 | `uv run alira uninstall example` | 复用 remove 清理依赖，将源码移入系统回收站 |
+
+| 长选项 | 短选项 | 适用范围 |
+| --- | --- | --- |
+| `--help` | `-h` | 顶层命令和所有子命令 |
+| `--install-missing` | `-i` | `run` |
+| `--no-install` | `-n` | `add`、`sync` |
+| `--package FILE` | `-r FILE` | `install`，读取模块安装清单 |
+
+模块名和单模块安装的源码地址使用位置参数；选项使用双连字符长名称或单连字符短名称。
 
 `add/remove/uninstall` 支持多个名称。名称不存在、前置模块缺失、依赖冲突或移除被依赖模块时明确报错。
 `remove` 不修改源码；随后执行全量 sync 时，源码仍在的模块会重新纳入依赖管理。
@@ -156,8 +176,8 @@ uninstall 使用 Send2Trash 调用真正的操作系统回收站；回收站不�
 ### 从 package.yml 批量安装
 
 ```bash
-uv run alira install -r package.yml
-# 等同于 install --package package.yml
+uv run alira install --package package.yml
+# 简写：uv run alira install -r package.yml
 ```
 
 ```yaml
@@ -180,7 +200,7 @@ modules:
 损坏或缺失的旧记录不会阻止批量安装后的全量同步，因此这一步无需回滚 JSON/lock 或 Python 包。
 
 若 SIGKILL 或掉电发生在源码迁移过程中，可能仅有部分模块到位；这些模块的前置源码已先迁入，可通过 sync 修复当前集合，
-重新执行同一条 `install -r` 则会补齐清单中的剩余模块再同步。
+重新执行同一条 `install --package` 则会补齐清单中的剩余模块再同步。
 重复执行时会逐文件核对已有模块内容（忽略生成的 `__pycache__`），完全相同则复用，不覆盖；任何内容差异或符号链接均报错。
 这一重试规则仅适用于清单安装，单模块 install 的同名冲突行为不变。强制中断遗留的隐藏暂存目录不参与模块发现或依赖扫描。
 
@@ -266,6 +286,7 @@ kernel/
     ├── catalog.py            # 无导入的目录枚举与静态模块声明
     ├── registry.py           # 声明发现、登记、路径和依赖图
     ├── runtime.py            # 模块并行启动、退出和失败清理
+    ├── scaffold.py           # 最小模块源码骨架生成
     ├── sources.py            # ZIP/GitHub 源码安装与失败回滚
     ├── package.py            # 清单校验、整批源码安装及可重复执行
     └── dependencies/
@@ -284,12 +305,14 @@ kernel/
 from alira.kernel.module import module_manager
 
 manager = module_manager
+await manager.init("custom")       # 创建 custom 模块源码骨架，不部署依赖
 await manager.install("./example.zip")  # 安装源码并管理依赖
 await manager.install_package("package.yml")  # 整批安装源码，再执行全量同步
 await manager.add("example")        # 管理选定模块及前置模块依赖
 await manager.sync()                # 从源码全量重建并同步环境
 await manager.start()               # 此时才导入并登记运行时模块
 await manager.load("example")     # 离线只读校验依赖后启动
+print(await manager.check_health("example"))  # dict[str, ModuleStatus]
 print(manager.loaded)
 print(manager.dependencies)        # DependencyInfo: version、modules、ref_count、preinstalled
 await manager.unload("example")   # 有其他模块依赖它时拒绝卸载
@@ -298,8 +321,19 @@ await manager.remove("example")   # 释放依赖部署，保留源码；共享�
 ```
 
 `module_manager` 是进程内全局单例；`ModuleManager()` 返回同一个对象，重复构造不会重置其状态。
+`await manager.init("名称")` 按[模块开发指南](alira-module-development.md#1-建一个最小模块)生成源码并返回模块目录。
+生成的声明版本为 `0.1.0`，提供可编辑的 `startup()` / `shutdown()` / `health()`，`requirements.txt` 为空，
+`src/shared/events.py` 预留公开事件契约。初始化不注册或加载模块、不读取或修改依赖记录。
+模块名须为有效 Python 标识符，不能是关键字或以 `__` 开头；已有文件、目录或符号链接不会被覆盖。
+文件在模块根目录的临时目录中准备完成后迁入目标；写入失败不会留下可发现的半成品模块。
 `await manager.start()` 只发现、登记运行时模块；`install("来源")` 安装源码和依赖，`add("名称")` 管理已有模块依赖，`sync()` 全量重建，`load("名称")` 校验后启动模块。
 直接调用不带参数的 `load()` 会加载全部已登记模块；命令行未选择模块时不会调用它。
+`await manager.check_health(*names)` 调用指定模块的 `health()`，按模块名返回 `ModuleStatus`；
+不传名称时检查全部已登记模块，包括尚未加载的模块，空登记表返回空字典。指定名称不自动包含前置模块，重复名称只检查一次。
+接口不自动发现模块或读取部署记录；未知名称在任何检查开始前报 `ModuleLoadError`。
+检查按选择顺序执行，并与加载、卸载等操作互斥；检查钩子不能调用会获取管理器操作锁的接口。
+单个模块检查抛出异常时，该模块返回 `health=False`，`message` 包含异常类型和说明，其他模块继续检查。
+调用方可以用 `asyncio.timeout(...)` 限制整次检查；调用方取消仍正常传播并释放操作锁。
 重复加载已运行模块不会重复启动或增加引用。`auto_init.start(restart=True)` 重启内核后仍需显式加载所需模块。
 公开的部署、加载和卸载操作互斥，批内按依赖关系调度任务。加载失败时取消尚在执行的任务并清理
 未成功启动的模块；已经启动成功的独立模块保留运行，可通过 `stop()` 统一关闭。
@@ -317,14 +351,15 @@ await manager.remove("example")   # 释放依赖部署，保留源码；共享�
 监听地址由 `web/config.yaml` 的 `base_url` 设置，默认端口为 2712。
 
 ```bash
-uv run alira --modules web
+uv run alira run web
 ```
 
-通过 `--modules` 后的模块名称选择启动项，例如 `uv run alira --modules web example`。
-`example` 要求存在声明名为 `example` 的标准模块；不可用入口不作为可选模块名称。
-`uv run alira --help` 展示已登记模块，并列出不可用入口；声明发现不输出日志。
-未知参数报错，不接受模块名缩写。
-不带模块参数的 `uv run alira` 只运行内核，所有已发现模块都保持未加载状态。
+通过 `run` 后的位置参数选择启动模块，例如 `uv run alira run web example`。
+`example` 要求存在声明名为 `example` 的标准模块；选择没有可用实例的入口会在启动内核前报错。
+`uv run alira --help` 查看子命令；`uv run alira run --help` 查看位置参数与启动选项，不扫描或导入模块，也不读取部署记录。
+未知模块和未知选项报错，不接受缩写；模块名称直接放在 `run` 后，不加连字符。
+`--install-missing` 可简写为 `-i`，例如 `uv run alira run web example -i`。
+不带模块名的 `uv run alira run` 只运行内核；`uv run alira` 缺少子命令会报错。
 
 CLI 先解析并校验命令行参数；管理命令直接执行并退出，不发现运行时模块，不进入内核生命周期。
 应用运行路径才会启动内核服务，随后只读校验选中模块及其前置模块的部署依赖，按依赖顺序执行 startup()。

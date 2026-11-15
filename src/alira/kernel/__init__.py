@@ -15,6 +15,7 @@ from alira.kernel.module import (
     DependencyInfo,
     ModuleLoadError,
     ModuleManager,
+    ModuleStatus,
     module_manager,
 )
 
@@ -27,6 +28,7 @@ __all__ = [
     "LifecycleService",
     "ModuleLoadError",
     "ModuleManager",
+    "ModuleStatus",
     "ResourceCleaner",
     "apixis_core",
     "auto_init",

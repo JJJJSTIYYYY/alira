@@ -7,7 +7,6 @@ import pytest
 import pytest_asyncio
 from apixis.core.event import (
     ApixEventPipe,
-    BuiltinChannel,
     factory,
     is_registered,
     wait_for_event,
@@ -38,7 +37,7 @@ def event_runtime_capacity(request, monkeypatch):
     monkeypatch.setattr(
         factory,
         "ApixEventPipe",
-        lambda: ApixEventPipe(builtin=BuiltinChannel(maxsize=queue_size)),
+        lambda: ApixEventPipe(maxsize=queue_size),
     )
     return capacity
 

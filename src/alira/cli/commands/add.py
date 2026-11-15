@@ -8,6 +8,7 @@ from alira.kernel.module import ModuleManager
 def configure(parser: ArgumentParser) -> None:
     parser.add_argument("names", nargs="+", help="Existing module names")
     parser.add_argument(
+        "-n",
         "--no-install",
         action="store_true",
         help="Update dependency records without modifying Python packages",

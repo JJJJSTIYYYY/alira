@@ -33,7 +33,7 @@ git clone https://github.com/JJJJSTIYYYY/alira.git
 cd alira
 uv sync --locked
 uv run alira add web
-uv run alira --modules web
+uv run alira run web
 ```
 
 默认可访问 <http://localhost:2712/health> 检查服务状态。
@@ -45,8 +45,10 @@ PyPI 发行包名为 `alira-harness`，Python 导入名和命令均为 `alira`�
 
 | 命令 | 用途 |
 | --- | --- |
-| `uv run alira` | 只启动内核 |
-| `uv run alira --help` | 查看命令与启动参数 |
+| `uv run alira run` | 只启动内核 |
+| `uv run alira --help` | 查看子命令 |
+| `uv run alira run --help` | 查看模块位置参数与启动选项 |
+| `uv run alira init example` | 在当前 Alira 模块目录创建最小源码骨架，不安装依赖 |
 | `uv run alira list` | 只列出模块目录，不导入模块或读取依赖记录 |
 | `uv run alira sync` | 全量重建依赖记录，同步环境并清理不再需要的包 |
 | `uv run alira sync --no-install` | 只解析依赖并更新记录 |
@@ -55,10 +57,14 @@ PyPI 发行包名为 `alira-harness`，Python 导入名和命令均为 `alira`�
 | `uv run alira remove web` | 移除依赖管理记录并清理独占依赖，保留源码 |
 | `uv run alira install ./example.zip` | 安装模块源码并自动执行 add |
 | `uv run alira install https://github.com/owner/repo --ref v1.0.0` | 从 GitHub 安装模块及依赖 |
-| `uv run alira install -r package.yml` | 批量安装清单中的模块，再一次性执行全量 sync |
+| `uv run alira install --package package.yml` | 批量安装清单中的模块，再一次性执行全量 sync |
 | `uv run alira uninstall example` | 清理依赖并将模块源码送入系统回收站 |
-| `uv run alira --modules web` | 启动 web，自动加载前置模块 |
-| `uv run alira --modules web --install-missing` | 显式先部署选定模块依赖，再启动 web |
+| `uv run alira run web` | 启动 web，自动加载前置模块 |
+| `uv run alira run web --install-missing`（或 `-i`） | 显式先部署选定模块依赖，再启动 web |
+
+长选项与短选项等价：`--help` / `-h`、`--install-missing` / `-i`、
+`--no-install` / `-n`（用于 `add`、`sync`）、`--package FILE` / `-r FILE`（用于 `install`）。
+例如 `uv run alira sync -n`、`uv run alira add web -n`、`uv run alira install -r package.yml`。
 
 批量安装清单示例（本地 ZIP 路径相对于 `package.yml`）：
 

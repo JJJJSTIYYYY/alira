@@ -819,9 +819,7 @@ async def test_tool_role_survives_branch_filter_cache_and_restart(manager):
 async def test_full_generation_ids_keep_message_nodes_distinct_after_restart(manager):
     from my_llm import TextContent
 
-    from alira.modules.agent.src.core.utils.node_id import (
-        convert_generation_id_to_message_node_id,
-    )
+    from alira.modules.agent.src.shared.generation import Generation
     from alira.modules.agent.src.shared.message import (
         AliraAssistantMessage,
         AliraUserMessage,
@@ -832,6 +830,15 @@ async def test_full_generation_ids_keep_message_nodes_distinct_after_restart(man
     original = []
     parent_id = "-"
     for generation_id in generation_ids:
+        generation = Generation(
+            identity={
+                "id": payload["user_uid"],
+                "name": "alice",
+                "platform": "test",
+                "conversation_uid": payload["conversation_uid"],
+            },
+            generation_id=generation_id,
+        )
         for message_type in (
             AliraUserMessage,
             AliraAssistantMessage,
@@ -841,9 +848,7 @@ async def test_full_generation_ids_keep_message_nodes_distinct_after_restart(man
                 parent_id=parent_id,
                 content=[TextContent(generation_id)],
             )
-            message.node_id = convert_generation_id_to_message_node_id(
-                generation_id, message.role
-            )
+            message.node_id = generation.get_node_id(message.role)
             await manager.query("append_message", {**payload, "message": message})
             original.append(message)
             parent_id = message.node_id

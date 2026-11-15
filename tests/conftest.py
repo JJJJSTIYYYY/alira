@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from apixis.core.event import aget_event_loop, aget_event_pipe, factory
+from apixis.core.event import aget_event_pipe, factory, stop_core
 from apixis.core.graph import NodeGraph
 
 from alira.kernel import auto_init
@@ -112,7 +112,6 @@ async def cleanup_event_runtime(event_runtime_capacity, monkeypatch):
         monkeypatch.setattr(tool_module.ToolManager, "__init__", track_manager)
     baseline = asyncio.all_tasks()
     pipe = await aget_event_pipe()
-    event_loop = await aget_event_loop()
     try:
         yield
     finally:
@@ -126,8 +125,7 @@ async def cleanup_event_runtime(event_runtime_capacity, monkeypatch):
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        await pipe.stop()
-        await event_loop.stop()
+        await stop_core()
         await pipe.clear()
 
 

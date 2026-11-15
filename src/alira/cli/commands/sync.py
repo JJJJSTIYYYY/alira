@@ -7,6 +7,7 @@ from alira.kernel.module import ModuleManager
 
 def configure(parser: ArgumentParser) -> None:
     parser.add_argument(
+        "-n",
         "--no-install",
         action="store_true",
         help="Resolve and write records without installing, updating or uninstalling packages",

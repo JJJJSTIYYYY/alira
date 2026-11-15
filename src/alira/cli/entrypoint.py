@@ -13,17 +13,13 @@ async def run(argv: Sequence[str] | None = None) -> None:
     parser = build_parser()
     arguments = parser.parse_args(argv)
     if arguments.command_handler is not None:
-        if arguments.modules or arguments.install_missing:
-            parser.error("Module commands cannot be combined with runtime flags")
         await arguments.command_handler(arguments, module_manager)
         return
 
     module_manager.discover()
     unknown = set(arguments.modules) - module_manager.modules.keys()
     if unknown:
-        parser.error(
-            f"--modules: unknown or unavailable modules: {', '.join(sorted(unknown))}"
-        )
+        parser.error(f"Unknown or unavailable modules: {', '.join(sorted(unknown))}")
 
     from alira.cli.application import run_application
 

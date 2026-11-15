@@ -2,26 +2,34 @@
 
 from argparse import ArgumentParser
 
-from alira.cli.commands import add, install, list_modules, remove, sync, uninstall
+from alira.cli.commands import add, init, install, list_modules, remove, sync, uninstall
 
 
 def build_parser() -> ArgumentParser:
+    """Build management commands and application startup syntax.
+
+    Building the parser does not discover modules or import their entry points.
+    A subcommand is required, and runtime options belong exclusively to ``run``.
+    """
     parser = ArgumentParser(prog="alira", allow_abbrev=False)
     parser.set_defaults(command_handler=None)
-    parser.add_argument(
-        "--modules",
-        nargs="+",
-        action="extend",
-        default=[],
-        help="Start selected modules and their prerequisites",
+    commands = parser.add_subparsers(dest="command", required=True)
+    runtime = commands.add_parser(
+        "run", help="Start the kernel and selected modules", allow_abbrev=False
     )
-    parser.add_argument(
+    runtime.add_argument(
+        "modules",
+        nargs="*",
+        help="Modules to start together with their prerequisites",
+    )
+    runtime.add_argument(
+        "-i",
         "--install-missing",
         action="store_true",
         help="Explicitly deploy selected module dependencies before starting",
     )
-    commands = parser.add_subparsers(dest="command")
     for name, description, command in (
+        ("init", "Create a new module source skeleton", init),
         ("list", "List module source directories", list_modules),
         (
             "sync",

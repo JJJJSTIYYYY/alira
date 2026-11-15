@@ -33,7 +33,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "apixis", specifier = ">=1.1.7" },
+    { name = "apixis", specifier = ">=1.4.0" },
     { name = "packaging", specifier = ">=24.2" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "send2trash", specifier = ">=1.8.3" },
@@ -73,14 +73,14 @@ wheels = [
 
 [[package]]
 name = "apixis"
-version = "1.1.9"
+version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/72/e0/ab7f0a9f292dea7e063b9269e7ddbde5c4dbc729c7119a7590c261262f2f/apixis-1.1.9.tar.gz", hash = "sha256:c8ae99b5f9e1532f4d352b55f13164949dd999c4354bd94e89da6aecaaee86b9", size = 259818, upload-time = "2026-11-07T17:00:54.167Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/be/cc/4df97cd73258746aec1205ed5ffe21944ae786a8e169861b97801c6c8e4f/apixis-1.4.0.tar.gz", hash = "sha256:e69f05c0ee94c3bdf611a52911d82a6c8d5e6cdc6a11531e02bdc50e2e3ee453", size = 292408, upload-time = "2026-11-15T08:02:02.18Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ce/9c/8a5ff9f0b91593b34235d7793451ac4f7d74505a7833f4c28a1db6c2982d/apixis-1.1.9-py3-none-any.whl", hash = "sha256:f161f6210cfe6b64df2fe94cda1608526eb57796c18d012b72a0103a99498909", size = 70618, upload-time = "2026-11-07T17:00:52.476Z" },
+    { url = "https://files.pythonhosted.org/packages/72/a5/dc2bd687f4aebf6b1dd16c85f1293ef6a189120c1194b7486dc440068559/apixis-1.4.0-py3-none-any.whl", hash = "sha256:caabd0c964749d71698ea75f4207a7500c10da4f95df2ac06c8496e5f06af048", size = 84443, upload-time = "2026-11-15T08:02:00.528Z" },
 ]
 
 [[package]]

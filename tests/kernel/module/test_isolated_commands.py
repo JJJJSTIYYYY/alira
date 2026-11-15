@@ -593,7 +593,7 @@ def test_uv_run_sync_preserves_kernel_files_shared_with_removed_distribution(
             "module=Demo('demo','1')\n"
         )
         process = subprocess.Popen(
-            [app.uv, "run", "--project", str(app.root), "alira", "--modules", "demo"],
+            [app.uv, "run", "--project", str(app.root), "alira", "run", "demo"],
             cwd=app.root,
             env=env,
             stdout=subprocess.PIPE,
@@ -616,6 +616,36 @@ def test_uv_run_sync_preserves_kernel_files_shared_with_removed_distribution(
         assert process.returncode == 0, stdout + stderr
 
 
+def test_installed_cli_init_creates_a_deployable_module(installation):
+    app = installation
+    packages, records = app.packages(), app.records()
+    initialized = app.run("init", "sample_module")
+    directory = app.modules / "sample_module"
+    assert initialized.stdout.strip() == f"Initialized module: {directory}"
+    assert (directory / "src/shared/events.py").is_file()
+    assert (directory / "requirements.txt").read_text() == ""
+    assert app.packages() == packages
+    assert app.records() == records
+    original = tree_snapshot(directory)
+    duplicate = app.run("init", "sample_module", success=False)
+    assert "already exists" in duplicate.stderr
+    assert tree_snapshot(directory) == original
+
+    app.run("add", "sample_module")
+    app.python_run(
+        "import asyncio\n"
+        "from alira.kernel.module import module_manager\n"
+        "async def verify():\n"
+        "    await module_manager.start()\n"
+        "    await module_manager.load('sample_module')\n"
+        "    assert module_manager.loaded == {'sample_module'}\n"
+        "    assert (await module_manager.check_health())['sample_module']['health'] is False\n"
+        "    await module_manager.stop()\n"
+        "    assert not module_manager.loaded\n"
+        "asyncio.run(verify())\n"
+    )
+
+
 def test_installed_cli_sync_add_remove_use_own_interpreter_and_home(
     installation, local_requirements
 ):
@@ -636,7 +666,7 @@ def test_installed_cli_sync_add_remove_use_own_interpreter_and_home(
     app.run("--help")
     assert app.records() == {}
     assert app.packages() == core
-    app.run("add", "demo", "--no-install")
+    app.run("add", "demo", "-n")
     assert app.packages() == core
     records = json.loads(app.records()["modules.json"])["modules"]
     assert set(records) == {"base", "demo"}

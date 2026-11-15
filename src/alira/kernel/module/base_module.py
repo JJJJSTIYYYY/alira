@@ -1,6 +1,20 @@
 """Module declarations and application lifecycle hooks."""
 
 from pathlib import Path
+from typing import TypedDict
+
+
+class ModuleStatus(TypedDict):
+    """Health report returned by a module's health hook.
+
+    Attributes:
+        health: True when the module is healthy; False otherwise.
+            The base hook reports False because it performs no runtime checks.
+        message: Human-readable explanation, or an empty string when unnecessary.
+    """
+
+    health: bool
+    message: str
 
 
 class BaseModule:
@@ -9,7 +23,8 @@ class BaseModule:
     Create exactly one initialized instance in a module's ``main.py``. Its name
     must match the containing directory. Constructors declare metadata only;
     defer business imports, event subscriptions and resource allocation to
-    ``startup``. ModuleManager owns source and Python dependency installation.
+    ``startup``. Override ``health`` to report the module's runtime health.
+    ModuleManager owns source and Python dependency installation.
 
     Attributes:
         name: Module identifier used in dependency declarations and CLI commands.
@@ -99,3 +114,30 @@ class BaseModule:
             Support repeated cleanup attempts and partially initialized state.
             Shutdown does not uninstall Python dependencies or clear import caches.
         """
+
+    async def health(self) -> ModuleStatus:
+        """Report current module health without starting or stopping resources.
+
+        Override this asynchronous hook to inspect resources owned by the module.
+        It may be called before startup or after shutdown, so account for resources
+        that have not been acquired or have already been released.
+
+        Returns:
+            A ModuleStatus containing a health flag and explanatory message.
+            The base implementation returns False with a message indicating
+            that no health check is implemented; it does not infer health from
+            registration or lifecycle state.
+
+        Raises:
+            Exception: A failure raised by an overriding health check, propagated
+                to the caller without translation. Callers own timeout policy.
+
+        Notes:
+            ModuleManager does not invoke this hook automatically. It does not
+            start services, register subscriptions or change module lifecycle state.
+
+        Example:
+            status = await module.health()
+            print(status["health"], status["message"])
+        """
+        return {"health": False, "message": "Health check is not implemented."}

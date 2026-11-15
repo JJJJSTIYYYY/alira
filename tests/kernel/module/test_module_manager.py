@@ -354,3 +354,104 @@ async def test_startup_import_error_names_module_dependency_and_repair(manager):
     module.shutdown.assert_awaited_once()
     assert not manager.loaded
     assert not manager._runtime.startup_attempted
+
+
+async def test_health_checks_all_registered_modules_without_loading_them(manager):
+    assert await manager.check_health() == {}
+    calls = []
+    inactive = Service(
+        "inactive", calls, required_modules=["missing"], requirements_txt="missing.txt"
+    )
+    active = Service("active", calls)
+    inactive.health = AsyncMock(return_value={"health": False, "message": "Not started."})
+    manager.register(inactive)
+    manager.register(active)
+    await manager.load("active")
+    try:
+        assert await manager.check_health() == {
+            "inactive": {"health": False, "message": "Not started."},
+            "active": {"health": False, "message": "Health check is not implemented."},
+        }
+        inactive.health.assert_awaited_once_with()
+        assert manager.loaded == {"active"}
+        assert calls == ["start:active"]
+        assert not manager.dependencies
+    finally:
+        await manager.stop()
+
+
+async def test_health_selection_deduplicates_without_adding_prerequisites(manager):
+    parent = Service("parent", [])
+    child = Service("child", [], required_modules=["parent"])
+    parent.health = AsyncMock()
+    report = {"health": False, "message": "Queue is full."}
+    child.health = AsyncMock(return_value=report)
+    manager.register(parent)
+    manager.register(child)
+
+    assert await manager.check_health("child", "child") == {"child": report}
+    child.health.assert_awaited_once_with()
+    parent.health.assert_not_awaited()
+    assert not manager.loaded
+
+
+async def test_unknown_health_selection_fails_before_any_hook_runs(manager):
+    module = Service("known", [])
+    module.health = AsyncMock()
+    manager.register(module)
+    with pytest.raises(ModuleLoadError, match="Unknown modules: missing"):
+        await manager.check_health("known", "missing")
+    module.health.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "error", [RuntimeError("Health probe failed"), TimeoutError("Probe timed out"), ValueError()]
+)
+async def test_health_failure_returns_false_and_continues_other_checks(manager, error):
+    broken, healthy = Service("broken", []), Service("healthy", [])
+    broken.health = AsyncMock(side_effect=error)
+    report = {"health": True, "message": ""}
+    healthy.health = AsyncMock(return_value=report)
+    manager.register(broken)
+    manager.register(healthy)
+
+    assert await manager.check_health() == {
+        "broken": {"health": False, "message": f"{type(error).__name__}: {error}"},
+        "healthy": report,
+    }
+    broken.health.assert_awaited_once_with()
+    healthy.health.assert_awaited_once_with()
+    assert await asyncio.wait_for(manager.check_health("healthy"), 1) == {"healthy": report}
+
+
+async def test_health_cancellation_releases_waiting_unload(manager):
+    entered = asyncio.Event()
+    module = Service("service", [])
+
+    async def probe():
+        entered.set()
+        await asyncio.Event().wait()
+
+    module.health = probe
+    manager.register(module)
+    await manager.load("service")
+    checking = asyncio.create_task(manager.check_health("service"))
+    unloading = None
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        unloading = asyncio.create_task(manager.unload("service"))
+        await asyncio.sleep(0)
+        module.shutdown.assert_not_awaited()
+        assert not unloading.done()
+        checking.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await checking
+        await asyncio.wait_for(unloading, 1)
+        module.shutdown.assert_awaited_once_with()
+        assert not manager.loaded
+    finally:
+        checking.cancel()
+        await asyncio.gather(checking, return_exceptions=True)
+        if unloading is not None:
+            await asyncio.wait_for(unloading, 1)
+        await manager.stop()

@@ -1,7 +1,7 @@
 import asyncio
 import importlib
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -58,7 +58,7 @@ async def test_cli_loads_only_requested_modules_and_prerequisites_after_kernel_s
     application,
 ):
     manager, calls, _ = application
-    task = asyncio.create_task(cli.run(["--modules", "child", "base", "child"]))
+    task = asyncio.create_task(cli.run(["run", "child", "base", "child"]))
     try:
         await asyncio.wait_for(manager.modules["child"].ready.wait(), 2)
         assert manager.loaded == {"base", "child"}
@@ -78,9 +78,9 @@ async def test_cli_loads_only_requested_modules_and_prerequisites_after_kernel_s
     ]
 
 
-async def test_cli_without_flags_runs_only_the_kernel(application):
+async def test_run_without_modules_runs_only_the_kernel(application):
     manager, calls, core_ready = application
-    task = asyncio.create_task(cli.run([]))
+    task = asyncio.create_task(cli.run(["run"]))
     try:
         await asyncio.wait_for(core_ready.wait(), 2)
         assert not manager.loaded
@@ -93,41 +93,71 @@ async def test_cli_without_flags_runs_only_the_kernel(application):
     assert calls == ["core:start", "core:stop"]
 
 
-@pytest.mark.parametrize("flag", ["--unknown", "--mod", "--child"])
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["run", "--unknown"],
+        ["run", "--install-miss"],
+        ["run", "--child"],
+        ["run", "-child"],
+        ["--modules", "child"],
+    ],
+)
 async def test_cli_rejects_unknown_or_abbreviated_flags_without_starting_kernel(
-    application, capsys, flag
-):
-    manager, calls, _ = application
-    with pytest.raises(SystemExit) as caught:
-        await cli.run([flag])
-    assert caught.value.code == 2
-    assert "unrecognized arguments" in capsys.readouterr().err
-    assert not manager.loaded
-    assert calls == []
-
-
-@pytest.mark.parametrize("arguments", [["--modules"], ["--modules", "unknown"]])
-async def test_cli_rejects_missing_or_unknown_module_names(
     application, capsys, arguments
 ):
     manager, calls, _ = application
     with pytest.raises(SystemExit) as caught:
         await cli.run(arguments)
     assert caught.value.code == 2
-    assert "--modules" in capsys.readouterr().err
+    assert "error:" in capsys.readouterr().err
     assert not manager.loaded
     assert calls == []
 
 
-async def test_cli_help_lists_commands_without_discovering_modules(application, capsys):
+@pytest.mark.parametrize("arguments", [[], ["run", "unknown"], ["run", "chi"]])
+async def test_cli_rejects_missing_command_or_unknown_modules(
+    application, capsys, arguments
+):
     manager, calls, _ = application
     with pytest.raises(SystemExit) as caught:
-        await cli.run(["--help"])
+        await cli.run(arguments)
+    assert caught.value.code == 2
+    assert "error:" in capsys.readouterr().err
+    assert not manager.loaded
+    assert calls == []
+
+
+@pytest.mark.parametrize("flag", ["--help", "-h"])
+async def test_cli_help_lists_commands_without_discovering_modules(application, capsys, flag):
+    manager, calls, _ = application
+    with pytest.raises(SystemExit) as caught:
+        await cli.run([flag])
     assert caught.value.code == 0
     text = capsys.readouterr().out
-    assert "--modules" in text and "sync" in text and "install" in text
+    assert "run" in text and "sync" in text and "install" in text
     assert "--child" not in text and "--base" not in text
     assert not manager.loaded
+    assert calls == []
+
+
+async def test_run_help_describes_positionals_without_module_discovery(
+    application, monkeypatch, capsys
+):
+    manager, calls, _ = application
+    discover = Mock(side_effect=AssertionError("Help discovered modules"))
+    monkeypatch.setattr(manager, "discover", discover)
+    listing = Mock(side_effect=AssertionError("Help listed modules"))
+    monkeypatch.setattr(manager, "list", listing)
+    with pytest.raises(SystemExit) as caught:
+        await cli.run(["run", "--help"])
+    assert caught.value.code == 0
+    text = capsys.readouterr().out
+    assert "[modules ...]" in text
+    assert "-i, --install-missing" in text
+    assert "--modules" not in text
+    discover.assert_not_called()
+    listing.assert_not_called()
     assert calls == []
 
 
@@ -135,6 +165,8 @@ async def test_cli_help_lists_commands_without_discovering_modules(application, 
     "action, arguments, expected, keywords",
     [
         ("add", ["child"], ("child",), {"no_install": False}),
+        ("add", ["child", "--no-install"], ("child",), {"no_install": True}),
+        ("add", ["child", "-n"], ("child",), {"no_install": True}),
         (
             "install",
             ["https://github.com/example/plugin", "--ref", "v1"],
@@ -144,6 +176,7 @@ async def test_cli_help_lists_commands_without_discovering_modules(application, 
         ("remove", ["child", "base"], ("child", "base"), {}),
         ("sync", [], (), {"no_install": False}),
         ("sync", ["--no-install"], (), {"no_install": True}),
+        ("sync", ["-n"], (), {"no_install": True}),
     ],
 )
 async def test_cli_module_commands_finish_without_starting_modules(
@@ -163,19 +196,47 @@ async def test_cli_module_commands_finish_without_starting_modules(
     assert calls == []
 
 
-async def test_cli_package_install_uses_batch_operation(application, monkeypatch):
+@pytest.mark.parametrize("flag", ["--package", "-r"])
+async def test_cli_package_install_uses_batch_operation(application, monkeypatch, flag):
     manager, calls, _ = application
     operation = AsyncMock()
     monkeypatch.setattr(manager, "install_package", operation)
-    await cli.run(["install", "-r", "package.yml"])
+    await cli.run(["install", flag, "package.yml"])
     operation.assert_awaited_once_with("package.yml")
     assert calls == []
+
+
+async def test_cli_init_creates_sources_without_starting_services(application, capsys):
+    manager, calls, _ = application
+    registered = dict(manager.modules)
+    await cli.run(["init", "example"])
+    directory = manager.modules_dir / "example"
+    assert (directory / "main.py").is_file()
+    assert (directory / "src/shared/events.py").is_file()
+    assert capsys.readouterr().out == f"Initialized module: {directory}\n"
+    assert dict(manager.modules) == registered
+    assert not manager.loaded
+    assert calls == []
+
+
+def test_cli_init_reports_existing_sources_without_a_traceback(application, capsys):
+    manager, _, _ = application
+    directory = manager.modules_dir / "example"
+    directory.mkdir(parents=True)
+    (directory / "main.py").write_text("existing source")
+    with pytest.raises(SystemExit) as caught:
+        cli.main(["init", "example"])
+    assert caught.value.code == 1
+    assert "already exists" in capsys.readouterr().err
+    assert (directory / "main.py").read_text() == "existing source"
 
 
 @pytest.mark.parametrize(
     "arguments",
     [
         ["module", "add", "child"],
+        ["init"],
+        ["init", "one", "two"],
         ["add"],
         ["remove"],
         ["sync", "--unknown"],
@@ -184,6 +245,10 @@ async def test_cli_package_install_uses_batch_operation(application, monkeypatch
         ["install"],
         ["install", "one.zip", "-r", "package.yml"],
         ["install", "-r", "package.yml", "--ref", "v1"],
+        ["install", "one.zip", "--package", "package.yml"],
+        ["install", "--package", "package.yml", "--ref", "v1"],
+        ["install", "--package"],
+        ["install", "-r"],
     ],
 )
 async def test_cli_rejects_invalid_deployment_commands_without_starting_kernel(
@@ -199,34 +264,41 @@ async def test_cli_rejects_invalid_deployment_commands_without_starting_kernel(
 
 
 @pytest.mark.parametrize("action", ["add", "remove", "sync", "list"])
+@pytest.mark.parametrize("flag", ["--install-missing", "-i"])
 async def test_cli_rejects_module_commands_with_runtime_options(
-    application, capsys, action
+    application, capsys, action, flag
 ):
     manager, calls, _ = application
     names = ["child"] if action in {"add", "remove"} else []
     with pytest.raises(SystemExit) as caught:
-        await cli.run(["--install-missing", action, *names])
+        await cli.run([action, *names, flag])
     assert caught.value.code == 2
-    assert "cannot be combined" in capsys.readouterr().err
+    assert "error:" in capsys.readouterr().err
     assert not manager.loaded
     assert calls == []
 
 
 @pytest.mark.parametrize(
-    "arguments",
+    "arguments, expected",
     [
-        ["--install-missing", "--modules", "child"],
-        ["--modules", "child", "--install-missing"],
+        (["run", "--install-missing", "child"], ("child",)),
+        (["run", "child", "--install-missing"], ("child",)),
+        (["run", "child", "-i"], ("child",)),
+        (["run", "-i", "child"], ("child",)),
+        (["run", "child", "base", "--install-missing"], ("child", "base")),
+        (["run", "child", "base", "-i"], ("child", "base")),
     ],
 )
-async def test_install_missing_is_explicit_opt_in(application, monkeypatch, arguments):
+async def test_install_missing_is_explicit_opt_in(
+    application, monkeypatch, arguments, expected
+):
     manager, _, _ = application
     add = AsyncMock()
     monkeypatch.setattr(manager, "add", add)
     task = asyncio.create_task(cli.run(arguments))
     try:
         await asyncio.wait_for(manager.modules["child"].ready.wait(), 2)
-        add.assert_awaited_once_with("child", background=True)
+        add.assert_awaited_once_with(*expected, background=True)
     finally:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -254,12 +326,28 @@ async def test_help_does_not_import_or_initialize_unavailable_entries(
             else ""
         )
     with pytest.raises(SystemExit) as caught:
-        await cli.run(["--help"])
+        await cli.run(["run", "--help"])
     assert caught.value.code == 0
     text = capsys.readouterr().out
-    assert "--modules" in text
+    assert "[modules ...]" in text
+    assert "--empty_entry" not in text and "--class_only" not in text
     assert manager.unavailable == set()
     assert not any(name.startswith(package + ".") for name in __import__("sys").modules)
+
+
+async def test_run_rejects_unavailable_source_before_kernel_start(
+    application, monkeypatch, capsys
+):
+    manager, calls, _ = application
+    directory = manager.modules_dir / "empty_entry"
+    directory.mkdir(parents=True)
+    (directory / "main.py").touch()
+    monkeypatch.setattr(manager, "discover", lambda: manager.modules)
+    with pytest.raises(SystemExit) as caught:
+        await cli.run(["run", "empty_entry"])
+    assert caught.value.code == 2
+    assert "Unknown or unavailable modules: empty_entry" in capsys.readouterr().err
+    assert calls == []
 
 
 def test_dependency_error_has_actionable_nonzero_cli_exit(monkeypatch, capsys):
@@ -273,7 +361,7 @@ def test_dependency_error_has_actionable_nonzero_cli_exit(monkeypatch, capsys):
     )
     monkeypatch.setattr(cli, "run", AsyncMock(side_effect=failure))
     with pytest.raises(SystemExit) as caught:
-        cli.main(["--modules", "web"])
+        cli.main(["run", "web"])
     assert caught.value.code == 1
     error = capsys.readouterr().err
     assert "web" in error and "fastapi" in error
@@ -298,7 +386,7 @@ def test_discovery_load_error_has_clean_nonzero_cli_exit(
         cli, "module_manager", module_manager_factory(root, package=package)
     )
     with pytest.raises(SystemExit) as caught:
-        cli.main(["--modules", "demo"])
+        cli.main(["run", "demo"])
     assert caught.value.code == 1
     output = capsys.readouterr()
     assert output.out == ""
