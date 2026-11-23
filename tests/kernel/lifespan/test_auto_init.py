@@ -1,6 +1,8 @@
-"""Registration order, failure recovery, cancellation, and lifecycle serialization."""
+"""One-time service startup and reverse-order application shutdown."""
 
 import asyncio
+import importlib
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -12,6 +14,18 @@ from alira.kernel.lifespan.auto_init import AutoInit, auto_init
 @pytest.fixture
 def registry(auto_init_factory):
     return auto_init_factory()
+
+
+@pytest.fixture
+def lifecycle_errors(monkeypatch):
+    errors = []
+    lifecycle = importlib.import_module("alira.kernel.lifespan.auto_init")
+    monkeypatch.setattr(
+        lifecycle.logger,
+        "exception",
+        lambda message: errors.append((message, sys.exception())),
+    )
+    return errors
 
 
 def service(name, calls):
@@ -32,48 +46,53 @@ def test_singleton_keeps_registrations(registry):
 async def test_isolated_registry_factory_preserves_active_instances(auto_init_factory):
     calls = []
     first = auto_init_factory()
-    running = service("running", calls)
-    first.register(running)
+    first.register(service("running", calls))
     await first.start()
-    try:
-        second = auto_init_factory()
-        assert second is not first
-        assert not second._services
-        assert not second._started_services
-        assert id(running) in first._started_services
-        assert AutoInit() is auto_init
-        await second.stop()
-        assert calls == ["start:running"]
-    finally:
-        await first.stop()
+    second = auto_init_factory()
+    assert second is not first
+    assert not second._services
+    assert not second._started
+    assert first._started
+    assert AutoInit() is auto_init
+    await second.stop()
+    assert calls == ["start:running"]
+    await first.stop()
     assert calls == ["start:running", "stop:running"]
 
 
-async def test_services_start_in_order_and_stop_in_reverse(registry):
+async def test_services_start_once_and_stop_in_reverse(registry):
     calls = []
     for name in ("a", "b", "c"):
         registry.register(service(name, calls))
-
     await registry.start()
-    await registry.start()
+    with pytest.raises(RuntimeError, match="only be started once"):
+        await registry.start()
     await registry.stop()
-    await registry.start()
     await registry.stop()
-
+    with pytest.raises(RuntimeError, match="only be started once"):
+        await registry.start()
     assert calls == [
-        "start:a", "start:b", "start:c", "stop:c", "stop:b", "stop:a",
-        "start:a", "start:b", "start:c", "stop:c", "stop:b", "stop:a",
+        "start:a",
+        "start:b",
+        "start:c",
+        "stop:c",
+        "stop:b",
+        "stop:a",
     ]
+    assert not registry._services
 
 
-async def test_registration_after_start(registry):
+async def test_late_registration_preserves_cleanup_for_directly_started_services(
+    registry,
+):
     calls = []
     registry.register(service("a", calls))
     await registry.start()
-    registry.register(service("b", calls))
-    registry.register(service("c", calls))
-    await registry.start()
-    assert calls == ["start:a", "start:b", "start:c"]
+    late = service("late", calls)
+    registry.register(late)
+    await late.start()
+    await registry.stop()
+    assert calls == ["start:a", "start:late", "stop:late", "stop:a"]
 
 
 async def test_registration_during_start_is_started_in_the_same_pass(registry):
@@ -95,12 +114,12 @@ async def test_registration_during_start_is_started_in_the_same_pass(registry):
 async def test_empty_registry_is_safe(registry):
     await registry.start()
     await registry.stop()
-    await registry.start(restart=True)
+    await registry.stop()
 
 
 def test_registration_uses_identity(registry):
     first, second = service("same", []), service("same", [])
-    # Equal and unhashable service objects must still register independently.
+    # Equal and unhashable service objects must register independently.
     second.start, second.stop = first.start, first.stop
     assert first == second
     registry.register(first)
@@ -120,72 +139,54 @@ def test_registration_checks_lifecycle_methods(registry, method):
         registry.register(instance)
 
 
-async def test_explicit_restart_stops_then_starts_all_services(registry):
+async def test_start_failure_is_logged_and_propagated_without_starting_later_services(
+    registry, lifecycle_errors
+):
     calls = []
-    for name in ("a", "b", "c"):
-        registry.register(service(name, calls))
-    await registry.start()
-    calls.clear()
-
-    await registry.start(restart=True)
-    assert calls == ["stop:c", "stop:b", "stop:a", "start:a", "start:b", "start:c"]
-
-
-async def test_start_failures_are_reported_and_only_failed_services_retry(registry):
-    calls = []
-    first, healthy, last = [service(name, calls) for name in ("a", "b", "c")]
-    first.start.side_effect = [RuntimeError("first failed"), None]
-    last.start.side_effect = [ValueError("last failed"), None]
-    for instance in (first, healthy, last):
+    first, broken, last = [service(name, calls) for name in ("first", "broken", "last")]
+    failure = RuntimeError("kernel startup failed")
+    broken.start.side_effect = failure
+    for instance in (first, broken, last):
         registry.register(instance)
-
-    with pytest.raises(ExceptionGroup, match="Failed to start") as caught:
+    with pytest.raises(RuntimeError, match="kernel startup failed") as caught:
         await registry.start()
-    assert [str(exc) for exc in caught.value.exceptions] == [
-        "first failed", "last failed",
-    ]
-    await registry.start()
-    first.stop.assert_awaited_once()
-    last.stop.assert_awaited_once()
-    healthy.start.assert_awaited_once()
-    healthy.stop.assert_not_awaited()
-    assert first.start.await_count == last.start.await_count == 2
+    assert caught.value is failure
+    assert lifecycle_errors == [("Error starting SimpleNamespace", failure)]
+    assert calls == ["start:first"]
+    last.start.assert_not_awaited()
+    with pytest.raises(RuntimeError, match="only be started once"):
+        await registry.start()
     await registry.stop()
+    assert calls == ["start:first", "stop:last", "stop:broken", "stop:first"]
 
 
-async def test_failed_start_cleanup_must_succeed_before_retry(registry):
-    instance = service("one", [])
-    instance.start.side_effect = [RuntimeError("start failed"), None]
-    instance.stop.side_effect = [RuntimeError("cleanup failed"), None]
-    registry.register(instance)
-    for message in ("start failed", "cleanup failed"):
-        with pytest.raises(ExceptionGroup) as caught:
-            await registry.start()
-        assert str(caught.value.exceptions[0]) == message
-    instance.start.assert_awaited_once()
-    await registry.start()
-    assert instance.start.await_count == instance.stop.await_count == 2
-
-
-async def test_stop_continues_after_failures_and_restart_waits_for_cleanup(registry):
+async def test_shutdown_errors_are_logged_immediately_without_retry(
+    registry, lifecycle_errors
+):
     calls = []
     first, second, third = [service(name, calls) for name in ("a", "b", "c")]
+    first_failure, third_failure = RuntimeError("a failed"), ValueError("c failed")
+    first.stop.side_effect = first_failure
+    third.stop.side_effect = third_failure
+
+    async def stop_second():
+        assert lifecycle_errors == [("Error stopping SimpleNamespace", third_failure)]
+        calls.append("stop:b")
+
+    second.stop.side_effect = stop_second
     for instance in (first, second, third):
         registry.register(instance)
     await registry.start()
-    first.stop.side_effect = [RuntimeError("a failed"), None]
-    third.stop.side_effect = [ValueError("c failed"), None]
-    with pytest.raises(ExceptionGroup, match="Failed to stop") as caught:
-        await registry.start(restart=True)
-    assert [str(exc) for exc in caught.value.exceptions] == ["c failed", "a failed"]
+    await registry.stop()
+    assert lifecycle_errors == [
+        ("Error stopping SimpleNamespace", third_failure),
+        ("Error stopping SimpleNamespace", first_failure),
+    ]
+    await registry.stop()
     for instance in (first, second, third):
         instance.stop.assert_awaited_once()
-        instance.start.assert_awaited_once()
-
-    await registry.start()
-    assert first.stop.await_count == third.stop.await_count == 2
-    second.stop.assert_awaited_once()
-    assert all(instance.start.await_count == 2 for instance in (first, second, third))
+    assert calls[-1] == "stop:b"
+    assert not registry._services
 
 
 async def test_stop_cleans_services_started_directly(registry):
@@ -196,57 +197,29 @@ async def test_stop_cleans_services_started_directly(registry):
     instance.stop.assert_awaited_once()
 
 
-@pytest.mark.parametrize("transition", ["start", "stop"])
-async def test_cancellation_retains_cleanup_state_and_releases_lock(registry, transition):
-    entered, release = asyncio.Event(), asyncio.Event()
+async def test_cancelled_start_is_cleaned_up_without_restarting(registry):
+    entered = asyncio.Event()
     instance = service("one", [])
     registry.register(instance)
 
     async def blocked():
         entered.set()
-        await release.wait()
+        await asyncio.Event().wait()
 
-    if transition == "stop":
-        await registry.start()
-    operation = getattr(instance, transition)
-    operation.side_effect = blocked
-    task = asyncio.create_task(getattr(registry, transition)())
+    instance.start.side_effect = blocked
+    task = asyncio.create_task(registry.start())
     await asyncio.wait_for(entered.wait(), 1)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-
-    operation.side_effect = None
-    await asyncio.wait_for(registry.start(), 1)
-    assert instance.stop.await_count == (1 if transition == "start" else 2)
-    assert instance.start.await_count == 2
+    await registry.stop()
+    instance.start.assert_awaited_once()
+    instance.stop.assert_awaited_once()
 
 
-@pytest.mark.parametrize("following", ["start", "stop"])
-async def test_concurrent_lifecycle_operations_are_serialized(registry, following):
-    entered, release = asyncio.Event(), asyncio.Event()
-    calls = []
-    instance = service("one", calls)
-
-    async def blocked_start():
-        calls.append("start")
-        entered.set()
-        await release.wait()
-
-    instance.start.side_effect = blocked_start
-    registry.register(instance)
-    first = asyncio.create_task(registry.start())
-    await asyncio.wait_for(entered.wait(), 1)
-    second = asyncio.create_task(getattr(registry, following)())
-    await asyncio.sleep(0)
-    assert not second.done()
-    instance.stop.assert_not_awaited()
-    release.set()
-    await asyncio.wait_for(asyncio.gather(first, second), 1)
-    assert calls == (["start"] if following == "start" else ["start", "stop:one"])
-
-
-async def test_module_manager_uses_the_registry_lifecycle_and_restart(registry, tmp_path, module_manager_factory):
+async def test_module_manager_uses_the_registry_lifecycle(
+    registry, tmp_path, module_manager_factory
+):
     from alira.kernel.module import BaseModule
 
     calls = []
@@ -263,28 +236,20 @@ async def test_module_manager_uses_the_registry_lifecycle_and_restart(registry, 
     registry.register(service("core", calls))
     registry.register(manager)
     await registry.start()
-    await registry.start()
     assert not manager.loaded
     await manager.load("example")
     assert manager.loaded == {"example"}
-    await registry.start(restart=True)
-    assert not manager.loaded
-    await manager.load("example")
     await registry.stop()
     assert not manager.loaded
-    assert calls == [
-        "start:core", "module:start",
-        "module:stop", "stop:core", "start:core", "module:start",
-        "module:stop", "stop:core",
-    ]
+    assert calls == ["start:core", "module:start", "module:stop", "stop:core"]
 
 
-async def test_application_cleans_failed_modules_before_stopping_core(registry, tmp_path, monkeypatch, module_manager_factory):
-    from importlib import import_module
-
-    initialization = import_module("alira.kernel.initialize")
+async def test_application_cleans_failed_modules_before_stopping_core(
+    registry, tmp_path, monkeypatch, module_manager_factory
+):
     from alira.kernel.module import BaseModule
 
+    initialization = importlib.import_module("alira.kernel.initialize")
     calls = []
 
     class BrokenModule(BaseModule):
@@ -299,10 +264,48 @@ async def test_application_cleans_failed_modules_before_stopping_core(registry, 
     manager.register(BrokenModule("broken", "1"))
     registry.register(service("core", calls))
     monkeypatch.setattr(initialization, "auto_init", registry)
-    monkeypatch.setattr(initialization, "initialize", lambda: registry.register(manager))
-    with pytest.raises(ExceptionGroup, match="unhandled errors"):
-        async with initialization.lifespan():
-            await manager.load("broken")
+    monkeypatch.setattr(
+        initialization, "initialize", lambda: registry.register(manager)
+    )
+    async with initialization.lifespan():
+        await manager.load("broken")
+        assert calls == ["start:core", "module:start", "module:stop"]
     assert calls == ["start:core", "module:start", "module:stop", "stop:core"]
     assert not manager.loaded
-    assert not registry._pending_stop
+    assert not registry._services
+
+
+async def test_lifespan_cleans_all_registered_services_after_kernel_start_failure(
+    registry, monkeypatch, lifecycle_errors
+):
+    initialization = importlib.import_module("alira.kernel.initialize")
+    calls = []
+    first, broken, last = [service(name, calls) for name in ("first", "broken", "last")]
+    failure = RuntimeError("startup failed")
+    broken.start.side_effect = failure
+    for instance in (first, broken, last):
+        registry.register(instance)
+    monkeypatch.setattr(initialization, "auto_init", registry)
+    monkeypatch.setattr(initialization, "initialize", lambda: None)
+    with pytest.raises(RuntimeError, match="startup failed") as caught:
+        async with initialization.lifespan():
+            pytest.fail("Application body must not run after kernel startup fails")
+    assert caught.value is failure
+    assert lifecycle_errors == [("Error starting SimpleNamespace", failure)]
+    assert calls == ["start:first", "stop:last", "stop:broken", "stop:first"]
+
+
+async def test_lifespan_preserves_body_failure_when_shutdown_also_fails(
+    registry, monkeypatch, lifecycle_errors
+):
+    initialization = importlib.import_module("alira.kernel.initialize")
+    instance = service("one", [])
+    cleanup_failure = RuntimeError("cleanup failed")
+    instance.stop.side_effect = cleanup_failure
+    registry.register(instance)
+    monkeypatch.setattr(initialization, "auto_init", registry)
+    monkeypatch.setattr(initialization, "initialize", lambda: None)
+    with pytest.raises(ValueError, match="body failed"):
+        async with initialization.lifespan():
+            raise ValueError("body failed")
+    assert lifecycle_errors == [("Error stopping SimpleNamespace", cleanup_failure)]

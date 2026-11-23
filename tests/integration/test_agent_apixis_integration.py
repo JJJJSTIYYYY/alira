@@ -10,7 +10,10 @@ from httpx import ASGITransport, AsyncClient
 from my_llm import ToolCall
 
 from alira.modules.agent.src.core.graph import AgentGraphCreator, agent_graph
-from alira.modules.agent.src.shared.message import AliraAssistantMessage, AliraToolMessage
+from alira.modules.agent.src.shared.message import (
+    AliraAssistantMessage,
+    AliraToolMessage,
+)
 
 
 class State(TypedDict, total=False):
@@ -73,7 +76,7 @@ async def test_custom_messages_key_reaches_tool_node():
     assert result["conversation"][-1].content[0].text == "hello"
 
 
-async def test_server_lifespan_can_restart_with_local_events_and_health_check(
+async def test_server_lifespan_handles_local_events_health_and_shutdown(
     monkeypatch,
     core_lifecycle,
     kernel_lifecycle,
@@ -94,32 +97,31 @@ async def test_server_lifespan_can_restart_with_local_events_and_health_check(
     monkeypatch.setattr(core_lifecycle, "stop", stop)
     monkeypatch.setattr("alira.modules.web.src.application.auto_load_router", lambda app: None)
     app = create_app()
-    for _ in range(2):
-        received = asyncio.Event()
+    received = asyncio.Event()
 
-        @subscribe("alira.migration.health")
-        async def receive(event, received=received):
-            received.set()
+    @subscribe("alira.migration.health")
+    async def receive(event):
+        received.set()
 
-        try:
-            async with kernel_lifecycle.lifespan(), app.router.lifespan_context(app):
-                pipe = get_event_pipe()
-                assert pipe.is_running
-                await pipe.post_event(
-                    event_type=EventType.WORKFLOW, event_name="alira.migration.health"
-                )
-                await asyncio.wait_for(received.wait(), 1)
-                async with AsyncClient(
-                    transport=ASGITransport(app), base_url="http://test"
-                ) as client:
-                    response = await client.get("/health")
-                assert response.status_code == 200
-                assert response.json() == {"status": "ok", "service": "alira"}
-            assert not pipe.is_running
-        finally:
-            unsubscribe("receive")
-    assert start.await_count == 2
-    assert stop.await_count == 2
+    try:
+        async with kernel_lifecycle.lifespan(), app.router.lifespan_context(app):
+            pipe = get_event_pipe()
+            assert pipe.is_running
+            await pipe.post_event(
+                event_type=EventType.WORKFLOW, event_name="alira.migration.health"
+            )
+            await asyncio.wait_for(received.wait(), 1)
+            async with AsyncClient(
+                transport=ASGITransport(app), base_url="http://test"
+            ) as client:
+                response = await client.get("/health")
+            assert response.status_code == 200
+            assert response.json() == {"status": "ok", "service": "alira"}
+        assert not pipe.is_running
+    finally:
+        unsubscribe("receive")
+    start.assert_awaited_once()
+    stop.assert_awaited_once()
 
 
 async def test_add_tools_forwards_llm_binding_with_custom_messages_key():

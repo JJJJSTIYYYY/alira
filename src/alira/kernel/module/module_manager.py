@@ -1,15 +1,13 @@
 """Public module manager: serialize source, dependency and runtime operations."""
 
 import asyncio
-import shutil
 from collections.abc import Mapping
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from types import MappingProxyType
 from typing import ClassVar, Self
 
 from alira.kernel.module.base_module import BaseModule, ModuleStatus
-from alira.kernel.module.catalog import ModuleCatalog, module_directory
+from alira.kernel.module.catalog import ModuleCatalog
 from alira.kernel.module.dependencies.deployment import ModuleDependencies
 from alira.kernel.module.dependencies.types import (
     DependencyError,
@@ -22,7 +20,7 @@ from alira.kernel.module.package import install_package_sources, read_package
 from alira.kernel.module.registry import ModuleRegistry
 from alira.kernel.module.runtime import ModuleRuntime
 from alira.kernel.module.scaffold import initialize_module
-from alira.kernel.module.sources import install_source
+from alira.kernel.module.sources import install_source, uninstall_sources
 
 
 class ModuleManager:
@@ -33,9 +31,10 @@ class ModuleManager:
     declarative entries; management commands instead inspect source statically.
     Runtime loading and dependency deployment are separate operations.
 
-    Dependency operations target the interpreter running Alira. They require all
-    attempted module startups to have been cleaned up first. Runtime transitions
-    and dependency updates use an event-loop lock; source transactions do not
+    Runtime modules are selected once at application startup and closed at exit.
+    Dependency operations target the interpreter running Alira and require no
+    active module resources. Runtime transitions and dependency updates use an
+    event-loop lock; source transactions do not
     provide isolation between separate processes or clients.
     """
 
@@ -112,12 +111,12 @@ class ModuleManager:
 
     @property
     def unavailable(self) -> frozenset[str]:
-        """Return a snapshot of entry names without initialized instances at the last discovery."""
+        """Return entry names without initialized instances during discovery."""
         return frozenset(self._registry.unavailable)
 
     @property
     def loaded(self) -> frozenset[str]:
-        """Return a snapshot of module names whose startup completed and cleanup has not completed."""
+        """Return names whose startup succeeded and whose shutdown has not finished."""
         return frozenset(self._runtime.loaded)
 
     @property
@@ -160,12 +159,13 @@ class ModuleManager:
         self._registry.register(module)
 
     def discover(self) -> Mapping[str, BaseModule]:
-        """Import main entries and register their initialized module instances.
+        """Import main entries once and register their initialized module instances.
 
         Returns:
             Live, read-only mapping of registered modules. Entries without valid
-            instances are exposed through unavailable. Previously registered modules
-            are retained; discovery is not a reload or removal operation.
+            instances are exposed through unavailable. Once discovery succeeds,
+            subsequent calls return this mapping without rescanning. Configure the
+            module directory and package before discovery.
 
         Raises:
             ModuleLoadError: An entry has multiple instances, a directory/name
@@ -180,10 +180,11 @@ class ModuleManager:
         return self.modules
 
     async def start(self) -> None:
-        """Discover declarations as the manager's kernel lifecycle start hook.
+        """Ensure declarations are discovered as the kernel lifecycle start hook.
 
         Returns:
-            None after discovery. Services remain unloaded until load is called.
+            None after discovery, reusing declarations from a prior preflight scan.
+            Services remain unloaded until load is called.
 
         Raises:
             ModuleLoadError: Discovery rejected a declaration.
@@ -214,7 +215,7 @@ class ModuleManager:
             Call discover or start first if declarations have not been registered.
             This method does not discover, load or stop modules, read deployment
             records or install packages. Checks run in order under the manager's
-            operation lock, so loading and unloading wait until they finish.
+            operation lock, so startup and application shutdown wait until they finish.
             Health hooks must not call manager operations that acquire that lock.
             No timeout is imposed; callers may use asyncio.timeout around the call.
             Cancellation propagates and releases the operation lock.
@@ -232,7 +233,7 @@ class ModuleManager:
             for name in selected:
                 try:
                     statuses[name] = await self._registry.modules[name].health()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - isolate module health failures
                     statuses[name] = {
                         "health": False,
                         "message": f"{type(exc).__name__}: {exc}",
@@ -249,8 +250,8 @@ class ModuleManager:
         return ModuleCatalog(self.modules_dir).names()
 
     def _check_idle(self) -> None:
-        """Raise DependencyError until every attempted module startup has been cleaned up."""
-        if self._runtime.startup_attempted:
+        """Reject dependency changes while module resources are active."""
+        if self._runtime.active:
             raise DependencyError(
                 "Stop running modules before modifying their Python environment."
             )
@@ -404,42 +405,12 @@ class ModuleManager:
             On failure it attempts to restore source backups, records and package
             versions. If recovery is incomplete, restore missing sources before sync.
         """
-        from send2trash import send2trash
-
         self._check_idle()
-        directories = [
-            module_directory(self.modules_dir, name) for name in dict.fromkeys(names)
-        ]
-        for directory in directories:
-            if not (directory / "main.py").is_file():
-                raise DependencyError(f"Module not found: {directory.name}")
-        with TemporaryDirectory(prefix="alira-uninstall-") as temporary:
-            backup = Path(temporary)
-            for directory in directories:
-                shutil.copytree(directory, backup / directory.name, symlinks=True)
-            async with self._dependencies.transaction(
-                self.modules_dir, background=background
-            ):
-                try:
-                    await self.remove(*names, background=background)
-                    for directory in directories:
-                        send2trash(str(directory))
-                except BaseException as failure:
-                    errors = []
-                    for directory in directories:
-                        if not directory.exists():
-                            try:
-                                shutil.copytree(
-                                    backup / directory.name, directory, symlinks=True
-                                )
-                            except OSError as exc:
-                                errors.append(exc)
-                    if errors:
-                        raise BaseExceptionGroup(
-                            "Module uninstall failed and source restoration was incomplete",
-                            [failure, *errors],
-                        ) from None
-                    raise
+        async with self._dependencies.transaction(
+            self.modules_dir, background=background
+        ):
+            with uninstall_sources(self.modules_dir, names):
+                await self.remove(*names, background=background)
 
     async def install_package(
         self, path: Path | str, *, background: bool = False
@@ -485,7 +456,7 @@ class ModuleManager:
                 ) from exc
 
     async def load(self, *names: str, install_missing: bool = False) -> None:
-        """Verify dependencies, then start selected modules and their prerequisites.
+        """Verify dependencies and start the application's selected modules once.
 
         Args:
             *names: Registered module names; no names selects every registered module.
@@ -494,58 +465,40 @@ class ModuleManager:
 
         Raises:
             ModuleLoadError: A module or prerequisite is unknown or the graph cycles.
-                Deferred ImportError failures are wrapped in this type within a group.
             DependencyError: Recorded requirements changed, a package version is wrong
                 or missing, or explicit dependency installation fails.
             FileNotFoundError: An explicitly declared requirements file is missing.
-            RuntimeError: A previous failed attempt still requires cleanup.
-            BaseExceptionGroup: Startup tasks or their subsequent cleanup failed.
+            RuntimeError: Runtime modules have already been started in this process.
+            asyncio.CancelledError: Loading was cancelled; partial startup is cleaned up.
 
         Notes:
-            Call discovery or start first. Already loaded modules are skipped;
-            independent startups run concurrently and dependents wait for readiness.
-            Startup failure cancels pending tasks and cleans attempted modules that
-            have not completed startup; successfully loaded modules may remain active.
-            Use unload/stop to retry failed cleanup before loading again. This method
+            Call discovery or start first. This is the only runtime load for the
+            application; later calls, including after stop, are rejected. Independent
+            startups run concurrently and dependents wait for readiness.
+            Startup failure skips dependent modules while independent branches finish.
+            Each startup exception is logged immediately by the kernel and does not
+            propagate to the application. Successful modules remain running.
+            Dependency paths and their results are printed together after startup tasks
+            finish; these display plans do not control scheduling. Failed startup
+            attempts are cleaned up immediately; successful modules are closed by stop
+            at application exit. Cleanup errors are logged without retries. This method
             does not start the kernel's other lifecycle services on its own.
         """
         if install_missing:
             await self.add(*(names or tuple(self._registry.modules)), background=True)
         async with self._lock:
             graph = self._registry.graph(names or self._registry.modules.keys())
-            pending = graph.keys() - self._runtime.loaded
-            if pending & self._runtime.startup_attempted:
-                raise RuntimeError(
-                    "A previous failed load needs unload() cleanup before retrying"
-                )
-            requirements = {
-                name: self._registry.requirements_path(name) for name in pending
-            }
-            if any(path is not None for path in requirements.values()):
+            requirements = {}
+            for name in graph:
+                path = self._registry.requirements_path(name)
+                if path is not None:
+                    requirements[name] = path
+            if requirements:
                 self._dependencies.restore()
-            installed = self._dependencies.installed()
-            for name in sorted(pending):
-                self._dependencies.verify(name, requirements[name], installed)
-            await self._runtime.load(graph, pending)
-
-    async def unload(self, name: str) -> None:
-        """Stop one module without removing sources or dependency ownership.
-
-        Args:
-            name: Registered module name. A module with no pending runtime state is
-                already unloaded and requires no hook invocation.
-
-        Raises:
-            ValueError: The name is unknown or an attempted dependent still needs it.
-            Exception: The module's shutdown hook failed; runtime state is retained
-                for a later cleanup attempt.
-
-        Notes:
-            Does not evict imported Python modules. Modules must unregister their own
-            event handlers and close resources; this is not source-code hot reload.
-        """
-        async with self._lock:
-            await self._runtime.unload(name)
+                installed = self._dependencies.installed()
+                for name in sorted(requirements):
+                    self._dependencies.verify(name, requirements[name], installed)
+            await self._runtime.load(graph)
 
     async def remove(self, *names: str, background: bool = False) -> None:
         """Remove selected dependency claims, retaining all module source files.
@@ -572,19 +525,18 @@ class ModuleManager:
             )
 
     async def stop(self) -> None:
-        """Stop attempted modules in reverse dependency order, retaining deployment.
+        """Close runtime modules once in reverse startup order at application exit.
 
         Returns:
             None after successful cleanup. The registry, source files, installed Python
-            packages and dependency claims are preserved for future starts and loads.
+            packages and dependency claims are preserved.
 
         Raises:
-            ExceptionGroup: One or more shutdown hooks failed; other eligible cleanup
-                is still attempted. Failed modules and required prerequisites remain
-                tracked so stop or unload can retry.
+            asyncio.CancelledError: Application shutdown was interrupted.
 
         Notes:
-            Also cleans partial startup attempts. Cancellation leaves retryable state.
+            Ordinary shutdown errors are logged immediately and do not stop cleanup of
+            other modules. There is no single-module unload, reload or cleanup retry.
         """
         async with self._lock:
             await self._runtime.stop()

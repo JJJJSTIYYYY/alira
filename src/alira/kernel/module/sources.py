@@ -1,10 +1,10 @@
-"""Prepare and install module sources, rolling back failed registrations."""
+"""Prepare, install and uninstall module sources with source rollback."""
 
 import asyncio
 import shutil
 import stat
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Collection, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from tempfile import TemporaryDirectory
 from urllib.parse import quote, urlsplit
@@ -166,6 +166,60 @@ async def install_source(
                         [failure, exc],
                     ) from None
                 raise
+
+
+@contextmanager
+def uninstall_sources(modules_dir: Path, names: Collection[str]) -> Iterator[None]:
+    """Back up selected sources and move them to system trash after the body succeeds.
+
+    Args:
+        modules_dir: Source root containing the selected module directories.
+        names: Existing module names; duplicates identify the same directory once.
+
+    Yields:
+        None after source validation and backup. The caller removes dependency
+        claims inside the body and owns the surrounding dependency transaction.
+
+    Raises:
+        DependencyError: A name is invalid or a source entry is absent.
+        OSError: Backup, system trash or restoration failed.
+        BaseExceptionGroup: The original failure and incomplete source restoration.
+
+    Notes:
+        Body failure, cancellation or partial trash failure restores missing sources
+        before propagating to the caller's dependency transaction. Existing source
+        directories are preserved. No dependency records or packages are accessed.
+    """
+    from send2trash import send2trash
+
+    directories = [module_directory(modules_dir, name) for name in dict.fromkeys(names)]
+    for directory in directories:
+        if not (directory / "main.py").is_file():
+            raise DependencyError(f"Module not found: {directory.name}")
+    with TemporaryDirectory(prefix="alira-uninstall-") as temporary:
+        backup = Path(temporary)
+        for directory in directories:
+            shutil.copytree(directory, backup / directory.name, symlinks=True)
+        try:
+            yield
+            for directory in directories:
+                send2trash(str(directory))
+        except BaseException as failure:
+            errors = []
+            for directory in directories:
+                if not directory.exists():
+                    try:
+                        shutil.copytree(
+                            backup / directory.name, directory, symlinks=True
+                        )
+                    except OSError as exc:
+                        errors.append(exc)
+            if errors:
+                raise BaseExceptionGroup(
+                    "Module uninstall failed and source restoration was incomplete",
+                    [failure, *errors],
+                ) from None
+            raise
 
 
 async def prepare_module_source(

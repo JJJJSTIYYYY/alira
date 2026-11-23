@@ -33,6 +33,7 @@ class ModuleRegistry:
         self.modules: dict[str, BaseModule] = {}
         self.directories: dict[str, Path] = {}
         self.unavailable: set[str] = set()
+        self._discovered = False
 
     def register(self, module: BaseModule) -> None:
         """Register a valid initialized instance without invoking its lifecycle.
@@ -56,20 +57,24 @@ class ModuleRegistry:
         self.directories[module.name] = self.directory / module.name
 
     def discover(self) -> Mapping[str, BaseModule]:
-        """Import main entries in directory order and retain their valid instances.
+        """Import main entries once in directory order and retain valid instances.
 
         Returns:
-            Mutable registry mapping. Entries without instances populate unavailable;
-            existing registrations are retained and imported modules remain cached.
+            Mutable registry mapping. Entries without instances populate unavailable.
+            After successful discovery, later calls return the existing mapping
+            without scanning or importing entries again.
 
         Raises:
             ModuleLoadError: Ambiguous instances, duplicate names or directory mismatch.
             Exception: Original entry import failure. Earlier registrations may remain.
 
         Notes:
-            Does not resolve module dependencies or start services. Only unavailable
-            is cleared before scanning; this method is not a full registry reset.
+            Does not resolve module dependencies or start services. Failed discovery
+            can be retried; earlier registrations are retained. Configure the source
+            directory and package before the first successful discovery.
         """
+        if self._discovered:
+            return self.modules
         self.unavailable.clear()
         for path in sorted(self.directory.glob("*/main.py")):
             declaration = importlib.import_module(
@@ -86,6 +91,7 @@ class ModuleRegistry:
                 )
             self.register(module)
             self.directories[module.name] = path.parent
+        self._discovered = True
         return self.modules
 
     @staticmethod
@@ -151,7 +157,7 @@ class ModuleRegistry:
         for name in names:
             select(name)
         try:
-            tuple(TopologicalSorter(graph).static_order())
+            TopologicalSorter(graph).prepare()
         except CycleError as exc:
             raise ModuleLoadError(f"Module dependency cycle: {exc.args[1]}") from exc
         return graph

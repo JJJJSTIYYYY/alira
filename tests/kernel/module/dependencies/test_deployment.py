@@ -333,8 +333,10 @@ async def test_runtime_checks_records_without_environment_mutation(
     await manager.stop()
     assert manager._dependencies.ledger.snapshot() == snapshot
     env.installed.pop("web-runtime")
+    next_start = env.manager()
+    next_start.register(BaseModule("web", "1.0"))
     with pytest.raises(DependencyError, match="missing dependency"):
-        await manager.load("web")
+        await next_start.load("web")
 
 
 async def test_default_records_stay_in_home(

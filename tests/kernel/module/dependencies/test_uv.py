@@ -135,17 +135,16 @@ async def test_shared_transitive_packages_resolve_once_and_uninstall_at_last_ref
         "shared-pkg": "1.0",
     }
     assert manager.dependencies["shared-pkg"].ref_count == 2
-    await manager.unload("left")
+    await manager.stop()
+    assert not left.running and not right.running
     assert installed(site) == {
         "left-pkg": "1.0",
         "right-pkg": "1.0",
         "shared-pkg": "1.0",
     }
-    await manager.stop()
     await manager.remove("left")
     assert installed(site) == {"right-pkg": "1.0", "shared-pkg": "1.0"}
     assert manager.dependencies["shared-pkg"].modules == {"right"}
-    await manager.stop()
     await manager.remove(*tuple(manager._dependencies.claims))
     assert installed(site) == {}
     assert not manager.dependencies
@@ -183,11 +182,9 @@ async def test_includes_constraints_extras_markers_and_reference_counts(
     await manager.load()
     assert installed(site) == {"extra-pkg": "1.0", "leaf-pkg": "1.0"}
     assert manager.dependencies["leaf-pkg"].ref_count == 2
-    await manager.unload("extra")
     await manager.stop()
     await manager.remove("extra")
     assert installed(site) == {"leaf-pkg": "1.0"}
-    await manager.stop()
     await manager.remove(*tuple(manager._dependencies.claims))
     assert installed(site) == {}
 
@@ -212,29 +209,12 @@ async def test_kernel_packages_are_pinned_and_never_removed(
     await manager.sync()
     await manager.load()
     assert manager.dependencies["shared-pkg"].preinstalled
-    add_module(manager, packages, "incompatible", "shared-pkg==2.0")
     await manager.stop()
+    add_module(manager, packages, "incompatible", "shared-pkg==2.0")
     with pytest.raises(DependencyError, match="No solution found"):
         await manager.add("incompatible")
     await manager.remove("a")
     assert installed(site) == {"shared-pkg": "1.0"}
-
-
-async def test_running_module_versions_cannot_be_changed_by_later_load(
-    environment, module_manager_factory
-):
-    root, packages, site = environment
-    manager = module_manager_factory(root)
-    add_module(manager, packages, "left", "left-pkg")
-    await manager.add("left")
-    await manager.load("left")
-    assert installed(site)["shared-pkg"] == "2.0"
-    add_module(manager, packages, "right", "right-pkg")
-    with pytest.raises(DependencyError, match="Stop running modules"):
-        await manager.load("right", install_missing=True)
-    assert manager.dependencies["shared-pkg"].modules == {"left"}
-    assert installed(site)["shared-pkg"] == "2.0"
-    await manager.stop()
 
 
 async def test_uv_cancellation_reaps_process(tmp_path, monkeypatch):
@@ -264,8 +244,8 @@ async def test_uv_cancellation_reaps_process(tmp_path, monkeypatch):
         os.kill(int(pid_file.read_text()), 0)
 
 
-async def test_failed_startup_preserves_deployment_for_retry_or_explicit_removal(
-    environment, module_manager_factory
+async def test_failed_startup_preserves_deployment_until_explicit_removal(
+    environment, module_manager_factory, capsys
 ):
     root, packages, site = environment
     manager = module_manager_factory(root)
@@ -276,10 +256,10 @@ async def test_failed_startup_preserves_deployment_for_retry_or_explicit_removal
 
     module.startup = fail
     await manager.sync()
-    with pytest.raises(ExceptionGroup) as caught:
-        await manager.load()
-    assert "business startup failed" in str(caught.value.exceptions[0])
+    await manager.load()
+    assert "business startup failed" in capsys.readouterr().err
     assert installed(site) == {"left-pkg": "1.0", "shared-pkg": "2.0"}
+    await manager.stop()
     await manager.remove("broken")
     assert installed(site) == {}
     assert not manager.dependencies

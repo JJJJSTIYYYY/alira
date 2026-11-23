@@ -68,8 +68,7 @@ async def core_lifecycle(auto_init_factory):
     try:
         yield registry
     finally:
-        if registry._started_services or registry._pending_stop:
-            await registry.stop()
+        await registry.stop()
 
 
 @pytest.fixture

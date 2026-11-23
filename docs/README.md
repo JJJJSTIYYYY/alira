@@ -66,6 +66,11 @@ module = ExampleModule(
 `required_modules` 使用模块声明的 `name`，不是 Python 包名或 PyPI 包名。
 发现阶段只登记声明；加载时只检查选中模块及其前置模块的缺失依赖和循环依赖。前置模块就绪后才启动依赖它的模块，
 部署时独立模块的安装任务并行执行，运行时独立模块的启动任务并行执行；共享 Python 环境的文件写入锁由 uv 管理。
+启动失败只跳过依赖该模块的后续模块，其他分支继续启动。所有启动任务结束后，直接打印各条依赖链的汇总结果：
+失败模块显示为红色 `name[x]`，跳过模块显示为灰色；共享前置模块只启动一次，但会出现在各条分支中。
+启动计划仅用于展示，调度仍由拓扑排序决定。模块启动异常由 kernel 捕获后立即通过日志器逐条打印，不集中输出异常日志。
+失败或取消的模块立即调用 `shutdown()` 清理部分资源；前置模块和无关模块继续运行，CLI 不因单模块启动失败退出。
+每个管理器只执行一次模块加载，运行期间不再加载或卸载模块。退出时按实际启动顺序的逆序关闭模块；清理异常即时记录后继续关闭其他模块，不保留重试状态。
 子模块不能通过覆盖 `install()` / `uninstall()` 改变依赖管理，安装和卸载由管理器负责。
 
 ## 模块通信与共享接口
@@ -278,7 +283,7 @@ kernel/
 │   ├── __init__.py           # 插件通信统一导入入口，重导出 Apixis 公开 API
 │   └── apixis_core.py        # Apixis 生命周期和事件通信接口
 ├── lifespan/
-│   ├── auto_init.py          # 通用服务注册、启停和失败恢复
+│   ├── auto_init.py          # 通用服务注册、一次启动和退出关闭
 │   └── resource_cleaner.py   # 资源清理调度
 └── module/
     ├── base_module.py        # 模块声明和生命周期契约
@@ -287,7 +292,7 @@ kernel/
     ├── registry.py           # 声明发现、登记、路径和依赖图
     ├── runtime.py            # 模块并行启动、退出和失败清理
     ├── scaffold.py           # 最小模块源码骨架生成
-    ├── sources.py            # ZIP/GitHub 源码安装与失败回滚
+    ├── sources.py            # 源码准备、安装、卸载与失败回滚
     ├── package.py            # 清单校验、整批源码安装及可重复执行
     └── dependencies/
         ├── types.py          # 依赖信息、解析结果和错误契约
@@ -315,8 +320,7 @@ await manager.load("example")     # 离线只读校验依赖后启动
 print(await manager.check_health("example"))  # dict[str, ModuleStatus]
 print(manager.loaded)
 print(manager.dependencies)        # DependencyInfo: version、modules、ref_count、preinstalled
-await manager.unload("example")   # 有其他模块依赖它时拒绝卸载
-await manager.stop()               # 按依赖的逆序关闭所有运行服务，保留部署
+await manager.stop()               # 退出时按启动顺序的逆序关闭模块，保留部署
 await manager.remove("example")   # 释放依赖部署，保留源码；共享包保留至最后一个引用释放
 ```
 
@@ -327,20 +331,20 @@ await manager.remove("example")   # 释放依赖部署，保留源码；共享�
 模块名须为有效 Python 标识符，不能是关键字或以 `__` 开头；已有文件、目录或符号链接不会被覆盖。
 文件在模块根目录的临时目录中准备完成后迁入目标；写入失败不会留下可发现的半成品模块。
 `await manager.start()` 只发现、登记运行时模块；`install("来源")` 安装源码和依赖，`add("名称")` 管理已有模块依赖，`sync()` 全量重建，`load("名称")` 校验后启动模块。
+模块发现成功后不再重复扫描；CLI 预检查与内核启动复用同一份声明。发现前需设置好模块目录与导入包名。
 直接调用不带参数的 `load()` 会加载全部已登记模块；命令行未选择模块时不会调用它。
 `await manager.check_health(*names)` 调用指定模块的 `health()`，按模块名返回 `ModuleStatus`；
 不传名称时检查全部已登记模块，包括尚未加载的模块，空登记表返回空字典。指定名称不自动包含前置模块，重复名称只检查一次。
 接口不自动发现模块或读取部署记录；未知名称在任何检查开始前报 `ModuleLoadError`。
-检查按选择顺序执行，并与加载、卸载等操作互斥；检查钩子不能调用会获取管理器操作锁的接口。
+检查按选择顺序执行，并与加载、关闭等操作互斥；检查钩子不能调用会获取管理器操作锁的接口。
 单个模块检查抛出异常时，该模块返回 `health=False`，`message` 包含异常类型和说明，其他模块继续检查。
 调用方可以用 `asyncio.timeout(...)` 限制整次检查；调用方取消仍正常传播并释放操作锁。
-重复加载已运行模块不会重复启动或增加引用。`auto_init.start(restart=True)` 重启内核后仍需显式加载所需模块。
-公开的部署、加载和卸载操作互斥，批内按依赖关系调度任务。加载失败时取消尚在执行的任务并清理
-未成功启动的模块；已经启动成功的独立模块保留运行，可通过 `stop()` 统一关闭。
-关闭失败时保留运行清理状态，调用 `unload()` / `stop()` 重试；部署移除失败时执行 `sync()` 从实际源码恢复环境。
-`unload()` / `stop()` 只停止服务和释放运行资源，依赖包与部署引用保留到显式 remove。
-它们不清除 `sys.modules`、Python 类定义或自动撤销 Apixis handler；模块必须在 shutdown 中自行注销 handler。
-这不是热重载：同进程再次 load 会复用已导入的定义，升级代码或依赖后需要重启进程。
+`load()` 在同一管理器上只能执行一次，重复调用报 `RuntimeError`；应用运行期间不提供模块加载或卸载接口。
+启动任务按拓扑关系调度，单模块失败只跳过后续依赖模块；该模块的部分资源立即清理，已成功启动的模块保持运行。
+`stop()` 只在退出时统一关闭模块，逐项记录清理异常并继续；重复调用不再执行已处理的关闭钩子。
+依赖包与部署引用保留到显式 remove，部署移除失败时执行 `sync()` 从实际源码恢复环境。
+管理器不清除 `sys.modules`、Python 类定义或自动撤销 Apixis handler；模块必须在 `shutdown()` 中自行注销 handler。
+升级代码或依赖后需要重启进程。
 测试可通过私有 `_new_for_tests()` 工厂创建独立管理器/生命周期实例，不重置或丢弃正在运行的全局单例。
 
 ## web 模块与进程入口
@@ -390,7 +394,8 @@ ALIRA_TEST_NETWORK=1 ALIRA_TEST_SYSTEM_TRASH=1 uv run --with-requirements tests/
 `main.py` 只保留程序入口。`cli/entrypoint.py` 负责分发，`cli/parser.py` 构建参数解析器，
 每个管理命令位于独立的 `cli/commands/` 文件中。`cli/application.py` 只在运行应用时导入，
 负责启动 Logo、进程信号和内核生命周期；管理命令不注册信号处理器。FastAPI 逻辑由 web 模块拥有。
-所有服务按注册顺序启动、逆序停止，因此退出时先关闭模块，再关闭事件核心和日志服务。
+内核服务只启动一次，按注册顺序启动；某个基础服务启动失败时立即记录异常并终止应用启动。
+退出时按注册顺序的逆序逐项关闭所有已登记服务，因此先关闭模块，再关闭事件核心和日志服务；关闭异常即时记录后继续，不重试。
 Ctrl+C 和 SIGTERM 都会进入这一清理流程；Uvicorn 的最后一条退出日志在 `logger.stop()` 排空并关闭写入线程前产生，服务器无需额外的日志作用域。
 
 发布前可执行 `python scripts/check_distribution.py dist/<wheel文件名>.whl` 核对发行名和规范版本。

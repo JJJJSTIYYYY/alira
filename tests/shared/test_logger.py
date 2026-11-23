@@ -306,24 +306,23 @@ def test_shutdown_drains_accepted_records_and_releases_blocked_producer(tmp_path
 
 
 async def test_server_joins_writer_even_if_service_shutdown_fails(
-    writer, core_lifecycle, kernel_lifecycle
+    writer, core_lifecycle, kernel_lifecycle, capsys
 ):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    core_lifecycle.register(
-        SimpleNamespace(
-            start=AsyncMock(),
-            stop=AsyncMock(side_effect=[ValueError("cleanup failed"), None]),
-        )
+    service = SimpleNamespace(
+        start=AsyncMock(),
+        stop=AsyncMock(side_effect=ValueError("cleanup failed")),
     )
+    core_lifecycle.register(service)
     from alira.modules.web.src.application import create_app
 
     app = create_app()
-    with pytest.raises(ExceptionGroup, match="Failed to stop services") as caught:
-        async with kernel_lifecycle.lifespan(), app.router.lifespan_context(app):
-            assert writer._thread is not None
-    assert str(caught.value.exceptions[0]) == "cleanup failed"
+    async with kernel_lifecycle.lifespan(), app.router.lifespan_context(app):
+        assert writer._thread is not None
+    assert "ValueError: cleanup failed" in capsys.readouterr().err
+    service.stop.assert_awaited_once()
     assert writer._thread is None
 
 

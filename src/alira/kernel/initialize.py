@@ -33,13 +33,14 @@ async def lifespan():
         ModuleManager.start but are not loaded until ModuleManager.load is called.
 
     Raises:
-        ExceptionGroup: Start or stop hooks failed; see AutoInit for retry state.
-        BaseException: The context body failed or was cancelled. The finally block
-            still attempts stop; a stop failure can replace that body exception.
+        Exception: A kernel service failed to start, logged before propagation.
+        BaseException: Startup or the context body failed or was cancelled. The
+            finally block still closes registered services in reverse order.
 
     Notes:
         Kernel services stop in reverse registration order, including after partial
-        startup. Deployed sources and Python dependency records are preserved.
+        startup. Ordinary shutdown failures are logged individually while remaining
+        services continue closing. Deployed sources and dependency records remain.
     """
     initialize()
     try:

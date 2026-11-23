@@ -1,7 +1,8 @@
 import asyncio
 import importlib
 import sys
-from unittest.mock import AsyncMock
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -24,6 +25,17 @@ class Service(BaseModule):
 @pytest.fixture
 def manager(tmp_path, module_manager_factory):
     return module_manager_factory(tmp_path)
+
+
+@pytest.fixture
+def startup_errors(monkeypatch):
+    errors = []
+
+    def log(message):
+        errors.append((message, sys.exception()))
+
+    monkeypatch.setattr("alira.kernel.module.runtime.logger.exception", log)
+    return errors
 
 
 def test_discovery_skips_legacy_and_defers_business_imports(
@@ -53,6 +65,49 @@ def test_discovery_skips_legacy_and_defers_business_imports(
     manager = module_manager_factory(root, package=package)
     assert list(manager.discover()) == ["demo"]
     assert manager.discover()["demo"] is manager.modules["demo"]
+
+
+@pytest.mark.parametrize("declaration", [None, "", "module = BaseModule('demo', '1')"])
+async def test_preflight_and_kernel_start_share_one_discovery(
+    tmp_path, monkeypatch, module_manager_factory, declaration
+):
+    package = f"modules_{uuid4().hex}"
+    root = tmp_path / package
+    root.mkdir()
+    (root / "__init__.py").touch()
+    if declaration is not None:
+        folder = root / "demo"
+        folder.mkdir()
+        (folder / "__init__.py").touch()
+        (folder / "main.py").write_text(
+            "from alira.kernel.module import BaseModule\n" + declaration
+        )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    manager = module_manager_factory(root, package=package)
+    expected = dict(manager.discover())
+    unavailable = manager.unavailable
+    with monkeypatch.context() as patcher:
+        patcher.setattr(Path, "glob", Mock(side_effect=AssertionError("Repeated scan")))
+        await manager.start()
+        assert dict(manager.discover()) == expected
+    assert manager.unavailable == unavailable
+
+
+async def test_modules_without_requirements_skip_environment_verification(
+    manager, monkeypatch
+):
+    module = Service("minimal", [])
+    manager.register(module)
+    for method in ("restore", "installed", "verify"):
+        monkeypatch.setattr(
+            manager._dependencies,
+            method,
+            Mock(side_effect=AssertionError("Unnecessary dependency verification")),
+        )
+    await manager.load("minimal")
+    assert manager.loaded == {"minimal"}
+    module.startup.assert_awaited_once()
+    await manager.stop()
 
 
 @pytest.mark.parametrize(
@@ -144,7 +199,7 @@ def test_register_rejects_duplicate_names_but_allows_the_same_instance(manager):
     assert dict(manager.modules) == {"demo": original}
 
 
-async def test_load_order_selected_closure_and_unload_protection(manager):
+async def test_load_selected_closure_and_close_in_reverse_order(manager):
     calls = []
     for name, dependencies in [
         ("c", ["b"]),
@@ -154,10 +209,7 @@ async def test_load_order_selected_closure_and_unload_protection(manager):
     ]:
         manager.register(Service(name, calls, required_modules=dependencies))
     await manager.load("c")
-    await manager.load("c")
     assert calls == ["start:a", "start:b", "start:c"]
-    with pytest.raises(ValueError, match="required by"):
-        await manager.unload("a")
     await manager.stop()
     assert calls == ["start:a", "start:b", "start:c", "stop:c", "stop:b", "stop:a"]
     assert manager.loaded == frozenset()
@@ -225,14 +277,224 @@ async def test_startup_failure_stops_partial_resources_and_blocks_dependents(man
     child = Service("child", calls, required_modules=["broken"])
     manager.register(broken)
     manager.register(child)
-    with pytest.raises(ExceptionGroup, match="unhandled errors"):
-        await manager.load()
+    await manager.load()
     broken.shutdown.assert_awaited_once()
     child.startup.assert_not_awaited()
     assert not manager.loaded
     assert not manager.dependencies
-    broken.startup.side_effect = None
+    await manager.stop()
+    broken.shutdown.assert_awaited_once()
+    child.shutdown.assert_not_awaited()
+
+
+async def test_failed_startup_cleans_before_independent_startup_finishes(manager):
+    cleaned = asyncio.Event()
+    broken = Service("broken", [])
+    broken.startup.side_effect = RuntimeError("startup failed")
+    broken.shutdown.side_effect = cleaned.set
+    independent = Service("independent", [])
+    independent.startup.side_effect = cleaned.wait
+    manager.register(broken)
+    manager.register(independent)
+    await asyncio.wait_for(manager.load(), 2)
+    assert manager.loaded == {"independent"}
+    broken.shutdown.assert_awaited_once()
+    independent.shutdown.assert_not_awaited()
+    await manager.stop()
+    broken.shutdown.assert_awaited_once()
+    independent.shutdown.assert_awaited_once()
+
+
+@pytest.mark.parametrize("failure", [None, "agent", "database", "plugin"])
+async def test_load_reports_shared_dependency_paths_after_all_branches_finish(
+    manager, capsys, startup_errors, failure
+):
+    database_finished = asyncio.Event()
+    for name, dependencies in [
+        ("agent", []),
+        ("database", ["agent"]),
+        ("web", ["database"]),
+        ("plugin", ["agent"]),
+        ("outer", ["plugin"]),
+    ]:
+        module = Service(name, [], required_modules=dependencies)
+
+        async def startup(name=name):
+            if name == "database":
+                database_finished.set()
+            if name == "plugin":
+                await database_finished.wait()
+                # A failing parallel startup must not cancel this slower branch.
+                await asyncio.sleep(0)
+            assert "modules load " not in capsys.readouterr().out
+            if name == failure:
+                raise RuntimeError(f"{name} failed")
+
+        module.startup.side_effect = startup
+        manager.register(module)
+
+    await asyncio.wait_for(manager.load("web", "agent", "outer", "web"), 2)
+    assert [str(error) for _, error in startup_errors] == (
+        [f"{failure} failed"] if failure else []
+    )
+
+    chains = [("agent", "database", "web"), ("agent", "plugin", "outer")]
+    expected = []
+    loaded = set()
+    for chain in chains:
+        skipped = False
+        parts = []
+        for name in chain:
+            if skipped:
+                parts.append(f"\033[90m{name}\033[0m")
+            elif name == failure:
+                parts.append(f"\033[31m{name}[x]\033[0m")
+                skipped = True
+            else:
+                parts.append(name)
+                loaded.add(name)
+        result = "failed" if skipped else "success"
+        expected.append(f"modules load {result}: {' -> '.join(parts)}")
+    assert capsys.readouterr().out.splitlines() == expected
+    assert manager.loaded == loaded
+    for name, module in manager.modules.items():
+        assert module.startup.await_count == int(name in loaded or name == failure)
+        assert module.shutdown.await_count == int(name == failure)
+    await manager.stop()
+    for name, module in manager.modules.items():
+        assert module.shutdown.await_count == int(name in loaded or name == failure)
+
+
+@pytest.mark.parametrize("failed", [(), ("left",), ("left", "right")])
+async def test_join_waits_for_all_prerequisites_and_skips_after_failure(
+    manager, capsys, startup_errors, failed
+):
+    entered = {name: asyncio.Event() for name in ("left", "right")}
+    for name, ready in entered.items():
+        module = Service(name, [])
+
+        async def startup(name=name, ready=ready):
+            ready.set()
+            await entered["right" if name == "left" else "left"].wait()
+            if name in failed:
+                raise RuntimeError(name)
+
+        module.startup.side_effect = startup
+        manager.register(module)
+    child = Service("child", [], required_modules=["left", "right"])
+    manager.register(child)
+    await asyncio.wait_for(manager.load("child"), 2)
+    assert {str(error) for _, error in startup_errors} == set(failed)
+    if failed:
+        child.startup.assert_not_awaited()
+    else:
+        child.startup.assert_awaited_once()
+    expected = []
+    for name in entered:
+        parent = f"\033[31m{name}[x]\033[0m" if name in failed else name
+        result = "failed" if failed else "success"
+        tail = "\033[90mchild\033[0m" if failed else "child"
+        expected.append(f"modules load {result}: {parent} -> {tail}")
+    assert capsys.readouterr().out.splitlines() == expected
+    assert manager.loaded == set(entered) - set(failed) | (
+        set() if failed else {"child"}
+    )
+    await manager.stop()
+
+
+@pytest.mark.parametrize("selection", ["parent", "child", "unrelated"])
+@pytest.mark.parametrize("after_stop", [False, True])
+async def test_load_is_once_per_application(manager, selection, after_stop):
+    parent = Service("parent", [])
+    child = Service("child", [], required_modules=["parent"])
+    unrelated = Service("unrelated", [])
+    manager.register(parent)
+    manager.register(child)
+    manager.register(unrelated)
+    await manager.load("parent")
+    if after_stop:
+        await manager.stop()
+    with pytest.raises(RuntimeError, match="only be loaded once"):
+        await manager.load(selection)
+    parent.startup.assert_awaited_once()
+    child.startup.assert_not_awaited()
+    unrelated.startup.assert_not_awaited()
+    await manager.stop()
+
+
+async def test_load_reports_results_even_when_failed_startup_cleanup_fails(
+    manager, capsys, startup_errors
+):
+    broken = Service("broken", [])
+    broken.startup.side_effect = RuntimeError("startup")
+    broken.shutdown.side_effect = [RuntimeError("cleanup"), None]
+    healthy = Service("healthy", [])
+    manager.register(broken)
+    manager.register(healthy)
     await manager.load()
+    assert [(message, str(error)) for message, error in startup_errors] == [
+        ("[module:broken] startup failed", "startup"),
+        ("[module:broken] shutdown failed", "cleanup"),
+    ]
+    assert capsys.readouterr().out.splitlines() == [
+        "modules load failed: \033[31mbroken[x]\033[0m",
+        "modules load success: healthy",
+    ]
+    assert manager.loaded == {"healthy"}
+    await manager.stop()
+    broken.shutdown.assert_awaited_once()
+    healthy.shutdown.assert_awaited_once()
+    assert not manager._runtime.active
+
+
+async def test_startup_errors_are_logged_before_other_prerequisites_finish(
+    manager, capsys
+):
+    first_failed, second_failed = asyncio.Event(), asyncio.Event()
+    for name, dependencies in [
+        ("parent", []),
+        ("first", ["parent"]),
+        ("second", []),
+        ("late", []),
+        ("child", ["first", "late"]),
+        ("other", ["late"]),
+    ]:
+        module = Service(name, [], required_modules=dependencies)
+
+        async def startup(name=name):
+            if name == "first":
+                first_failed.set()
+                raise RuntimeError("first failure")
+            if name == "second":
+                await first_failed.wait()
+                captured = capsys.readouterr()
+                assert "[module:first] startup failed" in captured.err
+                assert "RuntimeError: first failure" in captured.err
+                assert "modules load " not in captured.out
+                second_failed.set()
+                raise ValueError("second failure")
+            if name == "late":
+                await second_failed.wait()
+                captured = capsys.readouterr()
+                assert "[module:second] startup failed" in captured.err
+                assert "ValueError: second failure" in captured.err
+                assert "first failure" not in captured.err
+                assert "modules load " not in captured.out
+
+        module.startup.side_effect = startup
+        manager.register(module)
+
+    await asyncio.wait_for(manager.load("child", "second", "other"), 2)
+    assert manager.loaded == {"parent", "late", "other"}
+    manager.modules["child"].startup.assert_not_awaited()
+    for name in manager.loaded:
+        manager.modules[name].shutdown.assert_not_awaited()
+    assert capsys.readouterr().out.splitlines() == [
+        "modules load failed: parent -> \033[31mfirst[x]\033[0m -> \033[90mchild\033[0m",
+        "modules load failed: late -> \033[90mchild\033[0m",
+        "modules load failed: \033[31msecond[x]\033[0m",
+        "modules load success: late -> other",
+    ]
     await manager.stop()
 
 
@@ -273,20 +535,24 @@ async def test_missing_explicit_requirements_is_an_error(manager):
         await manager.load()
 
 
-async def test_failed_child_shutdown_keeps_prerequisite_running_for_retry(manager):
+async def test_shutdown_failure_is_logged_and_remaining_modules_close_once(
+    manager, startup_errors
+):
     calls = []
     parent = Service("parent", calls)
     child = Service("child", calls, required_modules=["parent"])
-    child.shutdown.side_effect = [RuntimeError("not stopped"), None]
+    child.shutdown.side_effect = RuntimeError("not stopped")
     manager.register(parent)
     manager.register(child)
     await manager.load()
-    with pytest.raises(ExceptionGroup, match="Failed to unload modules"):
-        await manager.stop()
-    assert manager.loaded == {"parent", "child"}
-    parent.shutdown.assert_not_awaited()
+    await manager.stop()
+    assert [(message, str(error)) for message, error in startup_errors] == [
+        ("[module:child] shutdown failed", "not stopped")
+    ]
+    assert calls == ["start:parent", "start:child", "stop:parent"]
     await manager.stop()
     assert not manager.loaded
+    child.shutdown.assert_awaited_once()
     parent.shutdown.assert_awaited_once()
 
 
@@ -337,15 +603,18 @@ async def test_unselected_module_dependencies_do_not_block_loading_or_shutdown(m
     assert calls == ["start:selected", "stop:selected"]
 
 
-async def test_startup_import_error_names_module_dependency_and_repair(manager):
+async def test_startup_import_error_names_module_dependency_and_repair(
+    manager, startup_errors
+):
     module = Service("plugin", [])
     module.startup.side_effect = ModuleNotFoundError(
         "No module named 'fastapi'", name="fastapi"
     )
     manager.register(module)
-    with pytest.raises(ExceptionGroup) as caught:
-        await manager.load("plugin")
-    error = caught.value.exceptions[0]
+    await manager.load("plugin")
+    assert len(startup_errors) == 1
+    message, error = startup_errors[0]
+    assert message == "[module:plugin] startup failed"
     assert isinstance(error, ModuleLoadError)
     assert error.module == "plugin"
     assert error.missing == "fastapi"
@@ -353,7 +622,7 @@ async def test_startup_import_error_names_module_dependency_and_repair(manager):
     assert "fastapi" in str(error)
     module.shutdown.assert_awaited_once()
     assert not manager.loaded
-    assert not manager._runtime.startup_attempted
+    assert not manager._runtime.active
 
 
 async def test_health_checks_all_registered_modules_without_loading_them(manager):
@@ -363,7 +632,9 @@ async def test_health_checks_all_registered_modules_without_loading_them(manager
         "inactive", calls, required_modules=["missing"], requirements_txt="missing.txt"
     )
     active = Service("active", calls)
-    inactive.health = AsyncMock(return_value={"health": False, "message": "Not started."})
+    inactive.health = AsyncMock(
+        return_value={"health": False, "message": "Not started."}
+    )
     manager.register(inactive)
     manager.register(active)
     await manager.load("active")
@@ -405,7 +676,12 @@ async def test_unknown_health_selection_fails_before_any_hook_runs(manager):
 
 
 @pytest.mark.parametrize(
-    "error", [RuntimeError("Health probe failed"), TimeoutError("Probe timed out"), ValueError()]
+    "error",
+    [
+        RuntimeError("Health probe failed"),
+        TimeoutError("Probe timed out"),
+        ValueError(),
+    ],
 )
 async def test_health_failure_returns_false_and_continues_other_checks(manager, error):
     broken, healthy = Service("broken", []), Service("healthy", [])
@@ -421,10 +697,12 @@ async def test_health_failure_returns_false_and_continues_other_checks(manager, 
     }
     broken.health.assert_awaited_once_with()
     healthy.health.assert_awaited_once_with()
-    assert await asyncio.wait_for(manager.check_health("healthy"), 1) == {"healthy": report}
+    assert await asyncio.wait_for(manager.check_health("healthy"), 1) == {
+        "healthy": report
+    }
 
 
-async def test_health_cancellation_releases_waiting_unload(manager):
+async def test_health_cancellation_releases_waiting_application_shutdown(manager):
     entered = asyncio.Event()
     module = Service("service", [])
 
@@ -436,22 +714,61 @@ async def test_health_cancellation_releases_waiting_unload(manager):
     manager.register(module)
     await manager.load("service")
     checking = asyncio.create_task(manager.check_health("service"))
-    unloading = None
+    stopping = None
     try:
         await asyncio.wait_for(entered.wait(), 1)
-        unloading = asyncio.create_task(manager.unload("service"))
+        stopping = asyncio.create_task(manager.stop())
         await asyncio.sleep(0)
         module.shutdown.assert_not_awaited()
-        assert not unloading.done()
+        assert not stopping.done()
         checking.cancel()
         with pytest.raises(asyncio.CancelledError):
             await checking
-        await asyncio.wait_for(unloading, 1)
+        await asyncio.wait_for(stopping, 1)
         module.shutdown.assert_awaited_once_with()
         assert not manager.loaded
     finally:
         checking.cancel()
         await asyncio.gather(checking, return_exceptions=True)
-        if unloading is not None:
-            await asyncio.wait_for(unloading, 1)
+        if stopping is not None:
+            await asyncio.wait_for(stopping, 1)
         await manager.stop()
+
+
+async def test_cancellation_waits_for_failed_startup_cleanup_without_repeating_shutdown(
+    manager,
+):
+    cleanup_started, release_cleanup = asyncio.Event(), asyncio.Event()
+    resources = set()
+    broken = Service("broken", [])
+
+    async def startup():
+        resources.add("resource")
+        raise RuntimeError("startup failed after acquiring a resource")
+
+    async def shutdown():
+        cleanup_started.set()
+        await release_cleanup.wait()
+        resources.remove("resource")
+
+    broken.startup.side_effect = startup
+    broken.shutdown.side_effect = shutdown
+    manager.register(broken)
+    loading = asyncio.create_task(manager.load())
+    try:
+        await asyncio.wait_for(cleanup_started.wait(), 2)
+        loading.cancel()
+        await asyncio.sleep(0)
+        assert not loading.done()
+        assert resources == {"resource"}
+        release_cleanup.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(loading, 2)
+        assert not resources
+        assert not manager.loaded
+        assert not manager._runtime.active
+        await manager.stop()
+        broken.shutdown.assert_awaited_once()
+    finally:
+        release_cleanup.set()
+        await asyncio.gather(loading, return_exceptions=True)

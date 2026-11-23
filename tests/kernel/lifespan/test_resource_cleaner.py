@@ -32,3 +32,20 @@ async def test_creating_isolated_cleaner_does_not_discard_running_work(resource_
     assert task.done()
     assert running._task is None
     assert ResourceCleaner() is resource_cleaner
+
+
+async def test_decorated_cleanup_keeps_direct_calls_and_registration_deduplication(
+    resource_cleaner_factory,
+):
+    cleaner = resource_cleaner_factory()
+    calls = []
+
+    @cleaner.auto_clear
+    async def cleanup(label="scheduled"):
+        calls.append(label)
+        return 1
+
+    assert await cleanup("manual") == 1
+    cleaner.register(cleanup)
+    await cleaner.run_once()
+    assert calls == ["manual", "scheduled"]

@@ -89,8 +89,9 @@ class BaseModule:
             None. Successful completion marks the module loaded.
 
         Raises:
-            Exception: A startup failure, propagated through the manager's task group.
-                An ImportError is reported as ModuleLoadError with a repair hint.
+            Exception: A startup failure, caught and logged immediately by the kernel.
+                Dependents are skipped; prerequisites and unrelated modules keep
+                running. An ImportError is logged as ModuleLoadError with a repair hint.
 
         Notes:
             Record acquired resources incrementally: shutdown may be called after
@@ -107,11 +108,12 @@ class BaseModule:
             None when cleanup has completed.
 
         Raises:
-            Exception: Cleanup failed. The manager retains pending runtime state so
-                a later unload or stop can retry this hook.
+            Exception: Cleanup failed. The kernel logs the error immediately and
+                continues closing other modules without retrying this hook.
 
         Notes:
-            Support repeated cleanup attempts and partially initialized state.
+            Support cleanup of partially initialized state after startup fails or is
+            cancelled. The kernel invokes this hook once for each startup attempt.
             Shutdown does not uninstall Python dependencies or clear import caches.
         """
 

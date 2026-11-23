@@ -21,7 +21,7 @@ def test_declaration_does_not_import_web_business_packages():
     )
 
 
-async def test_web_module_serves_health_and_restarts_with_core(monkeypatch, core_lifecycle, module_manager_factory, kernel_lifecycle):
+async def test_web_module_serves_health_and_stops_with_core(monkeypatch, core_lifecycle, module_manager_factory, kernel_lifecycle):
     runtime = importlib.import_module("alira.modules.web.src.runtime")
     monkeypatch.setattr(runtime, "BASE_URL", "http://127.0.0.1:0")
     manager = module_manager_factory()
@@ -29,24 +29,23 @@ async def test_web_module_serves_health_and_restarts_with_core(monkeypatch, core
     # Requirements are already provided by the test environment. Package
     # installation is exercised against a separate environment in kernel tests.
     monkeypatch.setattr(manager._registry, "requirements_path", lambda name: None)
-    for _ in range(2):
-        async with kernel_lifecycle.lifespan():
-            assert not manager.loaded
-            await manager.load("web")
-            assert manager.loaded == {"web"}
-            web = manager.modules["web"]._runtime
-            serving = web.task
-            port = web.server.servers[0].sockets[0].getsockname()[1]
-            async with AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
-                response = await client.get("/health")
-            assert response.status_code == 200
-            assert response.json() == {"status": "ok", "service": "alira"}
-        assert serving.done()
+    async with kernel_lifecycle.lifespan():
         assert not manager.loaded
-        assert not manager.dependencies
+        await manager.load("web")
+        assert manager.loaded == {"web"}
+        web = manager.modules["web"]._runtime
+        serving = web.task
+        port = web.server.servers[0].sockets[0].getsockname()[1]
+        async with AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+            response = await client.get("/health")
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok", "service": "alira"}
+    assert serving.done()
+    assert not manager.loaded
+    assert not manager.dependencies
 
 
-async def test_failed_web_bind_does_not_leave_resources_or_package_claims(tmp_path, monkeypatch, module_manager_factory):
+async def test_failed_web_bind_does_not_leave_resources_or_package_claims(tmp_path, monkeypatch, module_manager_factory, capsys):
     runtime = importlib.import_module("alira.modules.web.src.runtime")
     with socket.socket() as occupied:
         occupied.bind(("127.0.0.1", 0))
@@ -56,9 +55,8 @@ async def test_failed_web_bind_does_not_leave_resources_or_package_claims(tmp_pa
         manager = module_manager_factory(tmp_path)
         module = WebModule()
         manager.register(module)
-        with pytest.raises(ExceptionGroup) as caught:
-            await manager.load()
-        assert "Web server startup failed" in str(caught.value.exceptions[0])
+        await manager.load()
+        assert "Web server startup failed" in capsys.readouterr().err
         assert module._runtime is None
         assert not manager.loaded
         assert not manager.dependencies

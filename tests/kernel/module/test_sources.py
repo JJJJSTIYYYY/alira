@@ -5,6 +5,7 @@ import importlib
 import io
 import stat
 import sys
+from pathlib import Path
 from threading import Event
 from urllib.error import URLError
 from uuid import uuid4
@@ -108,6 +109,80 @@ async def test_add_preserves_existing_sources(source_manager, tmp_path):
     assert sentinel.read_text() == "local settings"
     assert not (existing / "main.py").exists()
     assert not source_manager._dependencies.ledger.path.exists()
+
+
+@pytest.mark.parametrize("trash_fails", [False, True])
+async def test_uninstall_coordinates_source_and_dependency_rollback(
+    source_manager, tmp_path, monkeypatch, trash_fails
+):
+    for name in ("one", "two"):
+        await source_manager.install(
+            str(module_zip(tmp_path / f"{name}.zip", name=name))
+        )
+    before = source_manager._dependencies.ledger.snapshot()
+    original_sources = {
+        path: path.read_bytes()
+        for name in ("one", "two")
+        for path in (source_manager.modules_dir / name).rglob("*")
+        if path.is_file()
+    }
+    trash = tmp_path / "trash"
+    trash.mkdir()
+    calls = []
+
+    def send_to_trash(raw_path):
+        path = Path(raw_path)
+        calls.append(path.name)
+        assert not source_manager.deployments
+        if trash_fails and len(calls) == 2:
+            raise OSError("trash unavailable")
+        path.rename(trash / path.name)
+
+    monkeypatch.setattr("send2trash.send2trash", send_to_trash)
+    if trash_fails:
+        restore = source_manager._dependencies.ledger.restore
+
+        def restore_dependencies(snapshot):
+            # Source restoration must precede dependency rollback.
+            assert all(
+                path.read_bytes() == content
+                for path, content in original_sources.items()
+            )
+            restore(snapshot)
+
+        monkeypatch.setattr(
+            source_manager._dependencies.ledger, "restore", restore_dependencies
+        )
+        with pytest.raises(OSError, match="trash unavailable"):
+            await source_manager.uninstall("one", "two", "one")
+        assert source_manager._dependencies.ledger.snapshot() == before
+        assert source_manager.deployments == {"one", "two"}
+    else:
+        await source_manager.uninstall("one", "two", "one")
+        assert source_manager.list() == []
+        assert not source_manager.deployments
+    assert calls == ["one", "two"]
+
+
+async def test_uninstall_cancellation_restores_claims_and_preserves_sources(
+    source_manager, tmp_path, monkeypatch
+):
+    await source_manager.install(str(module_zip(tmp_path / "plugin.zip")))
+    before = source_manager._dependencies.ledger.snapshot()
+    remove = source_manager.remove
+
+    async def cancelled_remove(*names, **options):
+        await remove(*names, **options)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(source_manager, "remove", cancelled_remove)
+    with pytest.raises(asyncio.CancelledError):
+        await source_manager.uninstall("plugin")
+    assert source_manager._dependencies.ledger.snapshot() == before
+    assert source_manager.list() == ["plugin"]
+    assert (
+        source_manager.modules_dir / "plugin/src/service.py"
+    ).read_text() == "value = 42\n"
 
 
 @pytest.mark.parametrize("wrapper", ["", "repository-commit"])

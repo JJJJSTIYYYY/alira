@@ -6,7 +6,6 @@ from tempfile import TemporaryDirectory
 from alira.kernel.module.catalog import module_directory
 from alira.kernel.module.dependencies.types import DependencyError
 
-
 _MAIN_TEMPLATE = '''"""Module declaration and lifecycle hooks."""
 
 from alira.kernel.module import BaseModule, ModuleStatus

@@ -44,8 +44,8 @@ class ModuleLoadError(DependencyError):
     """A declaration, runtime dependency graph or deferred startup import is invalid.
 
     Inherits DependencyError's message/context constructor. Discovery and graph
-    validation raise it directly; concurrent startup ImportError failures appear
-    inside a task-group exception and carry module, missing and repair metadata.
+    validation raise it directly; startup ImportError failures are wrapped with
+    module, missing and repair metadata, then logged immediately by the kernel.
     """
 
 

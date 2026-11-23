@@ -2,7 +2,6 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from functools import wraps
 
 from alira.shared.application.config import CACHE_CLEAN_INTERVAL
 from alira.shared.logger import logger
@@ -54,22 +53,22 @@ class ResourceCleaner:
 
         Notes:
             No signature/result validation is performed at registration. Use this
-            method for synchronous callbacks; auto_clear wraps asynchronous functions.
+            method for direct registration; auto_clear provides decorator syntax.
         """
         if func not in self._cleaners:
             self._cleaners.append(func)
             logger.debug(f"Registered: {func.__name__}")
 
     def auto_clear(self, func: Callable):
-        """Register an async cleanup function and return a metadata-preserving wrapper.
+        """Register an async cleanup function and return it unchanged.
 
         Args:
             func: Async callable that can be invoked without arguments by the scheduler
                 and may return an int count. The original function is registered.
 
         Returns:
-            Async wrapper forwarding its arguments to func and awaiting its result.
-            Use register instead for a synchronous cleanup callback.
+            The original async function. Direct calls retain their arguments, result
+            and metadata. Use register for a synchronous cleanup callback.
 
         Example:
             @resource_cleaner.auto_clear
@@ -78,13 +77,7 @@ class ResourceCleaner:
         """
 
         self.register(func)
-
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            """Await the decorated callback with the caller-supplied arguments."""
-            return await func(*args, **kwargs)
-
-        return wrapper
+        return func
 
     async def start(self):
         """Start one background cleanup loop if it is not already running.

@@ -1,7 +1,6 @@
 """Rebuild dependency records from sources and synchronize the runtime environment."""
 
 import csv
-import importlib
 import io
 import os
 import re
@@ -153,7 +152,6 @@ class ModuleDependencies:
         ledger: Persistent deployment record/lock owner.
         claims: Restored module-to-package/version ownership map.
         requirement_hashes: Restored per-module input fingerprints.
-        required_modules: Restored per-module prerequisite names.
     """
 
     def __init__(self, state_dir: Path):
@@ -161,7 +159,6 @@ class ModuleDependencies:
         self.ledger = DependencyLedger(state_dir)
         self.claims: dict[str, dict[str, str]] = {}
         self.requirement_hashes = {}
-        self.required_modules = {}
 
     @staticmethod
     def installed() -> dict[str, str]:
@@ -189,10 +186,6 @@ class ModuleDependencies:
         }
         self.requirement_hashes = {
             name: record.get("requirements_hash")
-            for name, record in state["modules"].items()
-        }
-        self.required_modules = {
-            name: record["required_modules"]
             for name, record in state["modules"].items()
         }
         return state
@@ -447,7 +440,6 @@ class ModuleDependencies:
         if removable:
             _release_kernel_file_claims(removable, protected)
             await run_uv("uninstall", *removable, cwd=cwd, capture=background)
-        importlib.invalidate_caches()
 
     async def remove(
         self, names: Collection[str], *, cwd: Path, background: bool = False

@@ -56,6 +56,7 @@ def application(tmp_path, monkeypatch, module_manager_factory, auto_init_factory
 
 async def test_cli_loads_only_requested_modules_and_prerequisites_after_kernel_start(
     application,
+    capsys,
 ):
     manager, calls, _ = application
     task = asyncio.create_task(cli.run(["run", "child", "base", "child"]))
@@ -76,6 +77,75 @@ async def test_cli_loads_only_requested_modules_and_prerequisites_after_kernel_s
         "stop:base",
         "core:stop",
     ]
+    assert [
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("modules load ")
+    ] == ["modules load success: base -> child"]
+
+
+async def test_cli_keeps_prerequisites_and_independent_modules_running_after_failure(
+    application, capsys, monkeypatch
+):
+    manager, calls, _ = application
+    failed = asyncio.Event()
+    loaded = asyncio.Event()
+    load = manager.load
+
+    async def load_modules(*names, **options):
+        await load(*names, **options)
+        loaded.set()
+
+    monkeypatch.setattr(manager, "load", load_modules)
+
+    async def broken_startup():
+        calls.append("start:child")
+        failed.set()
+        raise RuntimeError("child failed")
+
+    async def independent_startup():
+        await failed.wait()
+        await asyncio.sleep(0)
+        captured = capsys.readouterr()
+        assert "modules load " not in captured.out
+        assert "[module:child] startup failed" in captured.err
+        assert "RuntimeError: child failed" in captured.err
+        calls.append("start:independent")
+
+    async def broken_shutdown():
+        calls.append("stop:child")
+
+    manager.modules["child"].startup = broken_startup
+    manager.modules["child"].shutdown = broken_shutdown
+    independent = BaseModule("independent", "1")
+    independent.startup = independent_startup
+    independent.shutdown = AsyncMock(
+        side_effect=lambda: calls.append("stop:independent")
+    )
+    manager.register(independent)
+    task = asyncio.create_task(cli.run(["run", "child", "independent"]))
+    try:
+        await asyncio.wait_for(loaded.wait(), 2)
+        assert not task.done()
+        assert manager.loaded == {"base", "independent"}
+        assert "stop:base" not in calls
+        assert "stop:independent" not in calls
+        assert "core:stop" not in calls
+        assert [
+            line
+            for line in capsys.readouterr().out.splitlines()
+            if line.startswith("modules load ")
+        ] == [
+            "modules load failed: base -> \033[31mchild[x]\033[0m",
+            "modules load success: independent",
+        ]
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert "stop:independent" in calls
+    assert calls[-1] == "core:stop"
+    assert not manager.loaded
 
 
 async def test_run_without_modules_runs_only_the_kernel(application):
@@ -129,7 +199,9 @@ async def test_cli_rejects_missing_command_or_unknown_modules(
 
 
 @pytest.mark.parametrize("flag", ["--help", "-h"])
-async def test_cli_help_lists_commands_without_discovering_modules(application, capsys, flag):
+async def test_cli_help_lists_commands_without_discovering_modules(
+    application, capsys, flag
+):
     manager, calls, _ = application
     with pytest.raises(SystemExit) as caught:
         await cli.run([flag])
