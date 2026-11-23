@@ -29,6 +29,7 @@ module = Module(
     name={name!r},
     version=__version__,
     required_modules=[],
+    required_kernel=">=3.0.0",
 )
 '''
 

@@ -18,7 +18,6 @@ from alira.kernel.module.dependencies.uv import EMPTY_LOCK
         ["run", "--help"],
         ["run", "-h"],
         ["init", "example"],
-        ["list"],
         ["sync"],
         ["sync", "--no-install"],
         ["sync", "-n"],
@@ -71,7 +70,7 @@ def test_management_never_imports_entries_or_enters_kernel_lifecycle(
         EMPTY_LOCK,
     )
     help_requested = any(flag in arguments for flag in ("--help", "-h"))
-    readonly = arguments == ["list"] or help_requested
+    readonly = help_requested
     if readonly or arguments[0] == "sync":
         ledger.path.write_text("{broken-json")
         ledger.lockfile.write_text("broken-lock")
@@ -136,8 +135,6 @@ assert "alira.cli.application" not in sys.modules
     assert "Registered service:" not in result.stdout
     assert "Started:" not in result.stdout
     assert "\033" not in result.stdout
-    if arguments == ["list"]:
-        assert result.stdout.splitlines() == ["NAME", "demo", "pending"]
     if arguments == ["init", "example"]:
         assert (modules / "example/src/shared/events.py").is_file()
         assert ledger.snapshot() == snapshot

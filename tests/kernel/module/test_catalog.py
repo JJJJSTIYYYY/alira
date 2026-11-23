@@ -26,7 +26,7 @@ def test_listing_does_not_parse_entries_or_dependencies(tmp_path):
     [
         "module = BaseModule('demo', '1', required_modules=['base'])",
         "class Demo(BaseModule): pass\nmodule = Demo('demo', '1', required_modules=['base'])",
-        "class Demo(BaseModule):\n    def __init__(self):\n        super().__init__(name='demo', version=__version__, required_modules=['base'])\nmodule=Demo()",
+        "from alira._version import __version__\nclass Demo(BaseModule):\n    def __init__(self):\n        super().__init__(name='demo', version=__version__, required_modules=['base'])\nmodule=Demo()",
     ],
 )
 def test_metadata_is_read_without_executing_any_statements(tmp_path, code):
@@ -78,7 +78,7 @@ def test_management_ignores_dynamic_fields_unrelated_to_dependencies(tmp_path):
     folder = entry(
         tmp_path,
         "demo",
-        "module=BaseModule('demo', get_version(), description=get_description())",
+        "module=BaseModule('demo', '1.0', description=get_description())",
     )
     assert ModuleSpec.read(folder, name="demo").name == "demo"
 
@@ -126,3 +126,18 @@ def test_archive_references_to_other_modules_use_installation_root(tmp_path):
         "module=BaseModule('demo','1', requirements_txt='demo/../base/deps.txt')",
     )
     assert ModuleSpec.read(folder, modules_dir=modules).requirements == requirements
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "from external import __version__",
+        "__version__='1.0'\n__version__=get_version()",
+    ],
+)
+def test_static_versions_are_not_guessed_from_kernel_or_stale_constants(
+    tmp_path, prefix
+):
+    folder = entry(tmp_path, "demo", prefix + "\nmodule=BaseModule('demo',__version__)")
+    with pytest.raises(DependencyError, match="literal"):
+        ModuleSpec.read(folder)

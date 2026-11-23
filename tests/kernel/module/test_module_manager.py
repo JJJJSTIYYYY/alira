@@ -246,7 +246,7 @@ async def test_dependent_starts_as_soon_as_its_prerequisite_is_ready(manager):
 
 
 @pytest.mark.parametrize(
-    "dependencies, message", [(["missing"], "unknown modules"), (["a"], "cycle")]
+    "dependencies, message", [(["missing"], "Unknown module"), (["a"], "cycle")]
 )
 async def test_invalid_graph_fails_before_install(
     manager, dependencies, message, monkeypatch

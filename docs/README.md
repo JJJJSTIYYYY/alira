@@ -64,6 +64,14 @@ module = ExampleModule(
 ```
 
 `required_modules` 使用模块声明的 `name`，不是 Python 包名或 PyPI 包名。
+可使用版本约束，例如 `required_modules=["agent>=1.0,<2.0"]`；不写约束表示仅要求模块存在。
+`required_kernel` 声明 kernel 的 PEP 440 版本要求，默认 `">=3.0.0"`。模块版本必须为静态版本字符串。
+选定模块及前置模块的版本、所有消费者约束和循环依赖，会在启动任何模块前统一检查。
+`run`、`add`、`sync`、单模块/清单 `install` 均复用同一模块图解析器；`-i`、`-n` 不跳过模块图检查。
+`add` 还会重新读取已有部署的当前源码声明，避免沿用过期约束；`remove` / `uninstall` 校验保留模块的当前依赖图，并允许删除有问题的模块来修复环境。
+`list`、`init`、帮助命令不解析依赖图，以便在依赖损坏时仍可查看目录或创建骨架。
+只有 `sync` 从全部源码重建依赖并修复中断后的损坏记录；其他部署命令读到损坏记录直接报错并提示 `alira sync`，不会补造记录或隐式修复。
+例如同时要求 `agent>1.0` 和 `agent<=1.0` 会报模块版本冲突。预发布版本按 PEP 440 规则比较。
 发现阶段只登记声明；加载时只检查选中模块及其前置模块的缺失依赖和循环依赖。前置模块就绪后才启动依赖它的模块，
 部署时独立模块的安装任务并行执行，运行时独立模块的启动任务并行执行；共享 Python 环境的文件写入锁由 uv 管理。
 启动失败只跳过依赖该模块的后续模块，其他分支继续启动。所有启动任务结束后，直接打印各条依赖链的汇总结果：
@@ -136,7 +144,7 @@ utils 不依赖其他 Alira 层；shared 不依赖 kernel 或业务模块；kern
 | 命令 | 职责 |
 | --- | --- |
 | `uv run alira init example` | 在当前 Alira 包的 `modules/example/` 创建最小模块骨架；不导入入口或安装依赖，已有目录报错 |
-| `uv run alira list` | 只列出 `alira/modules` 中含 `main.py` 的模块目录；不读取 JSON/lock，不解析模块依赖或 Python 依赖 |
+| `uv run alira list` | 列出含 `main.py` 的模块目录及实例声明的版本；仅导入声明入口，不启动模块、不读取 JSON/lock、不解析依赖图。无有效实例时版本显示 `-` |
 | `uv run alira sync` | 全量扫描模块并联合求解 Python 依赖，重建 JSON/lock，安装缺包、更新版本、卸载不再需要的包 |
 | `uv run alira sync --no-install` | 只解析并重建记录，不修改 Python 环境 |
 | `uv run alira add web` | 解析已有 web 及前置模块的依赖，纳入管理并安装；复用已有管理记录处理共享依赖，不扫描其他未管理模块 |
@@ -160,7 +168,7 @@ utils 不依赖其他 Alira 层；shared 不依赖 kernel 或业务模块；kern
 `remove` 不修改源码；随后执行全量 sync 时，源码仍在的模块会重新纳入依赖管理。
 尚无运行时实例的模块也参与 Python 依赖管理，不需要先初始化 `BaseModule`。
 
-管理命令不启动内核、不导入模块入口、不打印启动 Logo。`add/remove/uninstall` 支持多个模块名。
+管理命令不启动内核、不打印启动 Logo；仅 `list` 为获取版本号导入模块声明入口，不调用生命周期钩子，其他管理命令静态读取声明。`add/remove/uninstall` 支持多个模块名。
 `remove` 保留源码，后续全量 `sync` 会重新纳入这些模块；`uninstall` 将源码送入真正的系统回收站。
 依赖记录固定保存在 `Path.home() / ".alira"` 下的 `modules.json` 和 `pylock.toml`。
 记录损坏或安装中断后，可执行 `uv run alira sync`，从实际模块源码重新解析并同步环境。

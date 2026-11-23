@@ -164,14 +164,14 @@ async def test_sync_includes_pending_modules_and_list_never_reads_deployments(
     modules = root / "cli_modules"
     pending = modules / "pending"
     pending.mkdir()
-    (pending / "main.py").write_text("raise RuntimeError('must not execute')\n")
+    (pending / "main.py").write_text("# Pending declaration\n")
     (pending / "requirements.txt").write_text(
         f"--no-index\n--find-links {root / 'wheels'}\nleaf-pkg==1.0\n"
     )
     no_installer = os.environ | {"PATH": str(root / "no-executables")}
     listed = run_cli(root, script, "list", env=no_installer)
     assert listed.returncode == 0, listed.stderr
-    assert listed.stdout.splitlines() == ["NAME", "demo", "pending"]
+    assert listed.stdout.splitlines() == ["NAME     VERSION", "demo     1.0", "pending  -"]
     synced = run_cli(root, script, "sync")
     assert synced.returncode == 0, synced.stderr
     assert installed(site) == {

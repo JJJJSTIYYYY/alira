@@ -24,6 +24,9 @@ from alira.kernel.module.dependencies.types import (
     sync_hint,
 )
 from alira.kernel.module.dependencies.uv import EMPTY_LOCK, resolve_requirements, run_uv
+from alira.kernel.module.resolution import (
+    resolve_module_graph,
+)
 
 
 def _installed_distributions():
@@ -143,7 +146,7 @@ def _release_kernel_file_claims(
 class ModuleDependencies:
     """Implement dependency records, resolution and current-interpreter package updates.
 
-    This lower-level component does not discover sources, manage module lifecycles
+    This component does not import runtime declarations or manage module lifecycles
     or serialize clients. ModuleManager supplies validated specifications and holds
     its operation lock. Claims reflect persisted desired state, not proof of a
     completed environment installation.
@@ -280,6 +283,7 @@ class ModuleDependencies:
             packages. Rebuild again from source after interruption. Never changes module
             source files and never removes distributions in the kernel closure.
         """
+        resolve_module_graph(tuple(specifications), specifications.__getitem__)
         protected = kernel_packages()
         sources = {name: spec.requirements for name, spec in specifications.items()}
         with TemporaryDirectory(prefix="alira-resolve-") as temporary:
@@ -303,6 +307,8 @@ class ModuleDependencies:
                     else None,
                     "requirements_hash": fingerprints[name],
                     "required_modules": list(specifications[name].required_modules),
+                    "version": specifications[name].version,
+                    "required_kernel": specifications[name].required_kernel,
                 }
                 for name, plan in plans.items()
             }
@@ -393,25 +399,15 @@ class ModuleDependencies:
             DependencyResolutionError: The merged requirements cannot be resolved.
 
         Notes:
-            Retained modules use their recorded paths/metadata, without a full source
-            scan. No unrelated packages are pruned and no source files are changed.
+            Retained declarations are read from current sources and resolved together
+            with selections. No unrelated source directories are scanned, no unrelated
+            packages are pruned and no source files are changed.
         """
-        from alira.kernel.module.catalog import ModuleSpec
+        from alira.kernel.module.catalog import ModuleCatalog
 
         state = self.ledger.read()
-        specifications = {
-            name: ModuleSpec(
-                name,
-                cwd / name,
-                Path(record["requirements"])
-                if record["requirements"] is not None
-                else None,
-                tuple(record["required_modules"]),
-            )
-            for name, record in state["modules"].items()
-            if name not in selected
-        }
-        specifications.update(selected)
+        names = list(dict.fromkeys((*state["modules"], *selected)))
+        specifications = ModuleCatalog(cwd).select(names, prepared=selected)
         await self.rebuild(
             specifications, cwd=cwd, no_install=no_install, background=background
         )
@@ -469,19 +465,19 @@ class ModuleDependencies:
             raise DependencyError(
                 f"Modules are not in dependency management records: {', '.join(sorted(unknown))}"
             )
-        dependents = {
-            name
-            for name, record in records.items()
-            if name not in selected
-            and selected.intersection(record["required_modules"])
-        }
-        if dependents:
-            raise DependencyError(
-                f"Modules are required by: {', '.join(sorted(dependents))}"
-            )
         retained = {
             name: record for name, record in records.items() if name not in selected
         }
+        from alira.kernel.module.catalog import ModuleSpec
+
+        def get_retained(name):
+            if name not in retained:
+                raise DependencyError(
+                    f"Retained modules require removed or unrecorded module: {name}"
+                )
+            return ModuleSpec.read(cwd / name, name=name)
+
+        resolve_module_graph(tuple(retained), get_retained)
         keep = {
             package for record in retained.values() for package in record["packages"]
         }

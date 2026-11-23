@@ -30,7 +30,7 @@ def build_parser() -> ArgumentParser:
     )
     for name, description, command in (
         ("init", "Create a new module source skeleton", init),
-        ("list", "List module source directories", list_modules),
+        ("list", "List module names and versions without starting them", list_modules),
         (
             "sync",
             "Rebuild all module dependencies and synchronize Python packages",

@@ -311,7 +311,10 @@ class ModuleManager:
         async with self._lock:
             self._check_idle()
             catalog = ModuleCatalog(self.modules_dir)
-            specifications = catalog.select(catalog.names())
+            try:
+                specifications = catalog.select(catalog.names())
+            except DependencyError as exc:
+                raise DependencyResolutionError(str(exc)) from exc
             await self._dependencies.rebuild(
                 specifications,
                 cwd=self.modules_dir,
@@ -338,9 +341,9 @@ class ModuleManager:
             OSError: Requirements or records could not be accessed.
 
         Notes:
-            Reuses records for other managed modules without scanning unrelated module
-            directories. Does not download or change sources, or prune unrelated
-            packages. Records are not rolled back on installation failure; sync repairs
+            Includes existing deployment owners and resolves their current declarations
+            without scanning unrelated module directories. Damaged records require sync.
+            Does not download or change sources, or prune unrelated packages. Records are not rolled back on installation failure; sync repairs
             from all remaining sources and may re-add previously removed modules.
         """
         async with self._lock:

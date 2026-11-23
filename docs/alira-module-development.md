@@ -81,6 +81,7 @@ class EchoModule(BaseModule):
             version=__version__,
             description="Echo event example",
             required_modules=[],
+    required_kernel=">=3.0.0",
         )
         self._runtime = None
 
@@ -401,3 +402,6 @@ module = BaseModule(name="reporter", version="0.1.0", required_modules=["echo"])
 | 跨模块使用契约 | 导入对方 `src/shared` 的公共定义，业务数据走事件 |
 | 确定依赖模块与启动顺序 | `required_modules` |
 | 查询事件运行时概况 | 核心所属循环调用 `get_event_runtime_status()`，不启动或修改核心 |
+
+模块可以声明 `required_modules=["agent>=1.0,<2.0"]` 与 `required_kernel=">=3.0.0,<4"`。
+模块版本须使用静态字符串或顶层常量，kernel 默认要求为 `>=3.0.0`。版本不满足、消费者约束冲突或循环依赖，均在依赖解析阶段报错，任何模块的 `startup()` 都不会被调用。

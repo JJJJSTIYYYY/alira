@@ -2,12 +2,12 @@
 
 import importlib
 from collections.abc import Collection, Mapping
-from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
 from types import ModuleType
 
 from alira.kernel.module.base_module import BaseModule
-from alira.kernel.module.dependencies.types import ModuleLoadError
+from alira.kernel.module.dependencies.types import DependencyError, ModuleLoadError
+from alira.kernel.module.resolution import resolve_module_graph
 
 
 class ModuleRegistry:
@@ -136,31 +136,18 @@ class ModuleRegistry:
             Unselected modules outside the closure are not validated. No lifecycle
             hooks, dependency resolution or package installation are performed.
         """
-        graph = {}
 
-        def select(name: str) -> None:
-            """Accumulate one registered name and reject missing prerequisites immediately."""
-            if name in graph:
-                return
+        def get_module(name):
             if name not in self.modules:
                 raise ModuleLoadError(f"Unknown module: {name}")
-            dependencies = set(self.modules[name].required_modules)
-            missing = dependencies - self.modules.keys()
-            if missing:
-                raise ModuleLoadError(
-                    f"Module {name} requires unknown modules: {', '.join(sorted(missing))}"
-                )
-            graph[name] = dependencies
-            for dependency in dependencies:
-                select(dependency)
+            return self.modules[name]
 
-        for name in names:
-            select(name)
         try:
-            TopologicalSorter(graph).prepare()
-        except CycleError as exc:
-            raise ModuleLoadError(f"Module dependency cycle: {exc.args[1]}") from exc
-        return graph
+            return resolve_module_graph(names, get_module)
+        except ModuleLoadError:
+            raise
+        except DependencyError as exc:
+            raise ModuleLoadError(str(exc)) from exc
 
     def requirements_path(self, name: str) -> Path | None:
         """Resolve a registered module's explicit or default requirements file.

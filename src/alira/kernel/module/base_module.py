@@ -30,7 +30,8 @@ class BaseModule:
         name: Module identifier used in dependency declarations and CLI commands.
         version: Module version supplied by its author.
         description: Human-readable purpose of the module.
-        required_modules: Prerequisite module names, ready before this module starts.
+        required_modules: Module requirements such as "agent>=1.0,<2.0".
+        required_kernel: Kernel version constraint, default ">=3.0.0".
         requirements_txt: Explicit requirements path, or None for automatic lookup.
         author: Optional author attribution.
     """
@@ -44,6 +45,7 @@ class BaseModule:
         *,
         description: str = "",
         required_modules: list[str] | None = None,
+        required_kernel: str = ">=3.0.0",
         requirements_txt: str | Path | None = None,
         author: str | None = None,
     ):
@@ -53,7 +55,9 @@ class BaseModule:
             name: Module name matching its directory and a valid Python identifier.
             version: Module version string.
             description: Optional human-readable description.
-            required_modules: Prerequisite module names, not Python distribution names.
+            required_kernel: PEP 440 kernel version constraint, default ">=3.0.0".
+                Validated during dependency resolution before any startup hook.
+            required_modules: Module names with optional PEP 440 version constraints.
                 None or an empty list means no prerequisites. A nonempty list is stored
                 by reference; callers should not mutate it while modules are running.
             requirements_txt: Absolute path or path relative to ``alira/modules``.
@@ -72,7 +76,8 @@ class BaseModule:
         self.name = name
         self.version = version
         self.description = description
-        self.required_modules = required_modules or []
+        self.required_modules = [] if required_modules is None else required_modules
+        self.required_kernel = required_kernel
         self.requirements_txt = requirements_txt
         self.author = author
         self._initialized = True

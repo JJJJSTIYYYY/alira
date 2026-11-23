@@ -1,14 +1,14 @@
 """Read declarative module metadata without importing module code."""
 
 import ast
-import keyword
 from collections.abc import Mapping
 from dataclasses import dataclass
-from graphlib import CycleError, TopologicalSorter
+from graphlib import TopologicalSorter
 from pathlib import Path
 
 from alira._version import __version__
 from alira.kernel.module.dependencies.types import DependencyError
+from alira.kernel.module.resolution import resolve_module_graph, validate_module_name
 
 
 def module_directory(root: Path, name: str) -> Path:
@@ -25,13 +25,7 @@ def module_directory(root: Path, name: str) -> Path:
         DependencyError: The name is invalid, the target is a symlink or its resolved
             parent escapes root. No filesystem mutation occurs.
     """
-    if (
-        not isinstance(name, str)
-        or not name.isidentifier()
-        or keyword.iskeyword(name)
-        or name.startswith("__")
-    ):
-        raise DependencyError(f"Invalid module name: {name}")
+    validate_module_name(name)
     directory = root / name
     if directory.is_symlink() or directory.resolve().parent != root.resolve():
         raise DependencyError(f"Module directory must remain inside {root}: {name}")
@@ -113,7 +107,9 @@ class ModuleSpec:
         name: Declared module identifier.
         directory: Source directory containing main.py.
         requirements: Resolved requirements file, or None if no default file exists.
-        required_modules: Declared prerequisite module names, in declaration order.
+        required_modules: Module requirement strings with optional PEP 440 constraints.
+        version: Static PEP 440 module version.
+        required_kernel: Kernel constraint; defaults to ">=3.0.0".
 
     This is metadata, not a BaseModule instance; obtaining it never starts services.
     """
@@ -122,6 +118,8 @@ class ModuleSpec:
     directory: Path
     requirements: Path | None
     required_modules: tuple[str, ...] = ()
+    version: str = "0.0.0"
+    required_kernel: str = ">=3.0.0"
 
     @classmethod
     def read(
@@ -164,7 +162,7 @@ class ModuleSpec:
             raise DependencyError(
                 f"Cannot read module declaration {entry}: {exc}"
             ) from exc
-        constants = {"__version__": __version__}
+        constants = {}
 
         def literal(node):
             """Read a supported top-level constant reference or evaluate an AST literal only."""
@@ -173,19 +171,33 @@ class ModuleSpec:
             return ast.literal_eval(node)
 
         for statement in tree.body:
+            if isinstance(statement, ast.ImportFrom):
+                for alias in statement.names:
+                    local = alias.asname or alias.name
+                    if (
+                        statement.level == 0
+                        and statement.module == "alira._version"
+                        and alias.name == "__version__"
+                    ):
+                        constants[local] = __version__
+                    else:
+                        constants.pop(local, None)
             if (
                 isinstance(statement, (ast.Assign, ast.AnnAssign))
                 and statement.value is not None
             ):
-                try:
-                    value = literal(statement.value)
-                except (ValueError, TypeError):
-                    continue
                 targets = (
                     statement.targets
                     if isinstance(statement, ast.Assign)
                     else [statement.target]
                 )
+                try:
+                    value = literal(statement.value)
+                except (ValueError, TypeError):
+                    for target in targets:
+                        if isinstance(target, ast.Name):
+                            constants.pop(target.id, None)
+                    continue
                 for target in targets:
                     if isinstance(target, ast.Name):
                         constants[target.id] = value
@@ -199,8 +211,16 @@ class ModuleSpec:
             try:
                 if arguments:
                     metadata["name"] = literal(arguments[0])
+                if len(arguments) > 1:
+                    metadata["version"] = literal(arguments[1])
                 for item in call.keywords:
-                    if item.arg in {"name", "required_modules", "requirements_txt"}:
+                    if item.arg in {
+                        "name",
+                        "version",
+                        "required_kernel",
+                        "required_modules",
+                        "requirements_txt",
+                    }:
                         metadata[item.arg] = literal(item.value)
                     elif item.arg is None:
                         metadata.update(literal(item.value))
@@ -208,6 +228,10 @@ class ModuleSpec:
                 raise DependencyError(
                     f"Module metadata must use literal values: {entry}"
                 ) from exc
+        if declarations and "version" not in metadata:
+            raise DependencyError(
+                f"Module version must be declared explicitly: {entry}"
+            )
         declared_name = metadata.get("name", name or default_name or directory.name)
         if name is not None and declared_name != name:
             raise DependencyError(
@@ -244,7 +268,14 @@ class ModuleSpec:
                     f"Module {declared_name}: requirements file not found: {requirements}"
                 )
             requirements = None
-        return cls(declared_name, directory, requirements, tuple(required))
+        return cls(
+            declared_name,
+            directory,
+            requirements,
+            tuple(required),
+            metadata.get("version", "0.0.0"),
+            metadata.get("required_kernel", ">=3.0.0"),
+        )
 
 
 class ModuleCatalog:
@@ -297,29 +328,17 @@ class ModuleCatalog:
             DependencyError: A selection or prerequisite is missing, metadata is invalid
                 or the selected graph contains a cycle. No entry code is executed.
         """
-        selected = {}
-        prepared = prepared or {}
+        selected = dict(prepared or {})
 
-        def visit(name):
-            """Collect a specification and its prerequisite closure once per name."""
-            if name in selected:
-                return
-            spec = prepared.get(name)
-            if spec is None:
+        def get_module(name):
+            if name not in selected:
                 directory = module_directory(self.directory, name)
                 if not (directory / "main.py").is_file():
                     raise DependencyError(f"Module not found: {name}")
-                spec = ModuleSpec.read(directory, name=name)
-            selected[name] = spec
-            for dependency in spec.required_modules:
-                visit(dependency)
+                selected[name] = ModuleSpec.read(directory, name=name)
+            return selected[name]
 
-        for name in names:
-            visit(name)
-        try:
-            order = TopologicalSorter(
-                {name: set(spec.required_modules) for name, spec in selected.items()}
-            ).static_order()
-            return {name: selected[name] for name in order}
-        except CycleError as exc:
-            raise DependencyError(f"Module dependency cycle: {exc.args[1]}") from exc
+        graph = resolve_module_graph(names, get_module)
+        return {
+            name: selected[name] for name in TopologicalSorter(graph).static_order()
+        }

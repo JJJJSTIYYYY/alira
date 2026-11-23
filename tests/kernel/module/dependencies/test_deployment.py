@@ -271,7 +271,7 @@ async def test_remove_unknown_and_required_modules_fail_explicitly(
     with pytest.raises(DependencyError, match="not in dependency management"):
         await manager.remove("base")
     await manager.sync()
-    with pytest.raises(DependencyError, match="required by: child"):
+    with pytest.raises(DependencyError, match="require removed or unrecorded module: base"):
         await manager.remove("base")
     await manager.remove("base", "child")
     assert env.installed == env.core

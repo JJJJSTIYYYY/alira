@@ -49,7 +49,7 @@ PyPI 发行包名为 `alira-harness`，Python 导入名和命令均为 `alira`�
 | `uv run alira --help` | 查看子命令 |
 | `uv run alira run --help` | 查看模块位置参数与启动选项 |
 | `uv run alira init example` | 在当前 Alira 模块目录创建最小源码骨架，不安装依赖 |
-| `uv run alira list` | 只列出模块目录，不导入模块或读取依赖记录 |
+| `uv run alira list` | 列出模块名和版本，仅导入声明入口，不启动模块或读取依赖记录 |
 | `uv run alira sync` | 全量重建依赖记录，同步环境并清理不再需要的包 |
 | `uv run alira sync --no-install` | 只解析依赖并更新记录 |
 | `uv run alira add web` | 管理已有 web 模块及前置模块的 Python 依赖 |

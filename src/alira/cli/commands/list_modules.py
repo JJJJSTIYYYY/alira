@@ -1,4 +1,4 @@
-"""List module source directories without importing entries or reading records."""
+"""List declaration versions without starting modules or reading deployment records."""
 
 from argparse import ArgumentParser, Namespace
 
@@ -10,6 +10,11 @@ def configure(parser: ArgumentParser) -> None:
 
 
 async def run(arguments: Namespace, manager: ModuleManager) -> None:
-    print("NAME")
-    for name in manager.list():
-        print(name)
+    modules = manager.discover()
+    names = manager.list()
+    width = max(len("NAME"), max(map(len, names), default=0)) + 2
+    print(f"{'NAME':<{width}}VERSION")
+    for name in names:
+        module = modules.get(name)
+        version = module.version if module is not None else "-"
+        print(f"{name:<{width}}{version}")

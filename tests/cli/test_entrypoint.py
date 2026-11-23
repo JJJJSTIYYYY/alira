@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -485,3 +486,55 @@ def test_grouped_dependency_errors_keep_actionable_cli_output(monkeypatch, capsy
     error = capsys.readouterr().err
     assert "uv run alira sync" in error
     assert "Traceback" not in error
+
+
+async def test_list_imports_declarations_and_versions_without_lifecycle_or_dependency_checks(
+    tmp_path, monkeypatch, module_manager_factory, capsys
+):
+    package = f"listing_{uuid4().hex}"
+    root = tmp_path / package
+    root.mkdir()
+    (root / "__init__.py").touch()
+    for name in ("demo", "pending"):
+        folder = root / name
+        folder.mkdir()
+        (folder / "__init__.py").touch()
+        (folder / "main.py").write_text("")
+    (root / "demo/main.py").write_text(
+        "from alira.kernel.module import BaseModule\n"
+        'def declared_version(): return "1.2.3"\n'
+        "class Demo(BaseModule):\n"
+        "    async def startup(self): import missing_startup_dependency\n"
+        "    async def shutdown(self): import missing_shutdown_dependency\n"
+        "    async def health(self): import missing_health_dependency\n"
+        'module=Demo("demo", declared_version(), required_modules=["absent>=9"], '
+        'required_kernel=">=99", requirements_txt="missing.txt")\n'
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    manager = module_manager_factory(root, package=package)
+    manager._dependencies.ledger.path.parent.mkdir(parents=True)
+    manager._dependencies.ledger.path.write_text("{broken record")
+    monkeypatch.setattr(cli, "module_manager", manager)
+    for method in ("start", "stop", "load", "check_health"):
+        monkeypatch.setattr(
+            manager, method, AsyncMock(side_effect=AssertionError("Lifecycle invoked"))
+        )
+    monkeypatch.setattr(
+        manager._registry,
+        "graph",
+        Mock(side_effect=AssertionError("Dependency resolution invoked")),
+    )
+    monkeypatch.setattr(
+        manager._dependencies.ledger,
+        "read",
+        Mock(side_effect=AssertionError("Ledger read")),
+    )
+    await cli.run(["list"])
+    assert capsys.readouterr().out.splitlines() == [
+        "NAME     VERSION",
+        "demo     1.2.3",
+        "pending  -",
+    ]
+    assert f"{package}.demo.main" in sys.modules
+    assert not manager.loaded
+    assert not manager._runtime.active

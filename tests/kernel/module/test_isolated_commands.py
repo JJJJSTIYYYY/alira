@@ -114,9 +114,8 @@ class Installation:
         folder = self.modules / name
         (folder / "src").mkdir(parents=True, exist_ok=True)
         (folder / "src/__init__.py").touch()
-        (folder / "__init__.py").write_text("raise AssertionError('entry imported')\n")
+        (folder / "__init__.py").write_text("")
         (folder / "main.py").write_text(
-            "raise AssertionError('entry executed')\n"
             "from alira.kernel.module import BaseModule\n"
             f"module=BaseModule({name!r}, '1', required_modules={list(required_modules)!r})\n"
         )
@@ -264,7 +263,7 @@ def test_package_install_jointly_syncs_and_reuses_matching_sources(
     app.run("install", "--package", manifest)
     assert tree_snapshot(app.modules) == before
     assert app.packages() == expected
-    assert app.run("list").stdout.splitlines() == ["NAME", "base", "child"]
+    assert app.run("list").stdout.splitlines() == ["NAME   VERSION", "base   1", "child  1"]
     # Actual uv-run verifies both the project and installed command remain usable.
     result = subprocess.run(
         [app.uv, "run", "--no-project", "--python", str(app.python), "alira", "--help"],
@@ -579,7 +578,7 @@ def test_uv_run_sync_preserves_kernel_files_shared_with_removed_distribution(
         run("sync")
     assert run("--help").stdout.startswith("usage: alira")
     # Exercise the same project runner again: it must not need a reinstall.
-    assert run("list").stdout.strip() == "NAME"
+    assert run("list").stdout.strip() == "NAME  VERSION"
     if sys.platform != "win32":
         ready = app.root / "ready"
         folder = app.declare("demo")
@@ -661,8 +660,8 @@ def test_installed_cli_sync_add_remove_use_own_interpreter_and_home(
         "demo", local_requirements + "left-pkg==1.0\n", required_modules=["base"]
     )
     unmanaged = app.declare("unmanaged", "nonexistent-package==0\n")
-    (unmanaged / "main.py").write_text("invalid syntax !!!")
-    assert app.run("list").stdout.splitlines() == ["NAME", "base", "demo", "unmanaged"]
+    (unmanaged / "main.py").write_text("# Pending module\n")
+    assert app.run("list").stdout.splitlines() == ["NAME       VERSION", "base       1", "demo       1", "unmanaged  -"]
     app.run("--help")
     assert app.records() == {}
     assert app.packages() == core
@@ -918,7 +917,7 @@ def test_real_pypi_transformers_and_github_validation(installation):
     assert "must contain main.py" in failure.stderr
     assert app.records() == snapshot
     assert app.packages() == packages
-    assert app.run("list").stdout.splitlines() == ["NAME", "transformer_sample"]
+    assert app.run("list").stdout.splitlines() == ["NAME                VERSION", "transformer_sample  1"]
     app.run("remove", "transformer_sample", env=online)
     assert (demo / "main.py").exists()
     assert app.packages() == core

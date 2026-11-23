@@ -22,10 +22,10 @@ async def test_startup_only_module_can_be_stopped(module_manager_factory, tmp_pa
         async def startup(self):
             self.running = True
 
-    module = StartupOnly("startup-only", "1.0")
+    module = StartupOnly("startup_only", "1.0")
     manager = module_manager_factory(tmp_path)
     manager.register(module)
-    await manager.load("startup-only")
+    await manager.load("startup_only")
     assert module.running
     await manager.stop()
     assert not manager.loaded
