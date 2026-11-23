@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 from uuid import uuid4
 
-from apixis.core.event import ApixEvent, ApixEventHandler, get_handler_registry
+from apixis import ApixEvent, subscribe, unsubscribe
 from apixis.core.event.base import suspend_process
 
 from alira.modules.tool.src.base import BaseTool
@@ -31,12 +31,6 @@ class ToolManager(ABC):
         self._tasks: set[asyncio.Task] = set()
         self._pending: dict[str, ToolRequest] = {}
         self._shutdown_task: asyncio.Task | None = None
-        self._registry = None
-        self._handler = ApixEventHandler(
-            self._handle_request,
-            name=self.request_event,
-            on_cancelled=self._cancel_request,
-        )
 
     @property
     def is_started(self) -> bool:
@@ -67,17 +61,18 @@ class ToolManager(ABC):
                 return
             if self._shutdown_task is not None:
                 await asyncio.shield(self._shutdown_task)
-            registry = None
             try:
                 await self._start()
-                registry = get_handler_registry()
-                self._handler.register(f"{self.request_event}.*", exist_ok=False)
+                subscribe(
+                    f"{self.request_event}.*",
+                    name=self.request_event,
+                    on_cancelled=self._cancel_request,
+                    exist_ok=False,
+                )(self._handle_request)
             except BaseException:
-                if registry is not None:
-                    registry.unregister_handler(self._handler.name, missing_ok=True)
+                unsubscribe(self.request_event)
                 await self._stop()
                 raise
-            self._registry = registry
             self._stopping = False
             self._generation += 1
             self._started = True
@@ -89,8 +84,7 @@ class ToolManager(ABC):
             if not self._started:
                 return
             self._stopping = True
-            if self._registry is not None:
-                self._registry.unregister_handler(self._handler.name, missing_ok=True)
+            unsubscribe(self.request_event)
             if self._shutdown_task is None or self._shutdown_task.done():
                 self._shutdown_task = asyncio.create_task(self._finish_stop())
                 self._shutdown_task.add_done_callback(self._observe_shutdown)
@@ -112,7 +106,6 @@ class ToolManager(ABC):
         await self._stop()
         self._started = False
         self._stopping = False
-        self._registry = None
 
     async def invoke(self, request: ToolRequest) -> Any:
         """Publish one call and await its result, even across a stop race."""

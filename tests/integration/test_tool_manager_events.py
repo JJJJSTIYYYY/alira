@@ -1,5 +1,3 @@
-from my_llm import ToolCall
-
 """Resident tool services stay usable across bounded graph request lifetimes."""
 
 import asyncio
@@ -7,18 +5,21 @@ from typing import Annotated, TypedDict
 
 import pytest
 from apixis.core.event import (
-    ApixEventHandler,
-    ApixEventPipe,
     EventType,
-    factory,
-    get_event_pipe,
-    get_handler_registry,
+    subscribe,
+    unsubscribe,
     wait_for_event,
 )
+from apixis.core.event import core as core_module
+from apixis.core.event.event_pipe import ApixEventPipe
+from apixis.core.event.factory import get_event_pipe, get_handler_registry
 from apixis.core.graph import AutoMerge, GraphManager
+from my_llm import ToolCall
 
 from alira.modules.tool.src import FunctionToolManager, ToolNode
+from alira.modules.tool.src.utils.request import EventRequest, send_request
 from alira.modules.agent.src.shared.message import AliraAssistantMessage
+from alira.kernel.comlink import apixis_core
 
 pytestmark = pytest.mark.parametrize(
     "event_runtime_capacity",
@@ -36,11 +37,27 @@ def event_runtime_capacity(request, monkeypatch):
     """Construct the real core with independently bounded queue and dispatch."""
     capacity, queue_capacity = request.param
     monkeypatch.setattr(
-        factory,
+        core_module,
         "ApixEventPipe",
         lambda: ApixEventPipe(maxsize=queue_capacity),
     )
     return capacity
+
+
+async def test_core_shutdown_cancels_a_tool_request_waiting_for_its_reply():
+    received = asyncio.Event()
+    request = EventRequest()
+
+    @subscribe("test.tool-manager.unanswered")
+    async def unanswered(event):
+        received.set()
+
+    task = asyncio.create_task(send_request("test.tool-manager.unanswered", request))
+    await asyncio.wait_for(received.wait(), 2)
+    await apixis_core.stop()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 2)
+    assert request.cancelled
 
 
 def _state(name: str, *, value: str = "ok", call_id: str = "call") -> dict:
@@ -247,8 +264,8 @@ async def test_cancelled_queued_request_never_executes(event_runtime_capacity):
         await occupied.wait()
         await release.wait()
 
-    holder = ApixEventHandler(hold, name="test-tool-manager-capacity-holder")
-    holder.register("test.tool-manager.hold")
+    holder_name = "test-tool-manager-capacity-holder"
+    subscribe("test.tool-manager.hold", name=holder_name)(hold)
     pipe = get_event_pipe()
     for _ in range(capacity):
         await pipe.post_event(
@@ -282,7 +299,7 @@ async def test_cancelled_queued_request_never_executes(event_runtime_capacity):
     finally:
         pipe.post_event = original_post
         release.set()
-        holder.unregister()
+        unsubscribe(holder_name)
 
     async with wait_for_event("test.tool-manager.drained", point="processed") as waiter:
         await pipe.post_event(
@@ -327,8 +344,8 @@ async def test_stopped_manager_rejects_queued_calls_after_restart(
         await occupied.wait()
         await release.wait()
 
-    holder = ApixEventHandler(hold, name="test-tool-manager-restart-holder")
-    holder.register("test.tool-manager.restart-hold")
+    holder_name = "test-tool-manager-restart-holder"
+    subscribe("test.tool-manager.restart-hold", name=holder_name)(hold)
     pipe = get_event_pipe()
     for _ in range(capacity):
         await pipe.post_event(
@@ -360,7 +377,7 @@ async def test_stopped_manager_rejects_queued_calls_after_restart(
             await manager.start()
         finally:
             release.set()
-            holder.unregister()
+            unsubscribe(holder_name)
         with pytest.raises(RuntimeError, match="unavailable"):
             await asyncio.wait_for(task, 2)
 

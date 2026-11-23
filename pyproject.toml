@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license-files = ["LICENSE"]
 dependencies = [
-    "apixis>=1.4.0",
+    "apixis>=3.0.0",
     "packaging>=24.2",
     "pyyaml>=6.0.3",
     "send2trash>=1.8.3",

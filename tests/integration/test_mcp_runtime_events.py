@@ -6,11 +6,12 @@ from types import SimpleNamespace
 import pytest
 import pytest_asyncio
 from apixis.core.event import (
-    ApixEventPipe,
-    factory,
     is_registered,
     wait_for_event,
 )
+
+from apixis.core.event import core as core_module, factory
+from apixis.core.event.event_pipe import ApixEventPipe
 
 from alira.modules.tool.src.mcp import MCPRuntimeStop, MCPToolManager, MCPToolRuntime
 from alira.modules.tool.src.utils.request import send_request
@@ -35,7 +36,7 @@ pytestmark = pytest.mark.parametrize(
 def event_runtime_capacity(request, monkeypatch):
     capacity, queue_size = request.param
     monkeypatch.setattr(
-        factory,
+        core_module,
         "ApixEventPipe",
         lambda: ApixEventPipe(maxsize=queue_size),
     )
@@ -328,13 +329,12 @@ async def test_application_shutdown_keeps_event_core_alive_until_runtimes_close(
     from alira.modules.web.src.application import create_app
 
     manager, client = resident
-    pipe = factory.get_event_pipe()
     monkeypatch.setattr("alira.modules.web.src.application.auto_load_router", lambda app: None)
 
     async def stop_services():
-        assert pipe.is_running
+        assert factory.get_event_runtime_status().running
         await manager.stop()
-        assert pipe.is_running and client.closed
+        assert factory.get_event_runtime_status().running and client.closed
 
     core_lifecycle.register(
         SimpleNamespace(start=AsyncMock(), stop=stop_services)
@@ -342,4 +342,4 @@ async def test_application_shutdown_keeps_event_core_alive_until_runtimes_close(
     app = create_app()
     async with kernel_lifecycle.lifespan(), app.router.lifespan_context(app):
         assert await manager.call_tool(IDENTITY, "server", "echo") == "ok"
-    assert client.closed and not pipe.is_running
+    assert client.closed and not factory.get_event_runtime_status().running

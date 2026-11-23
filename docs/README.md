@@ -2,7 +2,7 @@
 
 本文保留当前已确定的模块设计。其余开发期参考文档集中在 `reference/`，暂不纳入版本管理。
 
-新模块的生命周期、事件通信与 Apixis 1.4.0 示例见[Alira 模块开发指南](alira-module-development.md)。
+新模块的生命周期、事件通信与 Apixis 3.0.0 示例见[Alira 模块开发指南](alira-module-development.md)。
 
 `ModuleManager` 扫描 `alira/modules/*/main.py`，导入入口后检查是否导出了已完成 `BaseModule` 初始化的实例。
 没有有效实例的入口记为不可用；当前只有 `web` 提供标准模块入口，Agent、工具和数据库继续使用原有接口。
@@ -85,24 +85,29 @@ from alira.kernel.comlink import *
 
 
 async def request_example(payload):
-    async with apixis_core.expect_event("example.reply") as waiter:
+    async with apixis_core.expect_event("example.reply", time_out=30) as waiter:
         await apixis_core.post_event(
             event_type=EventType.TRANSIENT,
             event_name="example.request",
             context=payload,
         )
-        return (await waiter.wait(time_out=30)).context
+        event = await waiter.wait()
+        if event is None:
+            raise RuntimeError("Reply cancelled or the event core closed")
+        return event.context
 ```
 
 `comlink` 通过 `__all__` 重导出 Apixis 的公开事件、图和类型接口，`import *` 不导出内部实现。
 `apixis_core` 提供 `post_event`、`post_and_wait`、`subscribe`、`unsubscribe`、`expect_event`、`wait_event`、
-`get_handler`、`is_registered` 和 `get_event_runtime_status`，均直接复用 Apixis 1.4.0 的公开接口，保留签名、默认值和返回类型。
-`post_event` 只等待事件入队，`post_and_wait` 等待本次事件前台处理完并返回事件，调用方检查 `has_error`。
+`get_handler_meta`、`is_registered` 和 `get_event_runtime_status`，均直接复用 Apixis 3.0.0 的公开接口，保留签名、默认值和返回类型。
+`post_event` 只等待事件入队，`post_and_wait` 等待本次事件前台处理完并返回事件，调用方先处理取消时的 `None`，再检查 `has_error`。
 请求/响应场景先进入 `expect_event` 再发送请求，使用可关联到本次请求的结果事件名；上例的固定名称只用于演示。
-只等待其他地方产生的事件使用 `wait_event`；查询运行时概况使用主线程上的 `get_event_runtime_status()`。
-发布和等待接口支持工作线程中的异步调用，前提是核心已在主线程运行；内核统一管理核心生命周期。
+只等待其他地方产生的事件使用 `wait_event`；查询运行时概况使用核心所属循环上的 `get_event_runtime_status()`。
+通信接口在核心所属的 asyncio 循环调用；内核统一管理核心生命周期。
 模块在 `startup()` 中通过 `apixis_core.subscribe(..., group="模块名")` 注册处理器，
-在 `shutdown()` 中通过 `apixis_core.unsubscribe(group="模块名")` 清理；内核统一负责 Apixis 的 start/stop。
+在 `shutdown()` 中通过 `apixis_core.unsubscribe(group="模块名")` 清理；内核 `ApixisCore.start()` 执行 `create_core() → start_core()`，返回时状态为 `RUNNING`；
+`stop()` 执行 `stop_core() → close_core()`，返回时状态为 `CLOSED`，释放订阅并取消活动事件工作。
+关闭后再次启动会创建新核心，模块需要重新注册订阅并编译图。
 
 各模块的 `src/shared/` 只定义可供其他模块复用的共享方法和公共类型，不承担模块间的数据传递。
 其他模块可以导入这些定义；消息、请求等类型的实例承载业务数据时，仍通过 Apixis 事件传递。

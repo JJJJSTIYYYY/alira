@@ -9,7 +9,7 @@ from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
-from apixis.core.event import EventType, get_event_pipe, wait_for_event
+from apixis import EventType, expect_event, post_event
 from apixis.core.event.base import suspend_process
 from my_llm import ToolCall
 
@@ -37,7 +37,7 @@ class EventRequest[T]:
             return
         self.error = error
         self.completed = True
-        await get_event_pipe().post_event(
+        await post_event(
             event_name=self.result_event,
             event_type=EventType.TRANSIENT,
             context=self,
@@ -87,13 +87,15 @@ async def send_request[T](event_name: str, request: EventRequest[T]) -> T:
     """Register a result listener before publishing; admission is not completion."""
     try:
         async with suspend_process():
-            async with wait_for_event(request.result_event) as waiter:
-                await get_event_pipe().post_event(
+            async with expect_event(request.result_event) as waiter:
+                await post_event(
                     event_name=event_name,
                     event_type=EventType.TRANSIENT,
                     context=request,
                 )
                 event = await waiter.wait()
+        if event is None:
+            raise asyncio.CancelledError
         if event.context is not request or not request.completed:
             raise RuntimeError("Tool result did not match its request.")
         if request.error is not None:

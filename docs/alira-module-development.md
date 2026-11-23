@@ -1,6 +1,6 @@
 # Alira 模块开发指南
 
-> 面向新模块作者，对齐当前 Alira 模块契约与 Apixis **1.4.0**。
+> 面向新模块作者，对齐当前 Alira 模块契约与 Apixis **3.0.0**。
 > 通信接口统一从 `alira.kernel.comlink` 导入；内核负责事件运行时的启动和停止。
 
 ## 0. 先看全景
@@ -19,7 +19,7 @@
 模块作者需要声明生命周期、发布事件、订阅事件。跨模块业务请求、数据交付和结果返回都经过事件；
 其他模块的内部服务、缓存、单例和可变状态不作为调用入口。
 
-Apixis 1.4.0 提供以下选择：
+Apixis 3.0.0 提供以下选择：
 
 | 场景 | 接口 | 完成条件 |
 | --- | --- | --- |
@@ -188,7 +188,7 @@ async def notify_echo(text: str) -> None:
 
 `event_type` 使用 `EventType` 枚举。一般业务流程可用 `WORKFLOW`，高频或带唯一后缀的事件可用 `TRANSIENT`。
 `TRANSIENT` 正常分发，但不记录事件名；它不表示后台执行或低优先级。
-1.4.0 的直接发布接口默认使用 `EventType.DEFAULT`，示例显式标明业务分类。
+3.0.0 的直接发布接口默认使用 `EventType.DEFAULT`，示例显式标明业务分类。
 
 ## 3. 等待处理完成或事件到达
 
@@ -206,11 +206,13 @@ async def echo_and_confirm(text: str) -> None:
         context=EchoReceived(text=text),
         time_out=5.0,
     )
+    if event is None:
+        raise RuntimeError("Event processing was cancelled or the core closed")
     if event.has_error:
         raise RuntimeError(f"Echo processing failed: {event.error_stack}")
 ```
 
-`post_and_wait` 发布一个事件，等待其处理结果并返回处理后的事件。
+`post_and_wait` 发布一个事件，等待其处理结果并返回处理后的事件；事件取消或核心关闭时返回 `None`。
 
 | 参数 | 说明 |
 | --- | --- |
@@ -218,7 +220,6 @@ async def echo_and_confirm(text: str) -> None:
 | `event_name` | 必填，发布的事件名；示例为 `ECHO_RECEIVED`。按生成的 `event_id` 等待本次事件，同名并发事件不会混淆结果。 |
 | `context` | 事件携带的业务数据，默认 `None`；示例为 `EchoReceived(text=text)`。 |
 | `time_out` | 等待秒数，覆盖事件入队和前台处理的总时间，默认 `None` 表示无限等待。默认超时抛出 `TimeoutError`，不等待后台任务或处理器另行发布的事件。 |
-| `keep_listening` | 默认 `False`，超时后清理监听。设为 `True` 时，处理超时返回等待器并继续收集，调用方通过 `await waiter.get_result()` 读取最终结果或 `waiter.close()` 关闭监听；入队超时始终抛出 `TimeoutError`。跨线程调用不支持设为 `True`。 |
 
 **超时或取消等待不会撤回已经入队的事件，也不会取消其处理器。**
 涉及写入或重试时，由业务定义幂等键、重复请求处理和取消协议。
@@ -239,7 +240,9 @@ async def observe_echo(expected_text: str) -> str:
         predicate=lambda event: event.context.text == expected_text,
         time_out=5.0,
     ) as waiter:
-        event = await waiter.get_result()
+        event = await waiter.wait()
+    if event is None:
+        raise RuntimeError("Event processing was cancelled or the core closed")
     if event.has_error:
         raise RuntimeError(f"Echo processing failed: {event.error_stack}")
     return event.context.text
@@ -252,7 +255,6 @@ async def observe_echo(expected_text: str) -> str:
 | `filter` | 要排除的事件名模式，支持字符串或字符串列表；默认不排除。 |
 | `predicate` | 同步事件筛选函数，返回 `True` 时接受事件，返回 `False` 时忽略；默认不筛选。示例只接受文本等于 `expected_text` 的事件。 |
 | `time_out` | 从注册时开始计时的秒数，默认 `None` 表示无限等待。`get_result()` 沿用此截止时间；默认超时抛出 `TimeoutError`，不会取消上下文中正在执行的操作。 |
-| `keep_listening` | 默认 `False`，超时后清理监听。设为 `True` 时，`wait(time_out=...)` 超时返回等待器并继续收集，调用方负责读取最终结果或关闭等待器。跨线程调用不支持设为 `True`。 |
 
 ### 3.3 只等待别人产生的事件：`wait_event`
 
@@ -261,22 +263,21 @@ from alira.kernel.comlink import ApixEvent, wait_event
 from alira.modules.echo.src.shared.events import ECHO_RECEIVED
 
 
-async def wait_for_echo() -> ApixEvent:
+async def wait_for_echo() -> ApixEvent | None:
     return await wait_event(ECHO_RECEIVED, point="processed", time_out=5.0)
 ```
 
 `wait_event` 从协程实际开始执行时注册，不重放已经错过的事件。
-其参数与第 3.2 节相同，`time_out` 从注册时开始计时；`keep_listening=True` 时，超时返回等待器。
+其参数与第 3.2 节相同，`time_out` 从注册时开始计时，超时抛出 `TimeoutError`。
 `asyncio.create_task(wait_event(...))` 返回时不保证已经注册；需要明确监听已就绪时，使用 `expect_event`。
 
 ### 3.4 等待器与清理
 
 - 返回的 `ApixEvent` 是原始可变对象，不是快照。
 - 每个模式只保留首次匹配，全部模式匹配后才返回结果；列表或集合即使只有一个模式也返回字典。
-- `waiter.wait()` 会清除仍生效的截止时间；`waiter.wait(time_out=...)` 从本次调用重新计时，
-  不包含此前执行操作的时间。
-- 正常完成、取消或异常退出会清理监听；`predicate` 抛出异常也会使等待失败并清理监听。
-  `expect_event` 正常退出上下文后，只有通过 `wait()` 超时返回的延迟收集等待器才会继续监听。
+- `waiter.wait()` 与 `get_result()` 使用注册时固定的截止时间，不接收超时参数，也不会重置预算。
+- 正常完成、超时、取消和退出上下文都会清理监听；`predicate` 抛出异常也会使等待失败并清理监听。
+- 匹配事件被取消或核心关闭时返回 `None`；等待任务取消和显式关闭未完成等待器仍抛出 `CancelledError`。
 
 ## 4. 订阅与生命周期
 
@@ -299,13 +300,12 @@ async def wait_for_echo() -> ApixEvent:
 
 注销影响后续取出的事件，已经捕获处理器链的事件可能继续执行。
 模块仍需在关闭时停止或等待自己拥有的任务、关闭连接，再让内核停止事件核心。
-不要在模块里调用全局 `start_core()` / `stop_core()`，否则会影响其他模块。
+内核 `ApixisCore.start()` 封装 `create_core() → start_core()`，返回时核心为 `RUNNING`，然后才启动模块。
+`stop()` 封装 `stop_core() → close_core()`，返回时为 `CLOSED`，活动事件工作和等待器均已清理。
+关闭后再启动会创建新核心，原订阅和编译图不能继续复用。
+不要在模块里调用全局 `create_core()` / `start_core()` / `stop_core()` / `close_core()`，否则会影响其他模块。
 
-工作线程的异步代码可用 `comlink` 导出的发布和等待接口，它们会桥接到主循环；
-也可以显式使用 `post_event_threadsafe`、`post_and_wait_threadsafe` 等跨线程接口。
-这些接口同样是协程，必须在调用方的事件循环中 `await`，不能当作同步函数直接调用。
-前提是核心已在主线程事件循环启动；订阅注册与注销仍由主线程负责。
-`apixis_core.post_event`、`post_and_wait`、`expect_event` 和 `wait_event` 同样支持异步跨线程调用。
+通信接口在核心所属的 asyncio 循环调用。Apixis 3.0.0 不再提供工作线程桥接接口。
 
 ## 5. `shared` 与模块边界
 
@@ -364,7 +364,7 @@ module = BaseModule(name="reporter", version="0.1.0", required_modules=["echo"])
 | 将 `stop()` 作为模块清理钩子 | 模块关闭时没有调用自定义清理 | 覆盖 `shutdown()` |
 | `post_event` 返回后就认为已保存 | 只完成入队 | 使用 `post_and_wait` 并检查错误，或等待业务回复 |
 | 只按固定事件名收集并发处理结果 | 可能拿到另一请求的事件 | 同事件处理使用 `post_and_wait`；独立回复使用关联 ID |
-| 上下文设置超时后调用无参数 `wait()` | 活跃截止时间被清除 | 用 `get_result()` 沿用截止时间，或在 `wait(time_out=...)` 中重新设置预算 |
+| 给 `waiter.wait()` 传 `time_out` | 最新接口不接收此参数 | 在 `expect_event(..., time_out=...)` 注册时设置截止时间 |
 | 将等待超时当作操作已取消 | 已入队操作仍可能继续 | 定义业务取消、幂等与重试策略 |
 | 同名处理器使用默认 `exist_ok=True` | 原处理器可能被替换 | 模块前缀命名、`exist_ok=False`、专属组清理 |
 | 必须完成的副作用设为后台处理 | 完成等待和 `error_stack` 无法确认它 | 使用前台处理或显式完成回复 |
@@ -394,10 +394,10 @@ module = BaseModule(name="reporter", version="0.1.0", required_modules=["echo"])
 | 导入通信 API | `from alira.kernel.comlink import ...` |
 | 发通知 | `await post_event(...)` |
 | 发事件并等前台完成 | `await post_and_wait(..., time_out=5.0)`，检查 `has_error` |
-| 通过上下文监听事件 | `async with expect_event(name, time_out=5.0) as waiter: ...`，使用 `get_result()` 读取事件 |
+| 通过上下文监听事件 | `async with expect_event(name, time_out=5.0) as waiter: ...`，使用 `wait()` 读取事件 |
 | 只等一个外部事件 | `await wait_event(name, time_out=5.0)` |
 | 整次请求限制时间 | 外层 `asyncio.timeout(...)` |
 | 批量清理订阅 | `unsubscribe(group="模块名")` |
 | 跨模块使用契约 | 导入对方 `src/shared` 的公共定义，业务数据走事件 |
 | 确定依赖模块与启动顺序 | `required_modules` |
-| 查询事件运行时概况 | 主线程调用 `get_event_runtime_status()`，不启动或修改核心 |
+| 查询事件运行时概况 | 核心所属循环调用 `get_event_runtime_status()`，不启动或修改核心 |

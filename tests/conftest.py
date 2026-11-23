@@ -1,4 +1,4 @@
-"""Isolate application graphs and asynchronous work through runtime APIs."""
+"""Isolate application graphs and asynchronous work through core closure."""
 
 import asyncio
 import importlib
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from apixis.core.event import aget_event_pipe, factory, stop_core
+from apixis import close_core
 from apixis.core.graph import NodeGraph
 
 from alira.kernel import auto_init
@@ -81,13 +81,12 @@ def kernel_lifecycle(core_lifecycle, monkeypatch):
 
 @pytest_asyncio.fixture(autouse=True, loop_scope="session")
 async def cleanup_event_runtime(event_runtime_capacity, monkeypatch):
-    """Retire test graphs and cancel test-owned tasks without private registries."""
+    """Retire graphs and managers, close the core, then cancel test-owned tasks."""
     if event_runtime_capacity is not None:
         loop_module = importlib.import_module("apixis.core.event.event_loop")
         monkeypatch.setattr(
             loop_module, "EVENT_LOOP_BACKPRESSURE", event_runtime_capacity
         )
-        monkeypatch.setattr(factory, "_core", None)
     graphs = []
     managers = []
     original_services = list(auto_init._services)
@@ -110,7 +109,7 @@ async def cleanup_event_runtime(event_runtime_capacity, monkeypatch):
 
         monkeypatch.setattr(tool_module.ToolManager, "__init__", track_manager)
     baseline = asyncio.all_tasks()
-    pipe = await aget_event_pipe()
+    await ApixisCore().start()
     try:
         yield
     finally:
@@ -119,13 +118,12 @@ async def cleanup_event_runtime(event_runtime_capacity, monkeypatch):
         for manager in reversed(managers):
             await manager.stop()
         auto_init._services[:] = original_services
+        await close_core()
         tasks = asyncio.all_tasks() - baseline - {asyncio.current_task()}
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        await stop_core()
-        await pipe.clear()
 
 
 @pytest.fixture

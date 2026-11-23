@@ -9,12 +9,12 @@ from copy import deepcopy
 from typing import Any
 from uuid import uuid4
 
-from apixis.core.event import (
+from apixis import (
     ApixEvent,
-    ApixEventHandler,
     EventType,
-    get_event_pipe,
-    get_handler_registry,
+    post_event,
+    subscribe,
+    unsubscribe,
 )
 from apixis.core.event.base import suspend_process
 from fastmcp import Client
@@ -61,9 +61,7 @@ class MCPToolRuntime:
         self._ready = asyncio.Event()
         self._startup_error: BaseException | None = None
         self._stop_requests: list[MCPRuntimeStop] = []
-        self._registry = None
         self._client: Client | None = None
-        self._handler = ApixEventHandler(self._receive, name=self.event_name)
 
     @property
     def is_running(self) -> bool:
@@ -87,16 +85,16 @@ class MCPToolRuntime:
 
     async def _start_task(self) -> None:
         if self._task is None:
-            self._registry = get_handler_registry()
             try:
-                self._handler.register(
+                subscribe(
                     self.call_event,
                     self.discovery_event,
                     self.lifecycle_event,
+                    name=self.event_name,
                     exist_ok=False,
-                )
+                )(self._receive)
             except BaseException:
-                self._registry.unregister_handler(self._handler.name, missing_ok=True)
+                unsubscribe(self.event_name)
                 raise
             async with suspend_process():
                 self._task = asyncio.create_task(self._run(), name=self.event_name)
@@ -132,7 +130,7 @@ class MCPToolRuntime:
             raise RuntimeError("MCP runtime is closing.")
         self._pending[request.request_id] = request
         try:
-            await get_event_pipe().post_event(
+            await post_event(
                 event_name=self.call_event,
                 event_type=EventType.TRANSIENT,
                 context=request,
@@ -264,7 +262,7 @@ class MCPToolRuntime:
             self.closing = True
             self._finished = True
             self._ready.set()
-            self._registry.unregister_handler(self._handler.name, missing_ok=True)
+            unsubscribe(self.event_name)
             for request in list(self._pending.values()):
                 await request.finish(
                     None

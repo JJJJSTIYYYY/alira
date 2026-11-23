@@ -47,6 +47,10 @@ assert kernel.module_manager is import_module("alira.kernel.module").module_mana
 assert kernel.lifespan is import_module("alira.kernel.initialize").lifespan
 assert kernel.apixis_core is comlink.apixis_core
 assert kernel.ApixisCore is comlink.ApixisCore
+assert not kernel.apixis_core.get_event_runtime_status().initialized
+import asyncio
+asyncio.run(kernel.apixis_core.stop())
+assert not kernel.apixis_core.get_event_runtime_status().initialized
 upstream = import_module("apixis")
 namespace = {{}}
 exec("from alira.kernel.comlink import *", namespace)

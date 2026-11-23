@@ -83,7 +83,8 @@ async def test_server_lifespan_handles_local_events_health_and_shutdown(
 ):
     from apixis.core.event import (
         EventType,
-        get_event_pipe,
+        get_event_runtime_status,
+        post_event,
         subscribe,
         unsubscribe,
     )
@@ -105,9 +106,8 @@ async def test_server_lifespan_handles_local_events_health_and_shutdown(
 
     try:
         async with kernel_lifecycle.lifespan(), app.router.lifespan_context(app):
-            pipe = get_event_pipe()
-            assert pipe.is_running
-            await pipe.post_event(
+            assert get_event_runtime_status().running
+            await post_event(
                 event_type=EventType.WORKFLOW, event_name="alira.migration.health"
             )
             await asyncio.wait_for(received.wait(), 1)
@@ -117,7 +117,7 @@ async def test_server_lifespan_handles_local_events_health_and_shutdown(
                 response = await client.get("/health")
             assert response.status_code == 200
             assert response.json() == {"status": "ok", "service": "alira"}
-        assert not pipe.is_running
+        assert not get_event_runtime_status().running
     finally:
         unsubscribe("receive")
     start.assert_awaited_once()
