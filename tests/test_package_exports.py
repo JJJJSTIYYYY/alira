@@ -11,9 +11,12 @@ import pytest
 @pytest.mark.parametrize("first_import", [
     "alira.utils.config", "alira.utils.yaml", "alira.shared.application.config",
     "alira.shared.logger", "alira.kernel.module",
-    "alira.kernel.comlink", "alira.kernel.comlink.apixis_core", "alira.kernel.module.registry",
-    "alira.kernel.module.runtime", "alira.kernel.module.dependencies.deployment",
-    "alira.cli", "alira.cli.commands.init", "alira.kernel.module.scaffold",
+    "alira.kernel.comlink", "alira.kernel.comlink.apixis_core",
+    "alira.kernel.module.discovery.catalog", "alira.kernel.module.discovery.resolution",
+    "alira.kernel.module.runtime.registry", "alira.kernel.module.runtime.lifecycle",
+    "alira.kernel.module.sources.archive", "alira.kernel.module.sources.package",
+    "alira.kernel.module.sources.scaffold", "alira.kernel.module.dependencies.deployment",
+    "alira.cli", "alira.cli.commands.init",
 ])
 def test_public_exports_are_complete_and_independent_of_import_order(first_import):
     script = f'''

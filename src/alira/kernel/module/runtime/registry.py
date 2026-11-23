@@ -7,7 +7,7 @@ from types import ModuleType
 
 from alira.kernel.module.base_module import BaseModule
 from alira.kernel.module.dependencies.types import DependencyError, ModuleLoadError
-from alira.kernel.module.resolution import resolve_module_graph
+from alira.kernel.module.discovery.resolution import resolve_module_graph
 
 
 class ModuleRegistry:

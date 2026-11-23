@@ -15,9 +15,9 @@ import pytest
 
 from alira.kernel.module.dependencies import DependencyError, ModuleRequirements
 from alira.kernel.module.dependencies.uv import EMPTY_LOCK
-from alira.kernel.module.sources import prepare_source
+from alira.kernel.module.sources.archive import prepare_source
 
-sources = importlib.import_module("alira.kernel.module.sources")
+sources = importlib.import_module("alira.kernel.module.sources.archive")
 deployment_code = importlib.import_module("alira.kernel.module.dependencies.deployment")
 
 
@@ -558,7 +558,7 @@ async def test_package_resolution_failure_withdraws_only_new_sources(
     ],
 )
 def test_package_rejects_invalid_manifest(tmp_path, content):
-    from alira.kernel.module.package import read_package
+    from alira.kernel.module.sources.package import read_package
 
     path = tmp_path / "package.yml"
     path.write_text(content)
@@ -567,7 +567,7 @@ def test_package_rejects_invalid_manifest(tmp_path, content):
 
 
 def test_package_local_paths_are_relative_to_manifest_and_refs_are_preserved(tmp_path):
-    from alira.kernel.module.package import PackageSource, read_package
+    from alira.kernel.module.sources.package import PackageSource, read_package
 
     path = tmp_path / "package.yml"
     path.write_text(

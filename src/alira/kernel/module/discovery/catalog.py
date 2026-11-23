@@ -8,7 +8,7 @@ from pathlib import Path
 
 from alira._version import __version__
 from alira.kernel.module.dependencies.types import DependencyError
-from alira.kernel.module.resolution import resolve_module_graph, validate_module_name
+from alira.kernel.module.discovery.resolution import resolve_module_graph, validate_module_name
 
 
 def module_directory(root: Path, name: str) -> Path:

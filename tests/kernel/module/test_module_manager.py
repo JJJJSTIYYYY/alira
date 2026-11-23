@@ -34,7 +34,7 @@ def startup_errors(monkeypatch):
     def log(message):
         errors.append((message, sys.exception()))
 
-    monkeypatch.setattr("alira.kernel.module.runtime.logger.exception", log)
+    monkeypatch.setattr("alira.kernel.module.runtime.lifecycle.logger.exception", log)
     return errors
 
 

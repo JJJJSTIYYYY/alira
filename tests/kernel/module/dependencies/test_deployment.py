@@ -13,9 +13,9 @@ from zipfile import ZipFile
 import pytest
 
 from alira.kernel.module import BaseModule, ModuleManager
-from alira.kernel.module.catalog import ModuleCatalog
 from alira.kernel.module.dependencies import DependencyError, ModuleRequirements
 from alira.kernel.module.dependencies.uv import EMPTY_LOCK
+from alira.kernel.module.discovery.catalog import ModuleCatalog
 
 code = importlib.import_module("alira.kernel.module.dependencies.deployment")
 

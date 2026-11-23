@@ -10,12 +10,12 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from alira.kernel.module.catalog import ModuleCatalog, module_directory
 from alira.kernel.module.dependencies.types import (
     DependencyError,
     DependencyResolutionError,
 )
-from alira.kernel.module.sources import prepare_module_source
+from alira.kernel.module.discovery.catalog import ModuleCatalog, module_directory
+from alira.kernel.module.sources.archive import prepare_module_source
 
 
 @dataclass(frozen=True)

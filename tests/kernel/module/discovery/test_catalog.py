@@ -2,8 +2,8 @@
 
 import pytest
 
-from alira.kernel.module.catalog import ModuleCatalog, ModuleSpec
 from alira.kernel.module.dependencies import DependencyError
+from alira.kernel.module.discovery.catalog import ModuleCatalog, ModuleSpec
 
 
 def entry(root, name, code):

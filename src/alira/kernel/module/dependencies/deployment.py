@@ -24,9 +24,7 @@ from alira.kernel.module.dependencies.types import (
     sync_hint,
 )
 from alira.kernel.module.dependencies.uv import EMPTY_LOCK, resolve_requirements, run_uv
-from alira.kernel.module.resolution import (
-    resolve_module_graph,
-)
+from alira.kernel.module.discovery.resolution import resolve_module_graph
 
 
 def _installed_distributions():
@@ -403,7 +401,7 @@ class ModuleDependencies:
             with selections. No unrelated source directories are scanned, no unrelated
             packages are pruned and no source files are changed.
         """
-        from alira.kernel.module.catalog import ModuleCatalog
+        from alira.kernel.module.discovery.catalog import ModuleCatalog
 
         state = self.ledger.read()
         names = list(dict.fromkeys((*state["modules"], *selected)))
@@ -468,7 +466,7 @@ class ModuleDependencies:
         retained = {
             name: record for name, record in records.items() if name not in selected
         }
-        from alira.kernel.module.catalog import ModuleSpec
+        from alira.kernel.module.discovery.catalog import ModuleSpec
 
         def get_retained(name):
             if name not in retained:

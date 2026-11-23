@@ -301,12 +301,16 @@ kernel/
 └── module/
     ├── base_module.py        # 模块声明和生命周期契约
     ├── module_manager.py     # 单例公共入口和操作互斥
-    ├── catalog.py            # 无导入的目录枚举与静态模块声明
-    ├── registry.py           # 声明发现、登记、路径和依赖图
-    ├── runtime.py            # 模块并行启动、退出和失败清理
-    ├── scaffold.py           # 最小模块源码骨架生成
-    ├── sources.py            # 源码准备、安装、卸载与失败回滚
-    ├── package.py            # 清单校验、整批源码安装及可重复执行
+    ├── discovery/
+    │   ├── catalog.py        # 无导入的目录枚举与静态模块声明
+    │   └── resolution.py     # 模块名称、版本约束与依赖图解析
+    ├── runtime/
+    │   ├── registry.py       # 声明发现、登记、路径和依赖图
+    │   └── lifecycle.py      # 模块并行启动、退出和失败清理
+    ├── sources/
+    │   ├── scaffold.py       # 最小模块源码骨架生成
+    │   ├── archive.py        # 源码准备、安装、卸载与失败回滚
+    │   └── package.py        # 清单校验、整批源码安装及可重复执行
     └── dependencies/
         ├── types.py          # 依赖信息、解析结果和错误契约
         ├── deployment.py     # 依赖归属、校验、同步和释放
@@ -317,7 +321,8 @@ kernel/
 
 声明、运行状态和部署记录分别由对应组件持有，`ModuleManager` 统一串行化公开操作。
 组件不会单独注册到 `auto_init`；整体生命周期仍由模块管理器负责。
-测试目录 `tests/kernel/module/` 对应模块管理实现，依赖相关测试集中在其 `dependencies/` 下。
+测试目录 `tests/kernel/module/` 同步按职责组织，静态声明、源码操作和依赖测试分别位于
+`discovery/`、`sources/` 和 `dependencies/` 下；公共管理器及运行生命周期由管理器测试覆盖。
 
 ```python
 from alira.kernel.module import module_manager

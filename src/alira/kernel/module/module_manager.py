@@ -7,7 +7,6 @@ from types import MappingProxyType
 from typing import ClassVar, Self
 
 from alira.kernel.module.base_module import BaseModule, ModuleStatus
-from alira.kernel.module.catalog import ModuleCatalog
 from alira.kernel.module.dependencies.deployment import ModuleDependencies
 from alira.kernel.module.dependencies.types import (
     DependencyError,
@@ -16,11 +15,12 @@ from alira.kernel.module.dependencies.types import (
     ModuleLoadError,
     sync_hint,
 )
-from alira.kernel.module.package import install_package_sources, read_package
-from alira.kernel.module.registry import ModuleRegistry
-from alira.kernel.module.runtime import ModuleRuntime
-from alira.kernel.module.scaffold import initialize_module
-from alira.kernel.module.sources import install_source, uninstall_sources
+from alira.kernel.module.discovery.catalog import ModuleCatalog
+from alira.kernel.module.runtime.lifecycle import ModuleRuntime
+from alira.kernel.module.runtime.registry import ModuleRegistry
+from alira.kernel.module.sources.archive import install_source, uninstall_sources
+from alira.kernel.module.sources.package import install_package_sources, read_package
+from alira.kernel.module.sources.scaffold import initialize_module
 
 
 class ModuleManager:

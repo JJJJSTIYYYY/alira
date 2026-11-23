@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 
 from alira.kernel.module import BaseModule, DependencyError, ModuleStatus
-from alira.kernel.module.catalog import ModuleSpec
+from alira.kernel.module.discovery.catalog import ModuleSpec
 
 
 @pytest.fixture

@@ -3,8 +3,8 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from alira.kernel.module.catalog import module_directory
 from alira.kernel.module.dependencies.types import DependencyError
+from alira.kernel.module.discovery.catalog import module_directory
 
 _MAIN_TEMPLATE = '''"""Module declaration and lifecycle hooks."""
 

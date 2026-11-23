@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from alira.kernel.module import BaseModule, DependencyError
-from alira.kernel.module.catalog import ModuleCatalog
+from alira.kernel.module.discovery.catalog import ModuleCatalog
 
 
 def declarations(tmp_path, module_manager_factory, definitions):
@@ -131,7 +131,7 @@ async def test_invalid_constraint_syntax_is_rejected(
 async def test_added_consumer_must_also_satisfy_retained_deployment_constraints(
     tmp_path, module_manager_factory, monkeypatch
 ):
-    from alira.kernel.module.catalog import ModuleSpec
+    from alira.kernel.module.discovery.catalog import ModuleSpec
 
     manager = module_manager_factory(tmp_path)
     dependencies = manager._dependencies
@@ -167,7 +167,7 @@ async def test_added_consumer_must_also_satisfy_retained_deployment_constraints(
 
 
 def test_kernel_requirement_defaults_and_static_version_fields(tmp_path):
-    from alira.kernel.module.catalog import ModuleSpec
+    from alira.kernel.module.discovery.catalog import ModuleSpec
 
     assert BaseModule("demo", "1").required_kernel == ">=3.0.0"
     folder = tmp_path / "demo"
@@ -181,7 +181,7 @@ def test_kernel_requirement_defaults_and_static_version_fields(tmp_path):
 
 
 def test_large_cycle_is_reported_without_python_recursion():
-    from alira.kernel.module.resolution import resolve_module_graph
+    from alira.kernel.module.discovery.resolution import resolve_module_graph
 
     modules = {
         f"m{i}": BaseModule(f"m{i}", "1", required_modules=[f"m{(i + 1) % 2000}"])

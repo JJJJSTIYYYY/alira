@@ -11,9 +11,9 @@ from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 from zipfile import BadZipFile, ZipFile
 
-from alira.kernel.module.catalog import ModuleSpec, module_directory
 from alira.kernel.module.dependencies.types import DependencyError
-from alira.kernel.module.registry import ModuleRegistry
+from alira.kernel.module.discovery.catalog import ModuleSpec, module_directory
+from alira.kernel.module.runtime.registry import ModuleRegistry
 
 
 def prepare_source(source: str, directory: Path, ref: str | None = None) -> Path:

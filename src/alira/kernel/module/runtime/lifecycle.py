@@ -6,7 +6,7 @@ from graphlib import TopologicalSorter
 from typing import Literal
 
 from alira.kernel.module.dependencies.types import ModuleLoadError, sync_hint
-from alira.kernel.module.registry import ModuleRegistry
+from alira.kernel.module.runtime.registry import ModuleRegistry
 from alira.shared.logger import logger
 
 
