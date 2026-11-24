@@ -1,16 +1,95 @@
 """uv resolution and visible foreground/background environment operations."""
 
 import asyncio
+import hashlib
 import importlib
+import json
 import sys
 import tomllib
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from packaging.utils import canonicalize_name
 
 from alira.kernel.module.dependencies.types import DependencyError, ModuleRequirements
 
 EMPTY_LOCK = b'lock-version = "1.0"\ncreated-by = "alira"\nrequires-python = ">=3.12"\npackages = []\n'
+RESOLVER_VERSION = "uv-pep751-v1"
+
+
+def complete_local_artifacts(lock: dict, directory: Path) -> None:
+    """Pin local archive bytes which uv leaves unhashed in PEP 751 output.
+
+    PEP 751 paths are relative to the generated lock, so normalize them before its
+    temporary workspace disappears. Remote artifacts must already carry hashes;
+    this conversion never downloads or resolves dependencies.
+    """
+    for package in lock.get("packages", []):
+        artifacts = [*package.get("wheels", [])]
+        if "sdist" in package:
+            artifacts.append(package["sdist"])
+        for artifact in artifacts:
+            path = None
+            if "path" in artifact:
+                path = (directory / artifact["path"]).resolve()
+                artifact["path"] = str(path)
+            elif "url" in artifact:
+                location = urlsplit(artifact["url"])
+                if location.scheme == "file" and location.netloc in {"", "localhost"}:
+                    path = Path(unquote(location.path))
+            if path is not None and "sha256" not in artifact.get("hashes", {}):
+                with path.open("rb") as stream:
+                    artifact.setdefault("hashes", {})["sha256"] = hashlib.file_digest(
+                        stream, "sha256"
+                    ).hexdigest()
+
+
+def _toml_value(value) -> str:
+    """Encode JSON-compatible lock values as TOML, including nested artifact tables."""
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return (
+            "{ "
+            + ", ".join(
+                f"{json.dumps(key)} = {_toml_value(item)}"
+                for key, item in value.items()
+            )
+            + " }"
+        )
+    raise DependencyError(f"Unsupported dependency artifact value: {value!r}")
+
+
+def installation_lock(lock: dict, names=None) -> bytes:
+    """Build a temporary PEP 751 artifact solely from the authoritative JSON lock.
+
+    Package URLs, local artifact paths, hashes, dependency markers and installation
+    metadata survive the conversion. ``names`` selects an already closed subset;
+    it does not trigger resolution or read requirements files.
+    """
+    header = lock.get(
+        "install-metadata",
+        {"lock-version": "1.0", "created-by": "alira", "requires-python": ">=3.12"},
+    )
+    lines = [
+        f"{json.dumps(key)} = {_toml_value(value)}\n" for key, value in header.items()
+    ]
+    packages = lock["packages"]
+    selected = sorted(packages if names is None else names)
+    if not selected:
+        lines.append("packages = []\n")
+    for name in selected:
+        lines.append("\n[[packages]]\n")
+        for key, value in packages[name].items():
+            if key != "sha256":
+                lines.append(f"{json.dumps(key)} = {_toml_value(value)}\n")
+    return "".join(lines).encode("utf-8")
 
 
 async def run_uv(*arguments: str, cwd: Path, capture: bool = True) -> None:
@@ -72,7 +151,7 @@ async def _compile(
     Returns a ModuleRequirements closure with canonical names and exact versions.
     Non-versioned lock entries raise DependencyError; caller owns workspace lifetime.
     """
-    directory.mkdir()
+    directory.mkdir(exist_ok=True)
     lockfile = directory / "pylock.toml"
     await run_uv(
         "compile",
@@ -81,12 +160,27 @@ async def _compile(
         str(constraints),
         "--format",
         "pylock.toml",
+        "--generate-hashes",
         "--output-file",
         str(lockfile),
         cwd=cwd,
     )
     with lockfile.open("rb") as stream:
         lock = tomllib.load(stream)
+    complete_local_artifacts(lock, lockfile.parent)
+    lockfile.write_bytes(
+        installation_lock(
+            {
+                "packages": {
+                    canonicalize_name(package["name"]): package
+                    for package in lock.get("packages", [])
+                },
+                "install-metadata": {
+                    key: value for key, value in lock.items() if key != "packages"
+                },
+            }
+        )
+    )
     packages = {}
     for package in lock.get("packages", []):
         if "version" not in package:
@@ -102,6 +196,8 @@ async def resolve_requirements(
     pins: dict[str, str],
     directory: Path,
     cwd: Path,
+    *,
+    previous_lock: dict | None = None,
 ) -> dict[str, ModuleRequirements]:
     """Jointly solve module requirements, then compute each exact pinned closure.
 
@@ -142,6 +238,9 @@ async def resolve_requirements(
     constraints.write_text(
         "".join(f"{name}=={version}\n" for name, version in sorted(pins.items()))
     )
+    if previous_lock is not None:
+        combined_path.parent.mkdir()
+        combined_path.write_bytes(installation_lock(previous_lock))
     combined = await _compile(files, constraints, directory / "combined", cwd)
     constraints.write_text(
         "".join(

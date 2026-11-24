@@ -38,7 +38,7 @@ def print_logo():
         ("/_/  |_/____/____", "/_/ |_/_/  |_|"),
     ]
 
-    print("")
+    print()
     for index, (ali, ra) in enumerate(logo):
         version_tag = (
             f"  {orange_background}{teal} v{__version__} {reset}"

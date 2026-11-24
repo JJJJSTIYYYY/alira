@@ -76,7 +76,12 @@ class ModuleRegistry:
         if self._discovered:
             return self.modules
         self.unavailable.clear()
-        for path in sorted(self.directory.glob("*/main.py")):
+        entries = sorted(self.directory.glob("*/main.py"))
+        if entries:
+            package = importlib.import_module(self.package)
+            package.__path__ = [str(self.directory)]
+            importlib.invalidate_caches()
+        for path in entries:
             declaration = importlib.import_module(
                 f"{self.package}.{path.parent.name}.main"
             )

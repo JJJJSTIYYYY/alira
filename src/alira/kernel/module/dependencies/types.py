@@ -16,6 +16,8 @@ class DependencyError(RuntimeError):
     reports this exception without an implementation traceback and exits nonzero.
     """
 
+    exit_code = 1
+
     def __init__(
         self,
         message: str,
@@ -52,10 +54,22 @@ class ModuleLoadError(DependencyError):
 class DependencyResolutionError(DependencyError):
     """Requirements validation or dependency solving failed before record replacement.
 
-    Inherits DependencyError's constructor. ModuleDependencies.rebuild uses this
-    type before writing desired records or installing packages. Batch source
-    installation recognizes it and attempts to withdraw newly published sources.
+    Resolution does not write state or mutate installed packages. Management
+    transactions restore declaration/lock snapshots when this error escapes;
+    previously published module sources remain available for a retry.
     """
+
+
+class DependencyLockError(DependencyError):
+    """Another process owns this module root's dependency operation lock."""
+
+    exit_code = 2
+
+
+class DependencyInstallError(DependencyError):
+    """A resolved dependency could not be installed into the runtime environment."""
+
+    exit_code = 3
 
 
 @dataclass(frozen=True)
@@ -98,5 +112,5 @@ class ModuleRequirements:
 
 
 def sync_hint() -> str:
-    """Return the standard user-facing command for source-driven dependency repair."""
+    """Return the standard command for syncing declared module dependencies."""
     return "uv run alira sync"

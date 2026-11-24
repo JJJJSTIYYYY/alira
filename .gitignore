@@ -55,6 +55,7 @@ logs/
 .apix_data
 .alira
 .alira_data
+.alira-staging/
 .ruff_cache
 config.yaml
 tmp/
@@ -68,11 +69,12 @@ test-results
 # Development reference documents, it will be added back to the repository when the project is released
 /docs/reference/
 
-# Local module-loading demonstrations
-/src/alira/modules/demo_agent/
-/src/alira/modules/demo_database/
-/src/alira/modules/demo_web/
-/src/alira/modules/demo_plugin/
-/src/alira/modules/demo_outer/
-/src/alira/modules/demo_independent/
-/src/alira/modules/demo_join/
+# Modules: ignore local/dev modules, keep the inner modules
+src/alira/modules/*
+!src/alira/modules/agent/
+!src/alira/modules/app/
+!src/alira/modules/corn/
+!src/alira/modules/database/
+!src/alira/modules/tool/
+!src/alira/modules/web/
+!src/alira/modules/__init__.py

@@ -1,7 +1,9 @@
 import importlib
+import os
 import socket
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from httpx import AsyncClient
@@ -11,17 +13,24 @@ from alira.modules.web.main import WebModule
 
 def test_declaration_does_not_import_web_business_packages():
     subprocess.run(
-        [sys.executable, "-c", (
-            "import sys\n"
-            "import alira.modules.web.main\n"
-            "assert 'alira.modules.web.src.runtime' not in sys.modules\n"
-            "assert 'alira.modules.web.src.application' not in sys.modules\n"
-        )],
-        check=True, capture_output=True,
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys\n"
+                "import alira.modules.web.main\n"
+                "assert 'alira.modules.web.src.runtime' not in sys.modules\n"
+                "assert 'alira.modules.web.src.application' not in sys.modules\n"
+            ),
+        ],
+        check=True,
+        capture_output=True,
     )
 
 
-async def test_web_module_serves_health_and_stops_with_core(monkeypatch, core_lifecycle, module_manager_factory, kernel_lifecycle):
+async def test_web_module_serves_health_and_stops_with_core(
+    monkeypatch, core_lifecycle, module_manager_factory, kernel_lifecycle
+):
     runtime = importlib.import_module("alira.modules.web.src.runtime")
     monkeypatch.setattr(runtime, "BASE_URL", "http://127.0.0.1:0")
     manager = module_manager_factory()
@@ -45,7 +54,9 @@ async def test_web_module_serves_health_and_stops_with_core(monkeypatch, core_li
     assert not manager.dependencies
 
 
-async def test_failed_web_bind_does_not_leave_resources_or_package_claims(tmp_path, monkeypatch, module_manager_factory, capsys):
+async def test_failed_web_bind_does_not_leave_resources_or_package_claims(
+    tmp_path, monkeypatch, module_manager_factory, capsys
+):
     runtime = importlib.import_module("alira.modules.web.src.runtime")
     with socket.socket() as occupied:
         occupied.bind(("127.0.0.1", 0))
@@ -71,6 +82,7 @@ async def test_process_signals_stop_web_before_core(tmp_path, exit_signal):
     from httpx import ConnectError
 
     data_dir = tmp_path / "data"
+    home = tmp_path / "home"
     (tmp_path / "config.yaml").write_text(f"SERVER:\n  base_dir: {data_dir}\n")
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -81,11 +93,23 @@ async def test_process_signals_stop_web_before_core(tmp_path, exit_signal):
         f"runtime.BASE_URL = 'http://127.0.0.1:{port}'\n"
         "from alira.kernel.module import module_manager\n"
         "module_manager._registry.requirements_path = lambda name: None\n"
-        "main.main(['run', 'web'])\n"
+        "main.main(['run', 'web', '--no-sync'])\n"
     )
-    process = subprocess.Popen(
-        [sys.executable, "-c", script], cwd=tmp_path,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    process = await asyncio.to_thread(
+        subprocess.Popen,
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        env=os.environ
+        | {
+            "HOME": str(home),
+            "USERPROFILE": str(home),
+            "ALIRA_MODULES_DIR": str(
+                Path(__file__).resolve().parents[3] / "src/alira/modules"
+            ),
+        },
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
     )
     try:
         async with AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
@@ -103,10 +127,13 @@ async def test_process_signals_stop_web_before_core(tmp_path, exit_signal):
                         break
         process.send_signal(getattr(signal, exit_signal))
         out, err = await asyncio.to_thread(process.communicate, timeout=5)
-        assert process.returncode == 0, err
+        assert process.returncode == (130 if exit_signal == "SIGINT" else 0), err
         assert out.index("Finished server process") < out.index("Stopping: ApixisCore")
         assert "Traceback" not in err
-        logs = "".join(path.read_text() for path in data_dir.glob("logs/ALIRA/*.log"))
+        logs = "".join(
+            path.read_text() for path in (home / ".alira").glob("logs/ALIRA/*.log")
+        )
+        assert not (data_dir / "logs").exists()
         assert "Finished server process" in logs
         assert "Stopping: Logger" in logs
     finally:

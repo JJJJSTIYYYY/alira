@@ -7,7 +7,6 @@ from zipfile import ZipFile
 import pytest
 
 from alira.kernel.module.dependencies.ledger import DependencyLedger
-from alira.kernel.module.dependencies.uv import EMPTY_LOCK
 
 
 @pytest.mark.parametrize(
@@ -19,19 +18,34 @@ from alira.kernel.module.dependencies.uv import EMPTY_LOCK
         ["run", "-h"],
         ["init", "example"],
         ["sync"],
-        ["sync", "--no-install"],
-        ["sync", "-n"],
+        ["sync", "--locked"],
+        ["sync", "--frozen"],
+        ["lock"],
+        ["lock", "--check"],
+        ["tree"],
+        ["tree", "--frozen"],
         ["add", "demo"],
-        ["add", "demo", "--no-install"],
-        ["add", "demo", "-n"],
+        ["add", "demo", "--no-sync"],
         ["remove", "demo"],
         ["install", "plugin.zip"],
         ["install", "-r", "package.yml"],
-        ["install", "--package", "package.yml"],
+        ["install", "--manifest", "package.yml"],
+        ["add", "--manifest", "package.yml"],
         ["uninstall", "demo"],
         *[
             [name, flag]
-            for name in ("init", "list", "sync", "add", "remove", "install", "uninstall")
+            for name in (
+                "init",
+                "list",
+                "sync",
+                "lock",
+                "tree",
+                "migrate",
+                "add",
+                "remove",
+                "install",
+                "uninstall",
+            )
             for flag in ("--help", "-h")
         ],
     ],
@@ -45,36 +59,39 @@ def test_management_never_imports_entries_or_enters_kernel_lifecycle(
         (folder / "src").mkdir(parents=True)
         (folder / "main.py").write_text(
             "raise AssertionError('module entry executed')\n"
+            "from alira.kernel.module import BaseModule\n"
+            f"module=BaseModule({name!r},'1')\n"
         )
     with ZipFile(tmp_path / "plugin.zip", "w") as archive:
         archive.writestr(
             "main.py",
-            "raise AssertionError('installed entry executed')\nfrom alira.kernel.module import BaseModule\nmodule=BaseModule('plugin','1')\n",
+            "raise AssertionError('installed entry executed')\n"
+            "from alira.kernel.module import BaseModule\n"
+            "module=BaseModule('plugin','1')\n",
         )
         archive.writestr("src/__init__.py", "")
     (tmp_path / "package.yml").write_text("modules:\n  - source: plugin.zip\n")
     state = tmp_path / "state"
     ledger = DependencyLedger(state)
-    ledger.write(
+    ledger.write_declaration(
         {
-            "format": 1,
+            "format": 2,
+            "requires-kernel": ">=3,<4",
             "modules": {
                 "demo": {
-                    "packages": {},
+                    "version": "1",
+                    "source": {"type": "builtin"},
+                    "required-modules": [],
                     "requirements": None,
-                    "requirements_hash": None,
-                    "required_modules": [],
+                    "requirements-hash": None,
                 }
             },
-        },
-        EMPTY_LOCK,
+        }
     )
     help_requested = any(flag in arguments for flag in ("--help", "-h"))
-    readonly = help_requested
-    if readonly or arguments[0] == "sync":
+    if help_requested:
         ledger.path.write_text("{broken-json")
         ledger.lockfile.write_text("broken-lock")
-    snapshot = ledger.snapshot()
     trash = tmp_path / "system-trash"
     trash.mkdir()
     script = f"""
@@ -109,13 +126,20 @@ loop_type.remove_signal_handler = forbidden
 module_manager.modules_dir = Path({str(modules)!r})
 module_manager._dependencies.ledger = DependencyLedger(Path({str(state)!r}))
 module_manager._dependencies.installed = lambda: {{}}
-if {readonly!r}:
+if {help_requested!r}:
     DependencyLedger.read = forbidden
+    DependencyLedger.read_lock = forbidden
+elif {arguments[0] != "init"!r}:
+    # Prepare a current lock once, independently of the command being exercised.
+    asyncio.run(module_manager.lock())
+snapshot = module_manager._dependencies.ledger.snapshot()
 from alira.main import main
 try:
     main({arguments!r})
 except SystemExit as exc:
     assert exc.code == 0
+if {help_requested or arguments[0] == "init" or arguments == ["lock", "--check"] or arguments == ["sync", "--locked"] or arguments == ["sync", "--frozen"] or arguments == ["tree", "--frozen"]!r}:
+    assert module_manager._dependencies.ledger.snapshot() == snapshot
 assert auto_init._services == []
 assert resource_cleaner._task is None
 assert Logger._writer._thread is None
@@ -137,8 +161,5 @@ assert "alira.cli.application" not in sys.modules
     assert "\033" not in result.stdout
     if arguments == ["init", "example"]:
         assert (modules / "example/src/shared/events.py").is_file()
-        assert ledger.snapshot() == snapshot
     if help_requested:
         assert result.stdout.startswith("usage: alira")
-    if readonly:
-        assert ledger.snapshot() == snapshot

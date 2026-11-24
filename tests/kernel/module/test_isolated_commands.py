@@ -8,10 +8,8 @@ import signal
 import subprocess
 import sys
 import time
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from uuid import uuid4
 from zipfile import ZipFile
 
 import pytest
@@ -101,12 +99,13 @@ class Installation:
 
     @property
     def state(self):
-        return Path(self.env["HOME"]) / ".alira"
+        key = hashlib.sha256(str(self.modules.resolve()).encode()).hexdigest()[:16]
+        return (Path(self.env["HOME"]) / ".alira") / "projects" / key
 
     def records(self):
         return {
             path.name: path.read_bytes()
-            for path in (self.state / "modules.json", self.state / "pylock.toml")
+            for path in (self.state / "modules.json", self.state / "modules.lock.json")
             if path.exists()
         }
 
@@ -148,7 +147,14 @@ def installation(tmp_path, isolated_wheel):
     env = {
         key: value
         for key, value in os.environ.items()
-        if key not in {"VIRTUAL_ENV", "PYTHONPATH", "PYTHONHOME", "UV_PUBLISH_TOKEN"}
+        if key
+        not in {
+            "VIRTUAL_ENV",
+            "PYTHONPATH",
+            "PYTHONHOME",
+            "UV_PUBLISH_TOKEN",
+            "ALIRA_MODULES_DIR",
+        }
     } | {
         "HOME": str(home),
         "USERPROFILE": str(home),
@@ -175,18 +181,14 @@ def installation(tmp_path, isolated_wheel):
         timeout=60,
     )
     assert result.returncode == 0, result.stderr
-    module_path = subprocess.run(
-        [str(python), "-c", "import alira; print(alira.__path__[0])"],
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    modules = tmp_path / "src/alira/modules"
+    modules.mkdir(parents=True)
+    (modules / "__init__.py").touch()
     return Installation(
         tmp_path,
         python,
         scripts / ("alira.exe" if sys.platform == "win32" else "alira"),
-        Path(module_path) / "modules",
+        modules,
         env,
         uv,
     )
@@ -246,97 +248,221 @@ def package_manifest(app, requirements):
     return manifest
 
 
-def test_package_install_jointly_syncs_and_reuses_matching_sources(
+def test_manifest_add_locks_then_installs_and_reuses_sources(
     installation, local_requirements
 ):
     app = installation
     core = app.packages()
     manifest = package_manifest(app, local_requirements)
-    app.run("install", "-r", manifest)
-    expected = core | {"left-pkg": "1.0", "shared-pkg": "1.0"}
-    assert app.packages() == expected
-    assert set(json.loads(app.records()["modules.json"])["modules"]) == {
-        "base",
-        "child",
-    }
+    app.run("add", "--manifest", manifest, "--no-sync")
+    assert app.packages() == core
+    declaration = json.loads(app.records()["modules.json"])
+    assert declaration["format"] == 2
+    assert set(declaration["modules"]) == {"base", "child"}
+    assert "packages" not in declaration["modules"]["base"]
+    lock = json.loads(app.records()["modules.lock.json"])
+    assert set(lock["packages"]) == {"left-pkg", "shared-pkg"}
+    assert all(item["sha256"] and item["wheels"] for item in lock["packages"].values())
+    assert not (app.state / "pylock.toml").exists()
     before = tree_snapshot(app.modules)
-    app.run("install", "--package", manifest)
+    app.run("install", "--manifest", manifest)
     assert tree_snapshot(app.modules) == before
-    assert app.packages() == expected
-    assert app.run("list").stdout.splitlines() == ["NAME   VERSION", "base   1", "child  1"]
-    # Actual uv-run verifies both the project and installed command remain usable.
-    result = subprocess.run(
-        [app.uv, "run", "--no-project", "--python", str(app.python), "alira", "--help"],
-        env=app.env | {"PATH": str(app.cli.parent) + os.pathsep + app.env["PATH"]},
-        cwd=app.root,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.startswith("usage: alira")
+    assert app.packages() == core | {"left-pkg": "1.0", "shared-pkg": "1.0"}
+    assert app.run("list").stdout.splitlines() == [
+        "NAME   VERSION",
+        "base   1",
+        "child  1",
+    ]
+    records = app.records()
+    app.run("lock", "--check", env={"PATH": str(app.root / "no-installer")})
+    app.run("sync", "--locked")
+    assert app.records() == records
+    assert "child v1" in app.run("tree").stdout
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX executable fault injection")
-def test_package_failed_dependency_install_retains_sources_and_sync_repairs(
+def test_failed_install_retains_sources_and_packages_but_restores_state(
     installation, local_requirements
 ):
     app = installation
     core = app.packages()
     manifest = package_manifest(app, local_requirements)
+    records = app.records()
     fault = uv_wrapper(
         app,
         "if arguments[:2] == ['pip', 'install']:\n"
         "    result = subprocess.run([real, *arguments])\n"
         "    sys.exit(result.returncode or 71)\n",
     )
-    failure = app.run("install", "-r", manifest, env=fault, success=False)
-    assert "Repair: uv run alira sync" in failure.stderr
-    assert {
-        path.name for path in app.modules.iterdir() if not path.name.startswith("_")
-    } >= {"base", "child"}
-    snapshot = tree_snapshot(app.modules)
-    (app.state / "modules.json").write_text("broken json")
-    (app.state / "pylock.toml").unlink()
-    app.run("sync")
+    failure = app.run("add", "--manifest", manifest, env=fault, success=False)
+    assert failure.returncode == 3
+    assert app.records() == records
+    assert (app.modules / "base/main.py").exists()
+    assert (app.modules / "child/main.py").exists()
     assert app.packages() == core | {"left-pkg": "1.0", "shared-pkg": "1.0"}
+    snapshot = tree_snapshot(app.modules)
+    app.run("add", "--manifest", manifest)
     assert tree_snapshot(app.modules) == snapshot
+    assert set(json.loads(app.records()["modules.json"])["modules"]) == {
+        "base",
+        "child",
+    }
 
 
 @pytest.mark.parametrize(
     "invalid", ["shared-pkg==2.0\n", "-r missing.txt\n", "-r 'unclosed\n"]
 )
-def test_package_invalid_dependencies_withdraw_new_sources(
+def test_resolution_failure_restores_state_and_keeps_published_source(
     installation, local_requirements, invalid
 ):
     app = installation
     app.declare("existing", local_requirements + "shared-pkg==1.0\n")
     app.run("add", "existing")
     before, records = app.packages(), app.records()
-    snapshot = tree_snapshot(app.modules)
-    plugin = app.declare("bad", local_requirements + invalid)
+    folder = app.declare("bad", local_requirements + invalid)
     archive = app.root / "bad.zip"
     with ZipFile(archive, "w") as package:
-        for path in plugin.rglob("*"):
+        for path in folder.rglob("*"):
             if path.is_file():
-                package.write(path, path.relative_to(plugin))
-    shutil.rmtree(plugin)
-    manifest = app.root / "package.yml"
-    manifest.write_text("modules:\n  - source: bad.zip\n")
-    failure = app.run("install", "-r", manifest, success=False)
-    assert "dependency resolution failed" in failure.stderr
-    assert not plugin.exists()
-    assert tree_snapshot(app.modules) == snapshot
+                package.write(path, path.relative_to(folder))
+    shutil.rmtree(folder)
+    failure = app.run("add", archive, success=False)
+    assert failure.returncode == 1
+    assert folder.exists()
     assert app.packages() == before
     assert app.records() == records
-    app.run("sync")
+    app.run("sync", "--locked")
     assert app.packages() == before
+
+
+def test_remove_keeps_sources_and_sync_never_readds_them(
+    installation, local_requirements
+):
+    app = installation
+    core = app.packages()
+    folder = app.declare("demo", local_requirements + "left-pkg==1.0\n")
+    app.run("add", "demo")
+    app.run("remove", "demo")
+    assert folder.exists()
+    assert app.packages() == core
+    app.run("sync")
+    assert app.packages() == core
+    assert json.loads(app.records()["modules.json"])["modules"] == {}
+
+
+def test_stale_locked_sync_and_lock_check_are_read_only(
+    installation, local_requirements
+):
+    app = installation
+    folder = app.declare("demo", local_requirements + "left-pkg==1.0\n")
+    app.run("add", "demo", "--no-sync")
+    (folder / "requirements.txt").write_text(local_requirements + "left-pkg==2.0\n")
+    before = app.records()
+    for arguments in [("sync", "--locked"), ("lock", "--check")]:
+        failure = app.run(*arguments, success=False)
+        assert failure.returncode == 1
+        assert app.records() == before
+    app.run("sync", "--frozen")
+    assert app.packages()["left-pkg"] == "1.0"
+    assert app.records() == before
+    app.run("sync")
+    assert app.packages()["left-pkg"] == "2.0"
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        None,
+        "Metadata-Version: 2.3\nName: left-pkg\n",
+        "Metadata-Version: 2.3\nName: left-pkg\nVersion: 0\n",
+        "Metadata-Version: 2.3\nName: left-pkg\nVersion: incomplete\n",
+    ],
+)
+def test_sync_repairs_incomplete_distribution_metadata(
+    installation, local_requirements, metadata
+):
+    app = installation
+    core = app.packages()
+    app.declare("demo", local_requirements + "left-pkg==1.0\n")
+    app.run("add", "demo")
+    site = Path(
+        app.python_run("import sysconfig; print(sysconfig.get_path('purelib'))")
+    )
+    path = site / "left_pkg-1.0.dist-info/METADATA"
+    if metadata is None:
+        path.unlink()
+    else:
+        path.write_text(metadata)
+    app.run("sync", "--locked")
+    assert app.packages() == core | {"left-pkg": "1.0", "shared-pkg": "1.0"}
+
+
+def test_installed_cli_requires_a_source_checkout_and_creates_no_state(
+    installation, tmp_path_factory
+):
+    app = installation
+    unrelated = tmp_path_factory.mktemp("without-source")
+    for arguments in [
+        ("sync",),
+        ("lock",),
+        ("add", "missing"),
+        ("remove", "missing"),
+        ("run",),
+    ]:
+        result = subprocess.run(
+            [str(app.cli), *arguments],
+            check=False,
+            cwd=unrelated,
+            env=app.env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert (
+            "alira must run from a source checkout or set ALIRA_MODULES_DIR"
+            in result.stderr
+        )
+    assert not (Path(app.env["HOME"]) / ".alira").exists()
+
+
+def test_checkouts_with_shared_home_keep_independent_declarations(installation):
+    app = installation
+    app.declare("same")
+    app.run("add", "same", "--no-sync")
+    first = app.records()
+    second_root = app.root / "other-checkout"
+    second_modules = second_root / "src/alira/modules"
+    second_modules.mkdir(parents=True)
+    original = app.modules
+    app.modules = second_modules
+    app.declare("same")
+    (second_modules / "same/main.py").write_text(
+        "from alira.kernel.module import BaseModule\nmodule=BaseModule('same','2')\n"
+    )
+    result = subprocess.run(
+        [str(app.cli), "add", "same", "--no-sync"],
+        check=False,
+        cwd=second_root,
+        env=app.env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (
+        json.loads(app.records()["modules.json"])["modules"]["same"]["version"] == "2"
+    )
+    assert app.state != (Path(app.env["HOME"]) / ".alira") / "modules"
+    app.modules = original
+    assert app.records() == first
+    assert json.loads(first["modules.json"])["modules"]["same"]["version"] == "1"
+    assert not list((Path(app.env["HOME"]) / ".alira").rglob("main.py"))
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX SIGKILL process groups")
-@pytest.mark.parametrize("phase", ["publish", "compile", "install", "uninstall"])
-def test_package_force_kill_can_resume_even_with_damaged_records(
+@pytest.mark.parametrize("phase", ["publish", "compile", "install"])
+def test_force_kill_requires_repair_and_resumes_source_receipts(
     installation, local_requirements, phase
 ):
     app = installation
@@ -344,52 +470,31 @@ def test_package_force_kill_can_resume_even_with_damaged_records(
     manifest = package_manifest(app, local_requirements)
     marker = app.root / "interrupted"
     if phase == "publish":
-        # Pause immediately after the first real atomic source rename, before
-        # Python can record its success. Launch the installed console normally.
         injected = app.root / "fault-injection"
         injected.mkdir()
         (injected / "sitecustomize.py").write_text(
-            "import time\nfrom pathlib import Path\noriginal = Path.rename\n"
-            "def rename(self, target):\n"
-            "    result = original(self, target)\n"
-            f"    if target == Path({str(app.modules / 'base')!r}):\n"
+            "import os, time\nfrom pathlib import Path\noriginal=os.replace\n"
+            "def replace(source, target):\n"
+            "    result=original(source,target)\n"
+            f"    if Path(target) == Path({str(app.modules / 'child')!r}):\n"
             f"        Path({str(marker)!r}).touch()\n"
             "        time.sleep(60)\n"
-            "    return result\nPath.rename = rename\n"
+            "    return result\nos.replace=replace\n"
         )
         fault = {"PYTHONPATH": str(injected)}
     else:
-        if phase == "uninstall":
-            subprocess.run(
-                [
-                    app.uv,
-                    "pip",
-                    "install",
-                    "--python",
-                    str(app.python),
-                    str(app.root / "wheels/orphan_pkg-1.0-py3-none-any.whl"),
-                ],
-                env=app.env,
-                check=True,
-                capture_output=True,
-                timeout=30,
-            )
         fault = uv_wrapper(
             app,
             f"if arguments[:2] == ['pip', {phase!r}]:\n"
             + (
-                f"    subprocess.run([real, 'pip', 'install', '--python', {str(app.python)!r}, "
-                f"'--no-deps', {str(app.root / 'wheels/left_pkg-1.0-py3-none-any.whl')!r}], check=True)\n"
+                "    subprocess.run([real, *arguments], check=True)\n"
                 if phase == "install"
-                else "    subprocess.run([real, *arguments], check=True)\n"
-                if phase == "uninstall"
                 else ""
             )
-            + f"    Path({str(marker)!r}).touch()\n"
-            "    time.sleep(60)\n",
+            + f"    Path({str(marker)!r}).touch()\n    time.sleep(60)\n",
         )
     process = subprocess.Popen(
-        [str(app.cli), "install", "-r", str(manifest)],
+        [str(app.cli), "add", "--manifest", str(manifest)],
         cwd=app.root,
         env=app.env | fault,
         stdout=subprocess.PIPE,
@@ -410,23 +515,16 @@ def test_package_force_kill_can_resume_even_with_damaged_records(
         if process.poll() is None:
             os.killpg(process.pid, signal.SIGKILL)
         process.communicate(timeout=5)
-    assert process.returncode == -signal.SIGKILL
-    if phase == "publish":
-        assert (app.modules / "base/main.py").is_file()
-        assert not (app.modules / "child").exists()
-    app.state.mkdir(exist_ok=True)
-    (app.state / "modules.json").write_text("broken json")
-    (app.state / "pylock.toml").write_text("broken lock")
-    assert app.run("--help").stdout.startswith("usage: alira")
-    app.run("list")
-    app.run("sync")
-    if phase == "publish":
-        assert set(json.loads(app.records()["modules.json"])["modules"]) == {"base"}
-    app.run("install", "-r", manifest)
+    assert (app.state / "journal.json").exists()
+    # Force a mismatched pair, modelling termination between the atomic writes.
+    (app.state / "modules.json").write_text("interrupted declaration")
+    failure = app.run("sync", success=False)
+    assert failure.returncode == 1 and "--repair" in failure.stderr
+    app.run("sync", "--repair")
+    assert json.loads(app.records()["modules.json"])["modules"] == {}
+    app.run("add", "--manifest", manifest)
     assert app.packages() == core | {"left-pkg": "1.0", "shared-pkg": "1.0"}
-    records = json.loads(app.records()["modules.json"])
-    assert set(records["modules"]) == {"base", "child"}
-    assert records["modules"]["child"]["required_modules"] == ["base"]
+    assert not (app.state / "journal.json").exists()
 
 
 @pytest.mark.parametrize("obsolete_name", ["alira", "other-console-owner"])
@@ -473,10 +571,11 @@ def test_uv_run_sync_preserves_kernel_files_shared_with_removed_distribution(
         app.modules = (
             Path(app.python_run("import alira; print(alira.__path__[0])")) / "modules"
         )
+        app.env["ALIRA_MODULES_DIR"] = str(app.modules)
     normalized = obsolete_name.replace("-", "_")
     info = f"{normalized}-1.0.dist-info"
     archive = app.root / f"{normalized}-1.0-py3-none-any.whl"
-    main = app.modules.parent / "main.py"
+    main = Path(app.python_run("import alira; print(alira.__path__[0])")) / "main.py"
     original_main = main.read_bytes()
     with ZipFile(archive, "w") as package:
         package.writestr(
@@ -575,7 +674,7 @@ def test_uv_run_sync_preserves_kernel_files_shared_with_removed_distribution(
     assert app.cli.is_file()
     assert main.read_bytes() == original_main
     if interrupted:
-        run("sync")
+        run("sync", "--repair")
     assert run("--help").stdout.startswith("usage: alira")
     # Exercise the same project runner again: it must not need a reinstall.
     assert run("list").stdout.strip() == "NAME  VERSION"
@@ -591,6 +690,7 @@ def test_uv_run_sync_preserves_kernel_files_shared_with_removed_distribution(
             f"        Path({str(ready)!r}).touch()\n"
             "module=Demo('demo','1')\n"
         )
+        run("add", "demo", "--no-sync")
         process = subprocess.Popen(
             [app.uv, "run", "--project", str(app.root), "alira", "run", "demo"],
             cwd=app.root,
@@ -645,221 +745,21 @@ def test_installed_cli_init_creates_a_deployable_module(installation):
     )
 
 
-def test_installed_cli_sync_add_remove_use_own_interpreter_and_home(
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX process contention")
+def test_concurrent_cli_times_out_with_owner_and_preserves_state(
     installation, local_requirements
 ):
     app = installation
-    core = app.packages()
-    source = tree_snapshot(app.modules.parent)
-    project = Path(__file__).resolve().parents[3]
-    project_files = {
-        name: (project / name).read_bytes() for name in ("pyproject.toml", "uv.lock")
-    }
-    base = app.declare("base", local_requirements + "shared-pkg<3\n")
-    demo = app.declare(
-        "demo", local_requirements + "left-pkg==1.0\n", required_modules=["base"]
-    )
-    unmanaged = app.declare("unmanaged", "nonexistent-package==0\n")
-    (unmanaged / "main.py").write_text("# Pending module\n")
-    assert app.run("list").stdout.splitlines() == ["NAME       VERSION", "base       1", "demo       1", "unmanaged  -"]
-    app.run("--help")
-    assert app.records() == {}
-    assert app.packages() == core
-    app.run("add", "demo", "-n")
-    assert app.packages() == core
-    records = json.loads(app.records()["modules.json"])["modules"]
-    assert set(records) == {"base", "demo"}
-    assert records["demo"]["required_modules"] == ["base"]
-    assert (
-        "wheels" in tomllib.loads(app.records()["pylock.toml"].decode())["packages"][0]
-    )
-    app.run("add", "demo")
-    assert app.packages() == core | {"left-pkg": "1.0", "shared-pkg": "1.0"}
-    (demo / "requirements.txt").write_text(local_requirements + "left-pkg==2.0\n")
-    app.run("add", "demo")
-    assert app.packages() == core | {"left-pkg": "2.0", "shared-pkg": "2.0"}
-    before = app.records()
-    app.run("add", "missing", success=False)
-    app.run("remove", "missing", success=False)
-    app.run("remove", "base", success=False)
-    assert app.records() == before
-    app.run("remove", "demo")
-    assert app.packages() == core | {"shared-pkg": "2.0"}
-    assert (demo / "main.py").is_file()
-    app.run("remove", "base")
-    assert app.packages() == core
-    shutil.rmtree(unmanaged)
-    app.run("sync", "--no-install")
-    assert app.packages() == core
-    app.run("sync")
-    assert app.packages() == core | {"left-pkg": "2.0", "shared-pkg": "2.0"}
-    subprocess.run(
-        [
-            app.uv,
-            "pip",
-            "install",
-            "--python",
-            str(app.python),
-            str(app.root / "wheels/orphan_pkg-1.0-py3-none-any.whl"),
-        ],
-        env=app.env,
-        check=True,
-        capture_output=True,
-    )
-    shutil.rmtree(demo)
-    (base / "requirements.txt").write_text(local_requirements + "shared-pkg==1.0\n")
-    (app.state / "modules.json").write_text("{broken")
-    (app.state / "pylock.toml").unlink()
-    app.run("sync")
-    assert app.packages() == core | {"shared-pkg": "1.0"}
-    assert set(json.loads(app.records()["modules.json"])["modules"]) == {"base"}
-    after = tree_snapshot(app.modules.parent)
-    assert {name: after[name] for name in source} == source
-    assert {
-        name: (project / name).read_bytes() for name in project_files
-    } == project_files
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX executable fault injection")
-def test_failed_install_restores_original_locked_artifacts(
-    installation, local_requirements
-):
-    app = installation
-    wheels = app.root / "wheels"
-    newer = wheels / "left_pkg-2.0-py3-none-any.whl"
-    saved = app.root / newer.name
-    newer.rename(saved)
-    demo = app.declare("demo", local_requirements + "left-pkg<3\n")
-    app.run("add", "demo")
-    before = app.packages()
-    records = app.records()
-    source = tree_snapshot(demo)
-    saved.rename(newer)
-    folder = app.declare(
-        "plugin", local_requirements + "left-pkg==2.0\norphan-pkg==1.0\n"
-    )
-    archive = app.root / "plugin.zip"
-    with ZipFile(archive, "w") as package:
-        for path in folder.rglob("*"):
-            if path.is_file():
-                package.write(path, path.relative_to(folder))
-    shutil.rmtree(folder)
-    failed = app.root / "installer-failed"
-    fault = uv_wrapper(
-        app,
-        f"marker = Path({str(failed)!r})\n"
-        "if arguments[:2] == ['pip', 'install'] and not marker.exists():\n"
-        "    result = subprocess.run([real, *arguments])\n"
-        "    if result.returncode: sys.exit(result.returncode)\n"
-        "    marker.touch()\n"
-        "    sys.exit(71)\n",
-    )
-    failure = app.run(
-        "install",
-        archive,
-        env=fault,
-        success=False,
-    )
-    assert failed.exists()
-    assert "code 71" in failure.stderr
-    assert "rollback was incomplete" not in failure.stderr
-    assert not folder.exists()
-    assert app.records() == records
-    assert app.packages() == before
-    assert tree_snapshot(demo) == source
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX executable fault injection")
-def test_uninstall_dependency_failure_rolls_back_without_touching_sources(
-    installation, local_requirements
-):
-    app = installation
-    folder = app.declare("demo", local_requirements + "left-pkg==1.0\n")
-    app.run("add", "demo")
-    before = app.packages()
-    records = app.records()
-    source = tree_snapshot(folder)
-    fault = uv_wrapper(
-        app,
-        "if arguments[:2] == ['pip', 'uninstall']:\n"
-        "    result = subprocess.run([real, *arguments])\n"
-        "    sys.exit(result.returncode or 72)\n",
-    )
-    failure = app.run("uninstall", "demo", env=fault, success=False)
-    assert "code 72" in failure.stderr
-    assert "rollback was incomplete" not in failure.stderr
-    assert app.packages() == before
-    assert app.records() == records
-    assert tree_snapshot(folder) == source
-
-
-@pytest.mark.parametrize(
-    "metadata",
-    [
-        None,
-        "Metadata-Version: 2.3\nName: left-pkg\n",
-        "Metadata-Version: 2.3\nName: left-pkg\nVersion: 0\n",
-        "Metadata-Version: 2.3\nName: left-pkg\nVersion: incomplete\n",
-    ],
-)
-def test_sync_repairs_incomplete_distribution_metadata(
-    installation, local_requirements, metadata
-):
-    app = installation
-    core = app.packages()
     app.declare("demo", local_requirements + "left-pkg==1.0\n")
-    app.run("add", "demo")
-    # Model the on-disk fragment left by an interrupted package installation.
-    path = app.modules.parent.parent / "left_pkg-1.0.dist-info/METADATA"
-    if metadata is None:
-        path.unlink()
-    else:
-        path.write_text(metadata)
-    app.run("sync")
-    assert app.packages() == core | {"left-pkg": "1.0", "shared-pkg": "1.0"}
-
-
-def test_empty_requirements_generate_reusable_records(installation):
-    app = installation
-    core = app.packages()
-    folder = app.declare("empty")
-    app.run("add", "empty", "--no-install")
-    app.run("add", "empty")
-    app.run("sync")
-    app.run("remove", "empty")
-    assert (folder / "main.py").is_file()
-    assert app.packages() == core
-    assert json.loads(app.records()["modules.json"])["modules"] == {}
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX SIGKILL process groups")
-@pytest.mark.parametrize("phase", ["compile", "install", "uninstall"])
-def test_sync_repairs_force_killed_resolution_or_partial_install(
-    installation, local_requirements, phase
-):
-    app = installation
-    core = app.packages()
-    demo = app.declare("demo", local_requirements + "left-pkg==1.0\n")
-    source = tree_snapshot(demo)
-    if phase == "uninstall":
-        app.run("add", "demo")
-    marker = app.root / "interrupted"
+    marker = app.root / "resolving"
     fault = uv_wrapper(
         app,
-        f"if arguments[:2] == ['pip', {phase!r}]:\n"
-        + (
-            f"    subprocess.run([real, 'pip', 'install', '--python', {str(app.python)!r}, "
-            f"'--no-deps', {str(app.root / 'wheels/left_pkg-1.0-py3-none-any.whl')!r}], check=True)\n"
-            if phase == "install"
-            else f"    subprocess.run([real, 'pip', 'uninstall', '--python', {str(app.python)!r}, 'left-pkg'], check=True)\n"
-            if phase == "uninstall"
-            else ""
-        )
-        + f"    Path({str(marker)!r}).touch()\n"
+        "if arguments[:2] == ['pip', 'compile']:\n"
+        f"    Path({str(marker)!r}).touch()\n"
         "    time.sleep(60)\n",
     )
     process = subprocess.Popen(
-        [str(app.cli), "remove" if phase == "uninstall" else "add", "demo"],
+        [str(app.cli), "add", "demo"],
         cwd=app.root,
         env=app.env | fault,
         stdout=subprocess.PIPE,
@@ -876,102 +776,75 @@ def test_sync_repairs_force_killed_resolution_or_partial_install(
         ):
             time.sleep(0.01)
         assert marker.exists(), process.communicate(timeout=1)
+        before = app.records()
+        failure = app.run("add", "demo", success=False)
+        assert failure.returncode == 2
+        assert "another alira command is using this modules directory" in failure.stderr
+        assert f"pid {process.pid}" in failure.stderr
+        assert "operation: add" in failure.stderr
+        assert app.records() == before
     finally:
         if process.poll() is None:
             os.killpg(process.pid, signal.SIGKILL)
         process.communicate(timeout=5)
-    assert process.returncode == -signal.SIGKILL
-    partial = {"install": {"left-pkg": "1.0"}, "uninstall": {"shared-pkg": "1.0"}}
-    assert app.packages() == core | partial.get(phase, {})
-    app.run("sync")
-    assert app.packages() == core | {"left-pkg": "1.0", "shared-pkg": "1.0"}
-    assert tree_snapshot(demo) == source
-    assert set(json.loads(app.records()["modules.json"])["modules"]) == {"demo"}
+    app.run("add", "demo")
+    assert app.packages()["left-pkg"] == "1.0"
 
 
-@pytest.mark.skipif(
-    os.environ.get("ALIRA_TEST_NETWORK") != "1", reason="set ALIRA_TEST_NETWORK=1"
-)
-def test_real_pypi_transformers_and_github_validation(installation):
+def test_explicit_modules_root_works_outside_checkout(installation, tmp_path_factory):
     app = installation
-    online = {"UV_OFFLINE": "0", "UV_DEFAULT_INDEX": "https://pypi.org/simple"}
-    core = app.packages()
-    demo = app.declare("transformer_sample", "transformers==4.57.1\n")
-    app.run("add", "transformer_sample", "--no-install", env=online)
-    assert app.packages() == core
-
-    app.run("add", "transformer_sample", env=online)
-    assert app.packages()["transformers"] == "4.57.1"
-    assert all(app.packages()[name] == version for name, version in core.items())
-    app.python_run("import transformers; assert transformers.__version__ == '4.57.1'")
-    snapshot = app.records()
-    packages = app.packages()
-    failure = app.run(
-        "install",
-        "https://github.com/JJJJSTIYYYY/apixis-example",
-        "--ref",
-        "main",
-        env=online,
-        success=False,
-    )
-    assert "must contain main.py" in failure.stderr
-    assert app.records() == snapshot
-    assert app.packages() == packages
-    assert app.run("list").stdout.splitlines() == ["NAME                VERSION", "transformer_sample  1"]
-    app.run("remove", "transformer_sample", env=online)
-    assert (demo / "main.py").exists()
-    assert app.packages() == core
-
-
-@pytest.mark.skipif(
-    os.environ.get("ALIRA_TEST_NETWORK") != "1", reason="set ALIRA_TEST_NETWORK=1"
-)
-def test_sync_keeps_uv_when_it_is_installed_in_the_alira_interpreter(installation):
-    app = installation
-    online = {"UV_OFFLINE": "0", "UV_DEFAULT_INDEX": "https://pypi.org/simple"}
+    app.declare("explicit")
+    unrelated = tmp_path_factory.mktemp("explicit-modules-root")
     result = subprocess.run(
-        [app.uv, "pip", "install", "--python", str(app.python), "uv==0.9.7"],
-        env=app.env | online,
+        [str(app.cli), "add", "explicit", "--no-sync"],
+        cwd=unrelated,
+        env=app.env | {"ALIRA_MODULES_DIR": str(app.modules)},
         capture_output=True,
         text=True,
+        timeout=30,
         check=False,
-        timeout=120,
     )
-    assert result.returncode == 0, result.stderr
-    baseline = app.packages()
-    own_tool = {"PATH": str(app.cli.parent)}
-    app.run("sync", env=own_tool)
-    assert app.packages() == baseline
-    app.declare("empty")
-    app.run("add", "empty", env=own_tool)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert set(json.loads(app.records()["modules.json"])["modules"]) == {"explicit"}
 
 
-@pytest.mark.skipif(
-    os.environ.get("ALIRA_TEST_SYSTEM_TRASH") != "1",
-    reason="set ALIRA_TEST_SYSTEM_TRASH=1 to exercise the real OS trash",
-)
-def test_uninstall_reaches_real_system_trash(installation, local_requirements):
+def test_migrate_preserves_locked_artifacts_without_running_resolver(
+    installation, local_requirements
+):
+    from alira.kernel.module.dependencies.requirements import requirements_fingerprint
+    from alira.kernel.module.dependencies.uv import installation_lock
+
     app = installation
-    name = "alira_trash_test_" + uuid4().hex
-    folder = app.declare(name, local_requirements + "left-pkg==1.0\n")
-    source = tree_snapshot(folder)
-    archive = app.root / "plugin.zip"
-    with ZipFile(archive, "w") as package:
-        for path in folder.rglob("*"):
-            if path.is_file():
-                package.write(path, path.relative_to(folder))
-    shutil.rmtree(folder)
-    core = app.packages()
-    app.run("install", archive)
-    assert app.packages() == core | {"left-pkg": "1.0", "shared-pkg": "1.0"}
-    app.run("uninstall", name)
-    assert not folder.exists()
-    assert app.packages() == core
-    assert json.loads(app.records()["modules.json"])["modules"] == {}
-    # macOS's native Send2Trash backend uses the logged-in user's actual trash,
-    # regardless of the isolated HOME used by Alira's records.
-    if sys.platform == "darwin":
-        import pwd
-
-        trash = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".Trash"
-        assert tree_snapshot(trash / name) == source
+    app.declare("demo", local_requirements + "left-pkg==1.0\n")
+    app.run("add", "demo", "--no-sync")
+    lock = json.loads(app.records()["modules.lock.json"])
+    artifact = installation_lock(lock)
+    legacy = json.dumps(
+        {
+            "format": 1,
+            "lock_hash": hashlib.sha256(artifact).hexdigest(),
+            "modules": {
+                "demo": {
+                    "packages": {
+                        name: item["version"] for name, item in lock["packages"].items()
+                    },
+                    "required_modules": [],
+                    "requirements": str(app.modules / "demo/requirements.txt"),
+                    "requirements_hash": requirements_fingerprint(
+                        app.modules / "demo/requirements.txt"
+                    ),
+                }
+            },
+        }
+    ).encode()
+    shutil.rmtree(app.state)
+    home = Path(app.env["HOME"]) / ".alira"
+    (home / "modules.json").write_bytes(legacy)
+    (home / "pylock.toml").write_bytes(artifact)
+    app.run("migrate", env={"PATH": str(app.root / "no-resolver")})
+    migrated = json.loads(app.records()["modules.lock.json"])
+    assert migrated["packages"] == lock["packages"]
+    assert (home / "modules.json.v1.bak").read_bytes() == legacy
+    assert (home / "pylock.toml.v1.bak").read_bytes() == artifact
+    app.run("sync", "--locked")
+    assert app.packages()["left-pkg"] == "1.0"

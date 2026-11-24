@@ -16,6 +16,13 @@ async def run(argv: Sequence[str] | None = None) -> None:
         await arguments.command_handler(arguments, module_manager)
         return
 
+    await module_manager.prepare_run(
+        *arguments.modules,
+        no_sync=arguments.no_sync,
+        locked=arguments.locked,
+        frozen=arguments.frozen,
+        force_sync=arguments.sync,
+    )
     module_manager.discover()
     unknown = set(arguments.modules) - module_manager.modules.keys()
     if unknown:
@@ -23,19 +30,17 @@ async def run(argv: Sequence[str] | None = None) -> None:
 
     from alira.cli.application import run_application
 
-    await run_application(
-        module_manager, arguments.modules, install_missing=arguments.install_missing
-    )
+    await run_application(module_manager, arguments.modules)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     try:
         asyncio.run(run(argv))
-    except KeyboardInterrupt:
-        pass
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        raise SystemExit(130) from None
     except (DependencyError, OSError) as exc:
         print(str(exc), file=sys.stderr)
-        raise SystemExit(1) from None
+        raise SystemExit(getattr(exc, "exit_code", 1)) from None
     except BaseExceptionGroup as exc:
         expected, unexpected = exc.split((DependencyError, OSError))
         if unexpected is not None:
@@ -50,4 +55,13 @@ def main(argv: Sequence[str] | None = None) -> None:
                     print(str(error), file=sys.stderr)
 
         report(expected)
-        raise SystemExit(1) from None
+
+        def exit_code(group):
+            return max(
+                exit_code(error)
+                if isinstance(error, BaseExceptionGroup)
+                else getattr(error, "exit_code", 1)
+                for error in group.exceptions
+            )
+
+        raise SystemExit(exit_code(expected)) from None

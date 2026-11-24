@@ -5,7 +5,12 @@ from typing import TYPE_CHECKING
 from alira.utils.config import YamlConfig
 from alira.utils.merge import merge_dicts
 from alira.utils.validation import validate_typed_dict_fields
-from alira.utils.yaml import append_to_yaml, load_from_yaml, update_to_yaml, write_to_yaml
+from alira.utils.yaml import (
+    append_to_yaml,
+    load_from_yaml,
+    update_to_yaml,
+    write_to_yaml,
+)
 
 if TYPE_CHECKING:
     from alira.utils.serialization import json_default

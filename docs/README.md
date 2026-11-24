@@ -67,13 +67,13 @@ module = ExampleModule(
 可使用版本约束，例如 `required_modules=["agent>=1.0,<2.0"]`；不写约束表示仅要求模块存在。
 `required_kernel` 声明 kernel 的 PEP 440 版本要求，默认 `">=3.0.0"`。模块版本必须为静态版本字符串。
 选定模块及前置模块的版本、所有消费者约束和循环依赖，会在启动任何模块前统一检查。
-`run`、`add`、`sync`、单模块/清单 `install` 均复用同一模块图解析器；`-i`、`-n` 不跳过模块图检查。
+`run`、`add`、`lock`、`sync`、单模块/清单 `install` 均复用同一模块图解析器；`--no-sync` 用于 add 时仍解析并写锁，用于 run 时跳过依赖同步。
 `add` 还会重新读取已有部署的当前源码声明，避免沿用过期约束；`remove` / `uninstall` 校验保留模块的当前依赖图，并允许删除有问题的模块来修复环境。
 `list`、`init`、帮助命令不解析依赖图，以便在依赖损坏时仍可查看目录或创建骨架。
-只有 `sync` 从全部源码重建依赖并修复中断后的损坏记录；其他部署命令读到损坏记录直接报错并提示 `alira sync`，不会补造记录或隐式修复。
+`sync` 只管理声明中的模块，保留未声明源码；损坏的锁可用 `lock` 重建，声明损坏应修复 modules.json 或从 journal 快照恢复。
 例如同时要求 `agent>1.0` 和 `agent<=1.0` 会报模块版本冲突。预发布版本按 PEP 440 规则比较。
 发现阶段只登记声明；加载时只检查选中模块及其前置模块的缺失依赖和循环依赖。前置模块就绪后才启动依赖它的模块，
-部署时独立模块的安装任务并行执行，运行时独立模块的启动任务并行执行；共享 Python 环境的文件写入锁由 uv 管理。
+管理阶段按源码根串行写入，独立 requirements 的闭包解析和运行时独立模块启动可并行执行。
 启动失败只跳过依赖该模块的后续模块，其他分支继续启动。所有启动任务结束后，直接打印各条依赖链的汇总结果：
 失败模块显示为红色 `name[x]`，跳过模块显示为灰色；共享前置模块只启动一次，但会出现在各条分支中。
 启动计划仅用于展示，调度仍由拓扑排序决定。模块启动异常由 kernel 捕获后立即通过日志器逐条打印，不集中输出异常日志。
@@ -126,7 +126,7 @@ Web 的请求与载荷模型位于 `alira.modules.web.src.shared`。
 生成上下文属于 Agent 内部运行状态，不作为跨模块共享数据的通道。
 全局 `alira.shared` 保留应用公共配置、日志和版本支持。
 Uvicorn 日志配置由 `web/src/logging.py` 管理，应用日志和通用日志处理器位于 `alira.shared.logger`。
-日志文件统一写入 `{ALIRA_BASE_DIR}/logs/{Logger.name}/`，按日期、进程启动后缀和文件大小轮转。
+日志文件统一写入 `~/.alira/logs/{Logger.name}/`，按日期、进程启动后缀和文件大小轮转。
 `Logger.write_log()` 的目录参数相对于该 Logger 的日志目录；留空时直接写入该目录。
 
 依赖遵循分层方向：模块依赖 kernel、shared 和 utils，kernel 依赖 shared 和 utils，shared 依赖 utils。
@@ -137,66 +137,94 @@ utils 不依赖其他 Alira 层；shared 不依赖 kernel 或业务模块；kern
 
 ## 管理命令
 
-所有管理命令均在应用生命周期外执行，不注册或启停内核服务，不打印 Logo，不执行模块入口代码。
-运行入口 `uv run alira run web` 维持原有生命周期：内核启动后才导入、加载所选模块及前置模块。
-管理命令读取目录和静态声明，运行时模块发现则通过已初始化的 `BaseModule` 实例判断可用性。
+依赖管理按“声明 → 解析 → 锁定 → 安装”分阶段执行。模块源码只在 checkout 的
+`src/alira/modules/`，或 `ALIRA_MODULES_DIR` 指定的现有目录；不会安装到用户状态目录。
+从 checkout 子目录运行时向上查找源码根。发行 wheel 可提供命令，但依赖命令需要源码根。
+帮助、`list` 和 `init` 保持原有行为；仅 `list` 导入声明获取版本，其他管理操作只做静态检查。
 
-| 命令 | 职责 |
+| 命令 | 行为 |
 | --- | --- |
-| `uv run alira init example` | 在当前 Alira 包的 `modules/example/` 创建最小模块骨架；不导入入口或安装依赖，已有目录报错 |
-| `uv run alira list` | 列出含 `main.py` 的模块目录及实例声明的版本；仅导入声明入口，不启动模块、不读取 JSON/lock、不解析依赖图。无有效实例时版本显示 `-` |
-| `uv run alira sync` | 全量扫描模块并联合求解 Python 依赖，重建 JSON/lock，安装缺包、更新版本、卸载不再需要的包 |
-| `uv run alira sync --no-install` | 只解析并重建记录，不修改 Python 环境 |
-| `uv run alira add web` | 解析已有 web 及前置模块的依赖，纳入管理并安装；复用已有管理记录处理共享依赖，不扫描其他未管理模块 |
-| `uv run alira add web --no-install` | 只解析并更新记录，不安装、更新或卸载包 |
-| `uv run alira remove web` | 从记录移除 web，卸载其他模块和内核均不再需要的依赖；保留源码 |
-| `uv run alira install ./example.zip` | 检查、安装源码，再复用 add 安装依赖 |
-| `uv run alira install https://github.com/owner/repo --ref v1.0.0` | 从 GitHub 指定分支、标签或提交安装；省略 ref 使用默认分支 |
-| `uv run alira install --package package.yml` | 先准备整份清单的源码，再执行一次全量 sync |
-| `uv run alira uninstall example` | 复用 remove 清理依赖，将源码移入系统回收站 |
+| `alira init example` | 创建最小源码骨架，不声明、锁定或安装 |
+| `alira list` | 列出源码名称和版本，不读取依赖状态或启动服务 |
+| `alira add web` | 声明 web 及前置模块、解析、写锁、安装 |
+| `alira add web --no-sync` | 声明、解析、写锁，跳过包安装 |
+| `alira add ./example.zip` | 安装 ZIP 源码，并走同一依赖流水线 |
+| `alira add ./module-directory` | 安装本地模块目录，拒绝符号链接 |
+| `alira add https://github.com/owner/repo --ref v1` | 安装指定 GitHub 修订 |
+| `alira add --manifest package.yml` | 添加清单中的多个源码，再统一解析 |
+| `alira lock` | 仅解析并生成锁；输入未变时保留既有解析结果 |
+| `alira lock --check` | 不写文件；锁缺失、声明或 requirements 变化时失败 |
+| `alira sync` | 必要时重锁，按精确版本和归档哈希安装，清理多余包 |
+| `alira sync --locked` | 禁止重锁；锁过期时失败，声明和锁保持原样 |
+| `alira sync --frozen` | 跳过声明新鲜度检查，直接使用现有锁同步 |
+| `alira remove web` | 删除声明、重算锁并卸载独占包；源码保留 |
+| `alira remove web --purge` | 同时将源码送入系统回收站 |
+| `alira uninstall web` | 与 remove --purge 相同 |
+| `alira tree` | 必要时锁定，显示模块依赖和包闭包；支持 --locked/--frozen |
+| `alira migrate` | 显式迁移旧全局状态，不安装 Python 包 |
 
-| 长选项 | 短选项 | 适用范围 |
-| --- | --- | --- |
-| `--help` | `-h` | 顶层命令和所有子命令 |
-| `--install-missing` | `-i` | `run` |
-| `--no-install` | `-n` | `add`、`sync` |
-| `--package FILE` | `-r FILE` | `install`，读取模块安装清单 |
+`install <source>` 保留为源码安装别名；`install --package FILE` / `-r FILE` 保留为清单入口。
+新命令使用 `add --manifest FILE`。旧 `sync --no-install` 对应 `lock`，旧 `add --no-install` 对应 `add --no-sync`。
+`remove --no-sync` 只更新声明和锁，保留 Python 包供稍后 sync。
 
-模块名和单模块安装的源码地址使用位置参数；选项使用双连字符长名称或单连字符短名称。
+### 启动行为
 
-`add/remove/uninstall` 支持多个名称。名称不存在、前置模块缺失、依赖冲突或移除被依赖模块时明确报错。
-`remove` 不修改源码；随后执行全量 sync 时，源码仍在的模块会重新纳入依赖管理。
-尚无运行时实例的模块也参与 Python 依赖管理，不需要先初始化 `BaseModule`。
+`alira run web` 在导入模块入口和启动内核前检查声明、源码、requirements 指纹和环境，
+必要时更新锁并安装缺包。它保留无关 Python 包；`sync` 执行精确同步并清理这些包。
+已声明模块的前置模块自动加载。未声明模块需先执行 `alira add`。
 
-管理命令不启动内核、不打印启动 Logo；仅 `list` 为获取版本号导入模块声明入口，不调用生命周期钩子，其他管理命令静态读取声明。`add/remove/uninstall` 支持多个模块名。
-`remove` 保留源码，后续全量 `sync` 会重新纳入这些模块；`uninstall` 将源码送入真正的系统回收站。
-依赖记录固定保存在 `Path.home() / ".alira"` 下的 `modules.json` 和 `pylock.toml`。
-记录损坏或安装中断后，可执行 `uv run alira sync`，从实际模块源码重新解析并同步环境。
-`sync` 会清理当前解释器环境中不属于模块或内核的包；部署、更新或移除依赖前应先停止应用。
-Ctrl+C 停止服务并清理资源，保留已部署依赖。
+- `run --locked`：要求锁最新，允许按锁补齐环境。
+- `run --frozen`：使用已有锁，允许补齐环境，不检查当前声明是否更新。
+- `run --no-sync`：跳过依赖状态和环境检查，由应用自行承担缺包风险。
+- `run --sync`：显式执行一次同步，然后启动。同步结束即释放文件锁。
+
+这些默认行为与 [uv 的锁定和同步规则](https://docs.astral.sh/uv/concepts/projects/sync/) 一致。
+不带模块名时只启动内核，不加载业务模块；`run --no-sync` 也可在迁移旧状态前启动。
+管理命令不启动服务、不注册信号处理器、不打印启动 Logo。应用 Ctrl+C 会清理资源，退出码为 130。
+
+### 项目状态和依赖保护
+
+Alira 目录固定为 `~/.alira`。状态目录为
+`~/.alira/projects/<sha256(realpath(modules_root))[:16]>/`，包含：
+
+- `modules.json`：format 2 声明，记录模块版本、来源、模块依赖和 requirements 指纹，不含 Python 包版本。
+- `modules.lock.json`：format 1 解析结果，记录内核/Python 身份、输入哈希、模块源码哈希、全部受管包及归档哈希。
+- `.lock`：filelock 互斥文件；命令执行期间另有 `lock.info` 记录 pid、主机、时间和操作。
+- `journal.json`：操作执行期间保存文件快照、快照哈希和已发布源码名称，成功后删除。
+
+Python 包安装到当前 `sys.executable`。每个 checkout 应使用独立虚拟环境。
+内核发行包 `alira-harness` 及其运行时闭包由已安装元数据保护，若 uv 同环境安装也一并保护；
+内核包不写入受管 packages。不同发行包的卸载记录若与内核共享文件，先解除这些文件的卸载声明。
+
+requirements 支持 uv 的 includes、constraints、extras 和 markers；本地 `-r` / `-c` 递归指纹可检测输入变化。
+解析器策略版本、规范化声明、内核版本和 Python 完整版本共同组成 `inputs-hash`。
+锁内保留完整 PEP 751 归档信息，安装时临时生成 pylock.toml，状态目录不保留第二份锁。
+现有锁中的包版本作为解析偏好；约束需要时仍可升级。
+内核依赖只有 Apixis、packaging、PyYAML、Send2Trash 和 filelock，业务包由模块声明。
+
+### 原子写入、取消和恢复
+
+`add/remove/lock/sync/install/uninstall/migrate` 的修改过程持有 filelock，最多等待 30 秒。
+超时输出拥有者信息并返回 2。运行稳定环境时只读检查不持有长期锁；遇到正在写入的状态会等待同步完成。
+不支持跨主机共享 `~/.alira`。
+
+文件使用临时同目录文件、fsync 和 os.replace 原子替换。失败或取消时，在 shield 保护下恢复声明和锁原始字节。
+包安装可能部分完成，后续 sync 可幂等修复；恢复失败仍保留原错误退出码并提示 `alira lock`。
+崩溃残留 journal 且状态变化时，下一次修改命令会提示 `alira sync --repair`，该选项先还原快照再继续同步。
+journal 的死进程未改状态时可自动清理；`.lock` 留在磁盘不代表锁仍被占用。
+
+退出码：成功 0；声明、解析、锁过期 1；并发锁冲突 2；依赖安装或卸载失败 3；用户取消 130。
 
 ## 源码安装与卸载
 
-ZIP 根目录或一层包装目录内至少包含 `main.py` 和 `src/`。
-安装在临时目录下载、解压及静态检查，禁止归档绝对路径、路径穿越、Windows 驱动器路径、符号链接和特殊文件。
-静态声明支持 `BaseModule(...)`、继承其构造方法的模块实例，以及模块类中的 `super().__init__(...)` 或显式基类初始化；支持导入别名和限定名称。
-模块名称、`required_modules` 和 `requirements_txt` 使用字面量或模块顶层常量（可带类型注解）；不执行函数来推断元数据。
-声明名必须是合法 Python 包标识符，并与最终目录名一致；没有名称声明时使用 ZIP/仓库名。
-`__init__.py` 缺失时补空文件，不执行入口或任何模块源码。模块目录为当前 Alira 包的 `modules/<name>/`，
-源码开发环境即 `src/alira/modules/<name>/`；单模块 install 遇到已有目录一律报错，不覆盖、不静默跳过。
-验证后通过目标文件系统中的暂存目录原子移动到模块目录，然后调用 add。
+ZIP 根或一层包装目录必须包含 `main.py` 和 `src/`；也支持本地模块目录和公共 GitHub 仓库。
+静态声明支持 BaseModule 构造调用、继承构造方法、super/显式基类初始化和顶层字面量常量，绝不执行源码推导元数据。
+模块名须是合法 Python 包标识符并匹配目标目录。拒绝路径穿越、绝对归档路径、符号链接和特殊文件。
 
-单模块 install/uninstall 失败时尽量恢复源码、依赖记录和此前 Python 包版本；优先使用原锁文件中的下载地址与哈希恢复依赖。
-即使旧包恢复失败，仍继续清理新装包并恢复记录，同时报告原始错误和恢复错误，提示执行 sync。
-uninstall 使用 Send2Trash 调用真正的操作系统回收站；回收站不可用时明确失败并尝试回滚，绝不改为永久删除源码。
-源码操作不会删除或移动其他模块；依赖管理命令不会删除源码。
-
-### 从 package.yml 批量安装
-
-```bash
-uv run alira install --package package.yml
-# 简写：uv run alira install -r package.yml
-```
+源码在模块根 `.alira-staging/` 内暂存，校验后通过 os.replace 原子发布；状态目录不保存模块源码。
+源码逐个发布；批量操作后续项目失败时，已发布源码保留。声明和锁仍回到操作前状态，重试原命令即可继续。
+`.alira-staging` 的发布记录使相同输入且已发布内容未变时跳过重新下载、解压和复制；本地 ZIP 变化会使记录失效。
+目标目录内容不同则报错并保留。源码树 SHA256 按相对路径和文件摘要稳定计算，忽略 .git、__pycache__ 和 pyc。
 
 ```yaml
 modules:
@@ -205,51 +233,19 @@ modules:
     ref: v1.0.0
 ```
 
-清单必须包含非空的 `modules` 列表，每项包含 `source` 和可选的 GitHub `ref`，不接受其他字段或重复键。
-本地路径相对于清单所在目录，支持 `~`；`ref` 可指定分支、标签或提交，建议使用固定提交以便重复安装。
-模块名由源码静态声明决定，不能重复。清单内的前置模块无需按依赖顺序排列；外部前置模块必须已经存在。
-全部归档先下载、解压、校验结构、名称、路径和模块依赖图，随后按前置模块优先的顺序逐个原子迁移源码；不导入或执行模块入口。
-源码准备失败不会安装任何新模块。普通迁移错误会尝试撤回本次新迁移的目录，已有源码不受影响。
+本地 source 相对清单位置；清单内 ref 单独设置。源码全部到位后，联合求解本次选择和已有声明，
+清单不会把其他未声明源码加入依赖管理。固定 git 提交可在原始来源仍可访问时恢复同一源码。
+`remove` 后 sync 不会把保留源码重新加入；`uninstall` / `remove --purge` 使用真正系统回收站。
+回收站失败时尝试还原源码，不永久删除。
 
-整批源码到位后复用 `sync`，全量解析所有实际模块，重新写入记录、锁文件并同步环境，保护内核依赖。
-这具有完整 sync 的语义：源码仍在但曾被 remove 的模块重新纳入管理，不属于内核或模块的 Python 包会被清理。
-依赖解析失败时撤回本次新增源码，保留此前的模块、环境和记录，避免新引入的冲突阻塞后续 sync。
-解析成功后，安装失败或 Ctrl+C 中断时保留已经校验的源码；恢复网络后执行 `uv run alira sync` 即可补齐。
-损坏或缺失的旧记录不会阻止批量安装后的全量同步，因此这一步无需回滚 JSON/lock 或 Python 包。
+### 旧状态迁移
 
-若 SIGKILL 或掉电发生在源码迁移过程中，可能仅有部分模块到位；这些模块的前置源码已先迁入，可通过 sync 修复当前集合，
-重新执行同一条 `install --package` 则会补齐清单中的剩余模块再同步。
-重复执行时会逐文件核对已有模块内容（忽略生成的 `__pycache__`），完全相同则复用，不覆盖；任何内容差异或符号链接均报错。
-这一重试规则仅适用于清单安装，单模块 install 的同名冲突行为不变。强制中断遗留的隐藏暂存目录不参与模块发现或依赖扫描。
-
-## Python 依赖与恢复
-
-模块默认读取 `main.py` 同目录的 `requirements.txt`，显式 `requirements_txt` 可以是绝对路径或相对于 `alira/modules` 的路径。
-uv 处理版本范围、extras、环境标记、`-r` 包含和 `-c` 约束；本地包含文件递归记录输入指纹。
-远程包含只在管理阶段解析，运行期不联网；更新远程输入后再次执行 sync。
-项目主依赖仅包含内核使用的 Apixis、packaging、PyYAML 和 Send2Trash。
-
-记录固定保存在 `Path.home() / ".alira" / "modules.json"`，完整 PEP 751 锁文件为同目录的 `pylock.toml`。
-路径不随 cwd、Python 环境或 `ALIRA_BASE_DIR` 改变；项目按一台机器部署一个实例设计，不区分多个 Python 环境的账本。
-JSON 记录每个模块的 requirements 路径、输入指纹、前置模块和依赖闭包，并记录锁文件的摘要。
-两份文件分别原子写入；若中断造成不一致，其他依赖管理命令明确提示 sync，sync 无须读取旧文件即可重建。
-
-sync 以实际模块源码为唯一依赖管理输入，完全替换旧记录，不依赖旧 managed、版本或锁文件。
-包安装目标始终为运行 Alira 的 `sys.executable`；完整 sync 清理该环境中不属于模块和内核的包。
-内核及其依赖闭包根据已安装 Alira 自身的发行元数据确定，固定当前内核版本，不信任可编辑的 JSON 来决定内核保护范围。
-若 uv 安装在同一解释器中，也会保留该依赖管理工具，避免 sync 卸载自身后无法继续管理依赖。
-卸载其他发行包前会解除其对内核共有文件的卸载声明，保留仍由内核拥有的命令入口和源码；
-包改名前的旧发行包可以正常清理，共享文件不会随之被删除。该保护也覆盖卸载被中断的情况。
-插件与内核版本要求冲突时，解析阶段报错，不修改环境；remove 始终保留内核和其他已管理模块需要的包。
-add 更新指定模块时，会将已有管理记录中的 requirements 一并参与联合求解，保证共享依赖仍满足其他模块。
-add 不清理无关包，环境的完整收敛由 sync 完成。
-
-安装前先提交新记录，解析或安装中断后可再次 sync，从源码重新解析、补齐缺包和清理多余包。
-安装中断遗留的缺失或不完整依赖元数据不会阻止 sync；对应的模块依赖会被重新安装。
-默认前台等待 uv 并继承终端，实时显示安装/更新/卸载进度；管理接口保留 `background=True` 的异步子进程执行方式供后续使用。
-`--no-install` 仍会写入新的解析结果；这些记录不表示当前环境已经完成同步。
-运行时 load 只读取记录、requirements 指纹和已安装包元数据，不联网、不写记录或 Python 环境；缺包或版本不符时提示 `uv run alira sync`。
-显式 `--install-missing` 对选定模块调用 add 后才执行 load，部署或升级后应重启进程。
+运行 `alira migrate` 将 `~/.alira/modules.json` 与 `pylock.toml` 转成当前源码根的新状态。
+校验旧 JSON 中的 lock_hash 后复用旧包版本、下载地址、归档哈希和所属模块，避免重新下载或求解。
+旧源码树模块记为 builtin，旧文件保留，另写 `.v1.bak` 备份。失败不替换旧文件，新状态文件回滚。
+迁移需要原来记录的全部模块源码和相同的 requirements 输入；输入已变时明确拒绝复用旧包结果，可重新 add。
+手写声明中的相对 source.path 以模块源码根为基准；add 生成的本地 source.path 始终为绝对路径。
+新状态已有声明或锁时拒绝覆盖。
 
 ## 模块配置
 
@@ -277,10 +273,9 @@ cache:
 
 根目录 `config.yaml` 只管理公共设置：`SERVER.base_dir`、`LOG`、`RUNTIME.cache_clean_interval`，
 以及由 Apixis 自行读取的 `APIXIS`。旧的根目录模块设置不再读取。
-默认应用数据目录为当前用户主目录下的 `.alira`（Linux/macOS 为 `~/.alira`，Windows 为 `%USERPROFILE%\.alira`）；
-通过 `pathlib.Path.home()` 获取主目录并使用平台原生路径。`SERVER.base_dir` 中的相对路径也以用户 home 为基准，
-`~` 会展开，结果统一解析为绝对路径，启动日志会显示最终目录。
-应用根配置仍从工作目录的 `config.yaml` 读取；只有显式选择不同配置时才可能改变数据目录。
+Alira 状态与日志固定保存在用户主目录的 `.alira` 中，通过 `Path.home()` 获取主目录。
+`SERVER.base_dir` 仍通过 `ALIRA_BASE_DIR` 提供给业务模块使用，保留配置原值；路径解释由模块负责，
+不会改变 Alira 状态或日志的位置。应用根配置仍从工作目录的 `config.yaml` 读取。
 模块配置缺失或某项为 `null` 时使用 `config.py` 中的默认值；配置在导入时读取，修改后需重启。
 `config.yaml` 均为本地文件，不纳入 Git 和发行包；安装后可在对应模块目录创建，未创建时直接使用默认值。
 模块声明阶段不导入业务配置；模块实现使用自己的 `config.py`，共享应用配置不导入任何业务模块。
@@ -315,7 +310,7 @@ kernel/
         ├── types.py          # 依赖信息、解析结果和错误契约
         ├── deployment.py     # 依赖归属、校验、同步和释放
         ├── uv.py             # uv 子进程和联合依赖解析
-        ├── ledger.py         # JSON 与持久 PEP 751 锁文件
+        ├── ledger.py         # 声明、JSON 锁与事务日志文件
         └── requirements.py   # requirements 输入指纹
 ```
 
@@ -330,9 +325,9 @@ from alira.kernel.module import module_manager
 manager = module_manager
 await manager.init("custom")       # 创建 custom 模块源码骨架，不部署依赖
 await manager.install("./example.zip")  # 安装源码并管理依赖
-await manager.install_package("package.yml")  # 整批安装源码，再执行全量同步
+await manager.install_package("package.yml")  # 整批安装源码，再统一解析已声明模块并同步
 await manager.add("example")        # 管理选定模块及前置模块依赖
-await manager.sync()                # 从源码全量重建并同步环境
+await manager.sync()                # 按声明更新锁并同步环境
 await manager.start()               # 此时才导入并登记运行时模块
 await manager.load("example")     # 离线只读校验依赖后启动
 print(await manager.check_health("example"))  # dict[str, ModuleStatus]
@@ -348,7 +343,7 @@ await manager.remove("example")   # 释放依赖部署，保留源码；共享�
 `src/shared/events.py` 预留公开事件契约。初始化不注册或加载模块、不读取或修改依赖记录。
 模块名须为有效 Python 标识符，不能是关键字或以 `__` 开头；已有文件、目录或符号链接不会被覆盖。
 文件在模块根目录的临时目录中准备完成后迁入目标；写入失败不会留下可发现的半成品模块。
-`await manager.start()` 只发现、登记运行时模块；`install("来源")` 安装源码和依赖，`add("名称")` 管理已有模块依赖，`sync()` 全量重建，`load("名称")` 校验后启动模块。
+`await manager.start()` 只发现、登记运行时模块；`install("来源")` 安装源码和依赖，`add("名称")` 管理已有模块依赖，`sync()` 按声明同步，`load("名称")` 校验后启动模块。
 模块发现成功后不再重复扫描；CLI 预检查与内核启动复用同一份声明。发现前需设置好模块目录与导入包名。
 直接调用不带参数的 `load()` 会加载全部已登记模块；命令行未选择模块时不会调用它。
 `await manager.check_health(*names)` 调用指定模块的 `health()`，按模块名返回 `ModuleStatus`；
@@ -360,7 +355,7 @@ await manager.remove("example")   # 释放依赖部署，保留源码；共享�
 `load()` 在同一管理器上只能执行一次，重复调用报 `RuntimeError`；应用运行期间不提供模块加载或卸载接口。
 启动任务按拓扑关系调度，单模块失败只跳过后续依赖模块；该模块的部分资源立即清理，已成功启动的模块保持运行。
 `stop()` 只在退出时统一关闭模块，逐项记录清理异常并继续；重复调用不再执行已处理的关闭钩子。
-依赖包与部署引用保留到显式 remove，部署移除失败时执行 `sync()` 从实际源码恢复环境。
+依赖包与部署引用保留到显式 remove，部署移除失败时执行 `sync()` 按已还原的声明和锁修复环境。
 管理器不清除 `sys.modules`、Python 类定义或自动撤销 Apixis handler；模块必须在 `shutdown()` 中自行注销 handler。
 升级代码或依赖后需要重启进程。
 测试可通过私有 `_new_for_tests()` 工厂创建独立管理器/生命周期实例，不重置或丢弃正在运行的全局单例。
@@ -380,13 +375,13 @@ uv run alira run web
 `example` 要求存在声明名为 `example` 的标准模块；选择没有可用实例的入口会在启动内核前报错。
 `uv run alira --help` 查看子命令；`uv run alira run --help` 查看位置参数与启动选项，不扫描或导入模块，也不读取部署记录。
 未知模块和未知选项报错，不接受缩写；模块名称直接放在 `run` 后，不加连字符。
-`--install-missing` 可简写为 `-i`，例如 `uv run alira run web example -i`。
+`run` 默认自动同步；显式同步使用 `uv run alira run web example --sync`，跳过使用 `--no-sync`。
 不带模块名的 `uv run alira run` 只运行内核；`uv run alira` 缺少子命令会报错。
 
 CLI 先解析并校验命令行参数；管理命令直接执行并退出，不发现运行时模块，不进入内核生命周期。
-应用运行路径才会启动内核服务，随后只读校验选中模块及其前置模块的部署依赖，按依赖顺序执行 startup()。
-只有显式依赖管理操作或 --install-missing 会解析、安装依赖；
-其缺失前置模块或 requirements 文件也不会阻止其他模块加载。
+应用运行路径先检查并按需同步声明和锁，再导入入口、启动内核服务，按依赖顺序执行 startup()。
+`--no-sync` 跳过依赖同步；模块图仍会在任何 startup() 前检查。
+未声明源码不会被 sync 加入；已声明模块的无效 requirements 会使同步阶段失败。
 
 运行完整开发测试时显式提供所有业务模块依赖（汇总文件只供开发测试使用）：
 
@@ -395,7 +390,7 @@ uv run --with-requirements tests/requirements.txt pytest
 ```
 
 `tests/kernel/module/test_isolated_commands.py` 构建当前 wheel，在独立解释器和临时用户目录中运行真实 `alira` 入口与 uv，
-覆盖环境隔离、共享依赖、版本更新、损坏记录和元数据修复、解析/安装/卸载强制终止后的 sync，以及安装/卸载失败回滚。
+覆盖源码根和状态隔离、共享依赖、版本更新、元数据修复、跨进程竞争、强制终止后的 journal 修复，以及失败时的状态恢复和源码保留。
 默认使用离线本地 wheel；额外的联网与系统回收站测试需要显式启用：
 
 ```bash

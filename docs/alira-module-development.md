@@ -81,7 +81,7 @@ class EchoModule(BaseModule):
             version=__version__,
             description="Echo event example",
             required_modules=[],
-    required_kernel=">=3.0.0",
+            required_kernel=">=3.0.0",
         )
         self._runtime = None
 
@@ -164,9 +164,9 @@ uv run alira run echo
 ```
 
 模块名称是 `run` 后的位置参数，可一次选择多个；例如 `uv run alira run echo reporter`。
-需要在启动前显式安装缺失依赖时，追加 `--install-missing` 或其简写 `-i`。
+启动前默认检查并补齐依赖；`--sync` 可显式同步，`--no-sync` 跳过同步。
 
-`add` 管理模块 Python 依赖，运行期默认只验证已部署依赖；启动不会自动安装缺包。
+`add` 声明模块并锁定、安装 Python 依赖；`run` 默认自动同步，`--locked` 禁止更新锁，`--frozen` 跳过声明新鲜度检查并按已有锁安装。
 部署操作的完整说明见[标准模块与依赖管理](README.md)。
 
 ## 2. 发通知：`post_event`

@@ -25,7 +25,6 @@ def lines(root, name="test"):
 def writer(tmp_path, monkeypatch):
     instance = LogWriter(str(tmp_path), 100, 1024 * 1024, interval=0.01)
     monkeypatch.setattr(Logger, "_writer", instance)
-    monkeypatch.setattr(logging, "ALIRA_BASE_DIR", str(tmp_path))
     monkeypatch.setattr(logging, "DEBUG_LEVEL", "DEBUG")
     yield instance
     try:
@@ -207,8 +206,10 @@ async def test_explicit_file_write_preserves_text_and_json(writer, tmp_path):
     log = Logger("test")
     await log.write_log("details", "text", "hello\nworld")
     await log.write_log("details", "json", {"中文": True})
-    assert (tmp_path / "logs/test/details/text.log").read_text() == "hello\nworld\n"
-    assert json.loads((tmp_path / "logs/test/details/json.jsonl").read_text()) == {"中文": True}
+    assert (tmp_path / "test/details/text.log").read_text() == "hello\nworld\n"
+    assert json.loads((tmp_path / "test/details/json.jsonl").read_text()) == {
+        "中文": True
+    }
     with pytest.raises(ValueError, match="inside the logger directory"):
         await log.write_log("..", "outside", "blocked")
 
@@ -345,18 +346,22 @@ def test_closed_stderr_does_not_kill_file_worker_or_hang_barriers(
 
 def test_process_starts_get_separate_files_and_loggers_share_suffix(tmp_path):
     (tmp_path / "config.yaml").write_text(
-        "SERVER:\n  base_dir: " + json.dumps(str(tmp_path)) + "\n", encoding="utf-8",
+        "SERVER:\n  base_dir: " + json.dumps(str(tmp_path)) + "\n",
+        encoding="utf-8",
     )
     legacy = tmp_path / "first" / f"{datetime.now():%Y-%m-%d}.log"
     legacy.parent.mkdir()
     legacy.write_text("previous logs\n")
     script = """
 import sys
+from pathlib import Path
 from importlib import import_module
+Path.home = classmethod(lambda cls: Path.cwd())
 from alira.shared.logger import Logger, LogWriter
 
 module = import_module('alira.shared.logger')
 module.DEBUG_LEVEL = 'DEBUG'
+assert Logger._writer.root == Path.cwd() / '.alira' / 'logs'
 with Logger.file_logging():
     Logger('first').info(sys.argv[1])
     Logger('second').info(sys.argv[1])
@@ -376,7 +381,7 @@ print(LogWriter.STARTUP_SUFFIX)
         assert suffix.isdecimal() and len(suffix) == 9
         suffixes.append(suffix)
         for name in ("first", "second"):
-            paths = list((tmp_path / "logs" / name).glob(f"*_{suffix}.log"))
+            paths = list((tmp_path / ".alira" / "logs" / name).glob(f"*_{suffix}.log"))
             assert len(paths) == 1
             assert marker in paths[0].read_text()
             other_marker = "second-start" if marker == "first-start" else "first-start"
@@ -385,7 +390,9 @@ print(LogWriter.STARTUP_SUFFIX)
     assert legacy.read_text() == "previous logs\n"
 
 
-def test_custom_log_level_registration_controls_output(writer, tmp_path, monkeypatch, capsys):
+def test_custom_log_level_registration_controls_output(
+    writer, tmp_path, monkeypatch, capsys
+):
     monkeypatch.setattr(logging, "LOG_LEVELS", dict(logging.LOG_LEVELS))
     monkeypatch.setattr(logging, "DEBUG_LEVEL", "INFO")
     log = Logger("test", show_time=False)
@@ -409,7 +416,9 @@ def test_custom_log_level_registration_controls_output(writer, tmp_path, monkeyp
     assert len(lines(tmp_path)) == 1 and "visible" in lines(tmp_path)[0]
 
 
-@pytest.mark.parametrize("method", ["info", "warning", "error", "exception", "success", "debug"])
+@pytest.mark.parametrize(
+    "method", ["info", "warning", "error", "exception", "success", "debug"]
+)
 @pytest.mark.parametrize("enabled", [True, False])
 def test_public_log_methods_apply_threshold_before_output(
     writer, tmp_path, monkeypatch, capsys, method, enabled
@@ -431,7 +440,9 @@ def test_public_log_methods_apply_threshold_before_output(
         assert lines(tmp_path) == []
 
 
-def test_caller_class_and_keyword_formatting_with_hidden_level(writer, tmp_path, capsys):
+def test_caller_class_and_keyword_formatting_with_hidden_level(
+    writer, tmp_path, capsys
+):
     log = Logger("test", show_time=False, show_level=False)
 
     class Caller:
@@ -475,10 +486,12 @@ def test_trace_flag_filters_without_formatting_and_supplies_default_message(
     assert len(lines(tmp_path)) == 2
 
 
-async def test_explicit_file_write_uses_defaults_for_blank_names(writer, tmp_path, monkeypatch):
+async def test_explicit_file_write_uses_defaults_for_blank_names(
+    writer, tmp_path, monkeypatch
+):
     monkeypatch.setattr(logging.time, "time", lambda: 1800000000.0)
     await Logger().write_log(" ", "", {"中文": False})
-    path = tmp_path / "logs/Logger/1800000000.0.jsonl"
+    path = tmp_path / "Logger/1800000000.0.jsonl"
     assert json.loads(path.read_text()) == {"中文": False}
     assert "中文" in path.read_text()
 

@@ -32,16 +32,18 @@ def runtime_log_directory(tmp_path_factory):
 
 
 @pytest.fixture
-def module_manager_factory(tmp_path):
+def module_manager_factory(tmp_path, monkeypatch):
     sequence = 0
 
     def create(modules_dir=None, *, package="alira.modules"):
         nonlocal sequence
         state_dir = tmp_path / f"module-state-{sequence}"
         sequence += 1
-        manager = ModuleManager._new_for_tests(state_dir=state_dir)
-        if modules_dir is not None:
-            manager.modules_dir = Path(modules_dir)
+        manager = ModuleManager._new_for_tests()
+        monkeypatch.setattr(manager, "_state_directory", lambda root: state_dir)
+        manager.modules_dir = (
+            Path(modules_dir) if modules_dir is not None else manager.modules_dir
+        )
         manager.package = package
         return manager
 

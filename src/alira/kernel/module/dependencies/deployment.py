@@ -1,30 +1,44 @@
 """Rebuild dependency records from sources and synchronize the runtime environment."""
 
 import csv
+import hashlib
 import io
+import json
 import os
-import re
+import platform
 import tomllib
-from collections.abc import AsyncIterator, Collection, Mapping
-from contextlib import asynccontextmanager
+from collections.abc import Collection, Mapping
 from importlib.metadata import distributions
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 from packaging.version import Version
 
-from alira.kernel.module.dependencies.ledger import DependencyLedger
-from alira.kernel.module.dependencies.requirements import requirements_fingerprint
+from alira._version import __version__
+from alira.kernel.module.dependencies.ledger import DependencyLedger, inputs_hash
+from alira.kernel.module.dependencies.requirements import (
+    requirements_fingerprint,
+    requirements_hash,
+)
 from alira.kernel.module.dependencies.types import (
     DependencyError,
     DependencyInfo,
+    DependencyInstallError,
     DependencyResolutionError,
     sync_hint,
 )
-from alira.kernel.module.dependencies.uv import EMPTY_LOCK, resolve_requirements, run_uv
+from alira.kernel.module.dependencies.uv import (
+    RESOLVER_VERSION,
+    complete_local_artifacts,
+    installation_lock,
+    resolve_requirements,
+    run_uv,
+)
 from alira.kernel.module.discovery.resolution import resolve_module_graph
+from alira.kernel.module.sources.archive import source_hash
 
 
 def _installed_distributions():
@@ -77,26 +91,6 @@ def kernel_packages() -> dict[str, str]:
     return protected
 
 
-def filter_lock(lock: bytes, keep: Collection[str]) -> bytes:
-    """Retain complete PEP 751 package blocks for a selected set of names.
-
-    Args:
-        lock: Resolver-generated full lock bytes with [[packages]] blocks.
-        keep: Canonical distribution names to retain, without resolving dependencies.
-
-    Returns:
-        Filtered lock bytes preserving artifact URLs and hashes. Empty selections
-        produce the standard empty lock. Callers must supply an already closed set.
-    """
-    parts = re.split(rb"(?m)^(?=\[\[packages\]\]$)", lock)
-    blocks = []
-    for entry in parts[1:]:
-        name = tomllib.loads(entry.decode("utf-8"))["packages"][0]["name"]
-        if name in keep:
-            blocks.append(entry)
-    return parts[0] + b"".join(blocks) if blocks else EMPTY_LOCK
-
-
 def _release_kernel_file_claims(
     removable: Collection[str], protected: Collection[str]
 ) -> None:
@@ -141,98 +135,108 @@ def _release_kernel_file_claims(
         DependencyLedger.atomic_write(record_path, output.getvalue().encode("utf-8"))
 
 
+def _artifact_digest(package: dict) -> str:
+    """Validate all locked archives and fingerprint their exact artifact metadata."""
+    artifacts = [*package.get("wheels", [])]
+    if "sdist" in package:
+        artifacts.append(package["sdist"])
+    if not artifacts:
+        raise DependencyError(
+            f"Dependency {package['name']} has no hashed distribution artifact"
+        )
+    for artifact in artifacts:
+        digest = artifact.get("hashes", {}).get("sha256", "")
+        if len(digest) != 64 or any(
+            character not in "0123456789abcdef" for character in digest
+        ):
+            raise DependencyError(
+                f"Dependency {package['name']} has no valid SHA-256 artifact hash"
+            )
+        if not (artifact.get("url") or artifact.get("path")):
+            raise DependencyError(
+                f"Dependency {package['name']} has no artifact location"
+            )
+    return hashlib.sha256(
+        json.dumps(artifacts, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 class ModuleDependencies:
-    """Implement dependency records, resolution and current-interpreter package updates.
+    """Resolve declarations and install authoritative locks into the current interpreter.
 
-    This component does not import runtime declarations or manage module lifecycles
-    or serialize clients. ModuleManager supplies validated specifications and holds
-    its operation lock. Claims reflect persisted desired state, not proof of a
-    completed environment installation.
-
-    Attributes:
-        ledger: Persistent deployment record/lock owner.
-        claims: Restored module-to-package/version ownership map.
-        requirement_hashes: Restored per-module input fingerprints.
+    Resolution has no persistent or environment effects. Installation consumes only
+    a lock, never requirements files. The manager owns declaration updates, file
+    locking and rollback; partial package installations converge on a later sync.
     """
 
     def __init__(self, state_dir: Path):
-        """Create empty in-memory ownership maps and a ledger rooted at state_dir; perform no I/O."""
+        """Store state paths and initialize empty ownership maps without I/O."""
         self.ledger = DependencyLedger(state_dir)
         self.claims: dict[str, dict[str, str]] = {}
-        self.requirement_hashes = {}
+        self.requirement_hashes: dict[str, str | None] = {}
 
     @staticmethod
     def installed() -> dict[str, str]:
-        """Return canonical distribution/version metadata for the current interpreter.
-
-        Incomplete or nameless metadata fragments are omitted. This is not an audit
-        that every installed package file is intact.
-        """
+        """Read complete canonical distribution/version metadata in this interpreter."""
         return {
             name: dist.version for name, dist in _installed_distributions()[0].items()
         }
 
     def restore(self) -> dict:
-        """Read validated ledger state and replace all in-memory ownership maps.
+        """Restore module ownership from the JSON lock and return the declaration.
 
-        Returns:
-            The validated record dictionary. Missing state initializes empty ownership.
-
-        Raises:
-            DependencyError: Existing records are damaged or inconsistent; run sync.
+        A missing lock yields no deployed claims. The declaration remains the sole
+        source of desired module membership; this method does not require freshness.
         """
-        state = self.ledger.read()
-        self.claims = {
-            name: record["packages"] for name, record in state["modules"].items()
-        }
-        self.requirement_hashes = {
-            name: record.get("requirements_hash")
-            for name, record in state["modules"].items()
-        }
-        return state
+        declaration = self.ledger.read()
+        lock = self.ledger.read_lock()
+        self.claims = (
+            {}
+            if lock is None
+            else {
+                name: {
+                    package: lock["packages"][package]["version"]
+                    for package in record["packages"]
+                }
+                for name, record in lock["modules"].items()
+            }
+        )
+        self.requirement_hashes = (
+            {}
+            if lock is None
+            else {
+                name: record.get("requirements-hash")
+                for name, record in lock["modules"].items()
+            }
+        )
+        return declaration
 
     @property
     def info(self) -> dict[str, DependencyInfo]:
-        """Read ownership and return new per-package DependencyInfo summaries.
-
-        The protected flag is computed from installed kernel metadata, not user-edited
-        records. Ledger validation failures propagate as DependencyError.
-        """
+        """Return package versions and owners recorded in the lock, excluding the kernel."""
         self.restore()
-        owners = {}
-        versions = {}
+        owners, versions = {}, {}
         for name, packages in self.claims.items():
             for package, version in packages.items():
                 owners.setdefault(package, set()).add(name)
                 versions[package] = version
-        protected = kernel_packages()
         return {
-            name: DependencyInfo(
-                name, versions[name], frozenset(modules), name in protected
-            )
+            name: DependencyInfo(name, versions[name], frozenset(modules), False)
             for name, modules in owners.items()
         }
 
     def verify(self, name: str, path: Path | None, installed: dict[str, str]) -> None:
-        """Verify one module's requirements fingerprint and locked installed versions offline.
+        """Check a loaded module's locked requirements and package versions offline.
 
-        Args:
-            name: Module whose restored claim and fingerprint should be verified.
-            path: Requirements file, or None to skip deployment verification entirely.
-            installed: Canonical distribution/version snapshot of the target interpreter.
-
-        Raises:
-            DependencyError: Requirements changed, a claim is absent or a dependency is
-                missing/incompatible. Includes module ownership and the sync repair hint.
-
-        Notes:
-            The caller must restore claims first when a requirements path exists.
-            This method reads local requirement includes but never installs or resolves.
+        Call ``restore`` first. Missing or changed declarations and missing packages
+        raise DependencyError with the owning module and a concrete sync command.
+        Modules without a requirements file need no Python-package deployment.
         """
         if path is None:
             return
-        fingerprint = requirements_fingerprint(path)
-        if name not in self.claims or self.requirement_hashes[name] != fingerprint:
+        if name not in self.claims or self.requirement_hashes[name] != requirements_hash(
+            path
+        ):
             raise DependencyError(
                 "dependencies are not deployed or requirements changed",
                 module=name,
@@ -250,321 +254,322 @@ class ModuleDependencies:
                     reason, module=name, missing=package, hint=sync_hint()
                 )
 
-    async def rebuild(
+    def lock_is_current(
         self,
+        declaration: dict,
         specifications: Mapping,
         *,
-        cwd: Path,
-        no_install: bool = False,
-        background: bool = False,
-        prune: bool = False,
-    ) -> None:
-        """Resolve a complete desired source set and replace its deployment records.
+        lock: dict | None = None,
+        allow_missing_sources: bool = False,
+    ) -> bool:
+        """Check input identity, static declarations and source fingerprints without uv.
+
+        Missing locks or sources are stale unless ``allow_missing_sources`` permits
+        a partial specification mapping while checking every declaration against the
+        locked metadata. Existing sources still receive all physical checks. This
+        lets locked sync restore missing sources after verifying input identity.
+        No state files or directories are created.
+        """
+        lock = self.ledger.read_lock() if lock is None else lock
+        if not SpecifierSet(declaration["requires-kernel"]).contains(
+            Version(__version__)
+        ):
+            return False
+        if lock is None or lock["inputs-hash"] != inputs_hash(
+            declaration, resolver_version=RESOLVER_VERSION
+        ):
+            return False
+        names = declaration["modules"].keys()
+        if names != lock["modules"].keys() or not specifications.keys() <= names:
+            return False
+        if not allow_missing_sources and specifications.keys() != names:
+            return False
+        for name, record in declaration["modules"].items():
+            locked = lock["modules"][name]
+            if (
+                record["version"] != locked["version"]
+                or record["required-modules"] != locked["required-modules"]
+                or record.get("requirements-hash") != locked.get("requirements-hash")
+            ):
+                return False
+            spec = specifications.get(name)
+            if spec is None:
+                continue
+            if (
+                record["version"] != spec.version
+                or record["required-modules"] != list(spec.required_modules)
+                or record.get("requirements-hash") != requirements_hash(spec.requirements)
+                or not spec.directory.is_dir()
+                or source_hash(spec.directory) != locked["source-sha256"]
+            ):
+                return False
+        return True
+
+    async def resolve(
+        self, declaration: dict, specifications: Mapping, *, cwd: Path
+    ) -> dict:
+        """Resolve all declared modules into an exact, hashed JSON lock in memory.
 
         Args:
-            specifications: Name-to-ModuleSpec mapping with valid prerequisite metadata.
-            cwd: Working directory for combined uv resolution and package operations.
-            no_install: Write resolved records/lock only; leave Python packages alone.
-            background: Capture uv install/remove output instead of inheriting the terminal.
-            prune: After installation, remove packages outside desired and protected sets.
-                Has no environment effect when no_install is true.
+            declaration: Validated v2 declaration, including current requirement hashes.
+            specifications: Complete source closure corresponding to the declaration.
+            cwd: Existing module source root for uv resolution.
+
+        Returns:
+            JSON-compatible lock with transitive package ownership and full PEP 751
+            artifacts. Kernel packages are constrained during resolution and omitted
+            from managed packages. Existing locked versions are preferences, allowing
+            upgrades required by changed constraints.
 
         Raises:
-            DependencyResolutionError: Input fingerprinting or solving failed before
-                replacing records; kernel versions are pinned throughout resolution.
-            DependencyError: Installation/removal failed or new records failed validation.
-            OSError: Working-file or ledger I/O failed.
-
-        Notes:
-            Does not read old locks; it is the source-driven recovery path. Writes
-            records before installing, so a successful write does not certify installed
-            packages. Rebuild again from source after interruption. Never changes module
-            source files and never removes distributions in the kernel closure.
+            DependencyResolutionError: A graph, fingerprint or Python dependency cannot
+                be resolved. No persistent files or installed packages have changed.
         """
-        resolve_module_graph(tuple(specifications), specifications.__getitem__)
-        protected = kernel_packages()
-        sources = {name: spec.requirements for name, spec in specifications.items()}
-        with TemporaryDirectory(prefix="alira-resolve-") as temporary:
-            directory = Path(temporary)
+        try:
+            if not SpecifierSet(declaration["requires-kernel"]).contains(
+                Version(__version__)
+            ):
+                raise DependencyError(
+                    f"Project requires kernel{declaration['requires-kernel']}, current kernel is {__version__}"
+                )
+            resolve_module_graph(tuple(specifications), specifications.__getitem__)
+            protected = kernel_packages()
             try:
-                fingerprints = {
-                    name: requirements_fingerprint(path)
-                    for name, path in sources.items()
-                }
-                plans = await resolve_requirements(sources, protected, directory, cwd)
-            except Exception as exc:
-                raise DependencyResolutionError(
-                    f"dependency resolution failed: {exc}", hint=sync_hint()
-                ) from exc
-            lock = (directory / "combined" / "pylock.toml").read_bytes()
-            records = {
-                name: {
-                    "packages": plan.packages,
-                    "requirements": str(sources[name])
-                    if sources[name] is not None
-                    else None,
-                    "requirements_hash": fingerprints[name],
-                    "required_modules": list(specifications[name].required_modules),
-                    "version": specifications[name].version,
-                    "required_kernel": specifications[name].required_kernel,
-                }
-                for name, plan in plans.items()
-            }
-            self.ledger.write({"format": 1, "modules": records}, lock)
-        self.restore()
-        if not no_install:
-            desired = {
-                package: version
-                for packages in self.claims.values()
-                for package, version in packages.items()
-            }
-            await self._install_locked(
-                lock,
-                {
-                    name: version
-                    for name, version in desired.items()
-                    if name not in protected
-                },
-                cwd=cwd,
-                background=background,
+                previous = self.ledger.read_lock()
+            except DependencyError:
+                # A damaged old lock cannot supply version preferences. The new
+                # resolution is the explicit repair path.
+                previous = None
+            if previous is not None and self.lock_is_current(
+                declaration, specifications, lock=previous
+            ):
+                return previous
+            sources = {name: spec.requirements for name, spec in specifications.items()}
+            with TemporaryDirectory(prefix="alira-resolve-") as temporary:
+                directory = Path(temporary)
+                plans = await resolve_requirements(
+                    sources, protected, directory, cwd, previous_lock=previous
+                )
+                resolved = tomllib.loads(
+                    (directory / "combined" / "pylock.toml").read_text()
+                )
+            return self._build_lock(
+                declaration,
+                specifications,
+                resolved,
+                {name: plan.packages for name, plan in plans.items()},
+                protected,
             )
+        except (DependencyError, OSError) as exc:
+            raise DependencyResolutionError(
+                f"dependency resolution failed: {exc}", hint=sync_hint()
+            ) from exc
+
+    def _build_lock(
+        self,
+        declaration: dict,
+        specifications: Mapping,
+        resolved: dict,
+        ownership: Mapping,
+        protected: Mapping,
+    ) -> dict:
+        """Convert resolved PEP 751 artifacts and module closures into one JSON lock."""
+        packages = {}
+        for original in resolved.get("packages", []):
+            name = canonicalize_name(original["name"])
+            if name in protected:
+                continue
+            package = original | {"name": name}
+            packages[name] = package | {"sha256": _artifact_digest(package)}
+        modules = {
+            name: {
+                "version": spec.version,
+                "source": declaration["modules"][name]["source"],
+                "source-sha256": source_hash(spec.directory),
+                "required-modules": list(spec.required_modules),
+                "requirements-hash": requirements_hash(spec.requirements),
+                "packages": sorted(set(ownership[name]) - protected.keys()),
+            }
+            for name, spec in specifications.items()
+        }
+        return {
+            "format": 1,
+            "generated-by": f"alira {__version__}",
+            "inputs-hash": inputs_hash(declaration, resolver_version=RESOLVER_VERSION),
+            "resolver-version": RESOLVER_VERSION,
+            "kernel": {"version": __version__, "python": platform.python_version()},
+            "modules": modules,
+            "packages": packages,
+            "install-metadata": {
+                key: value for key, value in resolved.items() if key != "packages"
+            },
+        }
+
+    def migrate_lock(
+        self,
+        declaration: dict,
+        specifications: Mapping,
+        legacy_records: dict,
+        legacy_lock: bytes,
+        *,
+        legacy_directory: Path | None = None,
+    ) -> dict:
+        """Convert a verified legacy ledger without resolving or downloading packages.
+
+        The caller verifies the legacy lock digest before invoking this method.
+        Exact artifact URLs/hashes and per-module transitive ownership are retained;
+        installed kernel distributions remain excluded from managed package data.
+        """
+        try:
+            resolved = tomllib.loads(legacy_lock.decode("utf-8"))
+            versions = {
+                canonicalize_name(item["name"]): item["version"]
+                for item in resolved.get("packages", [])
+            }
+            protected = kernel_packages()
+            for name in versions.keys() & protected.keys():
+                if Version(versions[name]) != Version(protected[name]):
+                    raise DependencyError(
+                        f"Legacy lock requires {name}=={versions[name]}, but the current kernel "
+                        f"uses {protected[name]}; run alira add to resolve current dependencies"
+                    )
+            resolved["packages"] = [
+                package
+                for package in resolved.get("packages", [])
+                if canonicalize_name(package["name"]) not in protected
+            ]
+            complete_local_artifacts(
+                resolved, legacy_directory or self.ledger.directory
+            )
+            records = legacy_records.get("modules", legacy_records)
+            for name, spec in specifications.items():
+                record = records[name]
+                if (
+                    record.get("requirements_hash")
+                    != requirements_fingerprint(spec.requirements)
+                    or ("version" in record and record["version"] != spec.version)
+                    or (
+                        "required_modules" in record
+                        and record["required_modules"] != list(spec.required_modules)
+                    )
+                ):
+                    raise DependencyError(
+                        f"Legacy inputs changed for module {name}; restore the original inputs "
+                        f"before migration or run alira add {name} to resolve current dependencies"
+                    )
+            ownership = {name: records[name]["packages"] for name in specifications}
+            for name, packages in ownership.items():
+                for package, version in packages.items():
+                    if versions.get(package) != version:
+                        raise DependencyError(
+                            f"Legacy package ownership does not match lock: {name}/{package}"
+                        )
+            return self._build_lock(
+                declaration, specifications, resolved, ownership, protected
+            )
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            UnicodeError,
+            OSError,
+            DependencyError,
+        ) as exc:
+            raise DependencyResolutionError(
+                f"Cannot migrate legacy dependency lock: {exc}"
+            ) from exc
+
+    async def install(
+        self, lock: dict, *, cwd: Path, background: bool = False, prune: bool = True
+    ) -> None:
+        """Install exact lock artifacts and optionally remove all unneeded packages.
+
+        Args:
+            lock: Authoritative JSON lock; declarations and requirements are not read.
+            cwd: Existing module source root used as the uv process directory.
+            background: Capture installer output while awaiting completion.
+            prune: Remove every package outside managed and kernel sets. ``run`` uses
+                False to preserve unrelated packages; ``sync`` uses True.
+
+        Raises:
+            DependencyInstallError: Artifact hashes, kernel identity or installation
+                fail. Package changes may be partial; repeating sync repairs them.
+            asyncio.CancelledError: The uv child is killed and reaped, then propagated.
+
+        PEP 751 is generated in a temporary directory and removed on exit. Kernel
+        packages and their installed files are protected independently of lock data.
+        """
+        try:
+            protected = kernel_packages()
+            if lock["kernel"] != {
+                "version": __version__,
+                "python": platform.python_version(),
+            }:
+                raise DependencyError(
+                    "Lock kernel or Python version does not match this interpreter; run alira lock"
+                )
+            packages = {
+                name: package
+                for name, package in lock["packages"].items()
+                if name not in protected
+            }
+            for package in packages.values():
+                if package["sha256"] != _artifact_digest(package):
+                    raise DependencyError(
+                        f"Dependency artifact fingerprint does not match: {package['name']}"
+                    )
+            if packages:
+                installed, incomplete = _installed_distributions()
+                reinstall = (
+                    set(packages)
+                    if None in incomplete
+                    else packages.keys() & incomplete
+                )
+                reinstall.update(
+                    name
+                    for name, package in packages.items()
+                    if name in installed
+                    and installed[name].version != package["version"]
+                )
+                options = [
+                    argument
+                    for name in sorted(reinstall)
+                    for argument in ("--reinstall-package", name)
+                ]
+                with TemporaryDirectory(prefix="alira-install-deps-") as temporary:
+                    artifact = Path(temporary) / "pylock.toml"
+                    artifact.write_bytes(installation_lock(lock, packages))
+                    await run_uv(
+                        "install",
+                        "--requirements",
+                        str(artifact),
+                        "--no-deps",
+                        *options,
+                        cwd=cwd,
+                        capture=background,
+                    )
             if prune:
                 await self.uninstall_packages(
-                    self.installed().keys() - desired.keys() - protected.keys(),
+                    self.installed().keys() - packages.keys() - protected.keys(),
                     cwd=cwd,
                     background=background,
                 )
-
-    async def _install_locked(
-        self, lock: bytes, packages: Mapping[str, str], *, cwd: Path, background: bool
-    ) -> None:
-        """Install the selected package/version mapping from full lock artifact blocks.
-
-        Reinstall mismatched or incomplete metadata, including the whole selected set
-        when a nameless fragment cannot identify its owner. The caller excludes kernel
-        packages and supplies a closed, already resolved set; uv is run with --no-deps.
-        """
-        if not packages:
-            return
-        installed, incomplete = _installed_distributions()
-        # uv can trust a dist-info directory's version even when METADATA is
-        # incomplete. Force repair; a nameless fragment cannot identify which
-        # managed package needs reinstallation, so repair the selected set.
-        reinstall = (
-            set(packages) if None in incomplete else packages.keys() & incomplete
-        )
-        reinstall.update(
-            name
-            for name, version in packages.items()
-            if name in installed and installed[name].version != version
-        )
-        options = [
-            argument
-            for name in sorted(reinstall)
-            for argument in ("--reinstall-package", name)
-        ]
-        with TemporaryDirectory(prefix="alira-install-deps-") as temporary:
-            install_lock = Path(temporary) / "pylock.toml"
-            install_lock.write_bytes(filter_lock(lock, packages))
-            await run_uv(
-                "install",
-                "--requirements",
-                str(install_lock),
-                "--no-deps",
-                *options,
-                cwd=cwd,
-                capture=background,
-            )
-
-    async def add(
-        self,
-        selected: Mapping,
-        *,
-        cwd: Path,
-        no_install: bool = False,
-        background: bool = False,
-    ) -> None:
-        """Merge selected source specifications with other recorded requirements and rebuild.
-
-        Args:
-            selected: Validated selected module/prerequisite name-to-spec mapping.
-            cwd: Module source root and working directory for package operations.
-            no_install: Update records/lock without installing or updating packages.
-            background: Capture uv progress while awaiting completion.
-
-        Raises:
-            DependencyError: Existing records require repair or environment update failed.
-            DependencyResolutionError: The merged requirements cannot be resolved.
-
-        Notes:
-            Retained declarations are read from current sources and resolved together
-            with selections. No unrelated source directories are scanned, no unrelated
-            packages are pruned and no source files are changed.
-        """
-        from alira.kernel.module.discovery.catalog import ModuleCatalog
-
-        state = self.ledger.read()
-        names = list(dict.fromkeys((*state["modules"], *selected)))
-        specifications = ModuleCatalog(cwd).select(names, prepared=selected)
-        await self.rebuild(
-            specifications, cwd=cwd, no_install=no_install, background=background
-        )
+        except (DependencyError, OSError) as exc:
+            raise DependencyInstallError(
+                f"dependency installation failed: {exc}", hint=sync_hint()
+            ) from exc
 
     async def uninstall_packages(
         self, names: Collection[str], *, cwd: Path, background: bool = False
     ) -> None:
-        """Uninstall selected distributions while protecting the current kernel closure.
-
-        Args:
-            names: Canonical distribution names eligible for removal.
-            cwd: Existing uv working directory.
-            background: Capture uv output rather than stream it to the terminal.
-
-        Raises:
-            DependencyError: uv could not launch or remove a package.
-            OSError: Installed ownership metadata could not be adjusted safely.
-
-        Notes:
-            Removes other distributions' claims on kernel-owned files before invoking
-            uv, preventing obsolete/shared console-script ownership from deleting the
-            active kernel. Does not change module claims or source directories.
-        """
+        """Remove distributions while releasing claims on kernel-owned files first."""
         protected = kernel_packages()
         removable = sorted(set(names) - protected.keys())
         if removable:
-            _release_kernel_file_claims(removable, protected)
-            await run_uv("uninstall", *removable, cwd=cwd, capture=background)
-
-    async def remove(
-        self, names: Collection[str], *, cwd: Path, background: bool = False
-    ) -> None:
-        """Drop recorded module claims and uninstall only packages no retained owner needs.
-
-        Args:
-            names: Module names currently present in validated ownership records.
-            cwd: uv working directory.
-            background: Capture uv progress while awaiting removal.
-
-        Raises:
-            DependencyError: A name is unrecorded, records are invalid, a retained module
-                requires a removed module or package uninstall fails.
-            OSError: Record, lock or package metadata I/O failed.
-
-        Notes:
-            Kernel packages remain protected. Writes retained records/lock before
-            uninstall and does not roll them back on failure. Source files remain;
-            full source-driven sync can repair or re-include removed claims.
-        """
-        state = self.ledger.read()
-        records = state["modules"]
-        selected = set(names)
-        unknown = selected - records.keys()
-        if unknown:
-            raise DependencyError(
-                f"Modules are not in dependency management records: {', '.join(sorted(unknown))}"
-            )
-        retained = {
-            name: record for name, record in records.items() if name not in selected
-        }
-        from alira.kernel.module.discovery.catalog import ModuleSpec
-
-        def get_retained(name):
-            if name not in retained:
-                raise DependencyError(
-                    f"Retained modules require removed or unrecorded module: {name}"
-                )
-            return ModuleSpec.read(cwd / name, name=name)
-
-        resolve_module_graph(tuple(retained), get_retained)
-        keep = {
-            package for record in retained.values() for package in record["packages"]
-        }
-        old = {package for name in selected for package in records[name]["packages"]}
-        lock = filter_lock(self.ledger.lockfile.read_bytes(), keep)
-        self.ledger.write({"format": 1, "modules": retained}, lock)
-        self.restore()
-        await self.uninstall_packages(old - keep, cwd=cwd, background=background)
-
-    @asynccontextmanager
-    async def transaction(
-        self, cwd: Path, *, background: bool = False
-    ) -> AsyncIterator[None]:
-        """Snapshot dependency state and attempt recovery if a source operation fails.
-
-        Args:
-            cwd: Working directory for rollback package operations.
-            background: Capture rollback uv output instead of streaming it.
-
-        Yields:
-            None after capturing raw ledger bytes and installed package versions.
-
-        Raises:
-            BaseException: The original operation failed and rollback completed.
-            BaseExceptionGroup: Original and recovery failures when rollback is incomplete.
-
-        Notes:
-            Prefers original lock artifact URLs/hashes for changed versions; other
-            prior versions use exact version requirements. Attempts new-package removal
-            and raw record restoration even when version recovery fails. This is best
-            effort, not process-crash durability; source backups are the caller's job.
-            No-name/incomplete metadata or arbitrary package file damage is not a full
-            environment snapshot. Use sync after incomplete recovery.
-        """
-        snapshot = self.ledger.snapshot()
-        before = self.installed()
-        try:
-            yield
-        except BaseException as failure:
-            errors = []
             try:
-                after = self.installed()
-                changed = {
-                    name: version
-                    for name, version in before.items()
-                    if after.get(name) != version
-                }
-                previous_lock = snapshot[self.ledger.lockfile]
-                if changed and previous_lock is not None:
-                    locked = {
-                        item["name"]: item["version"]
-                        for item in tomllib.loads(previous_lock.decode("utf-8")).get(
-                            "packages", []
-                        )
-                        if changed.get(item["name"]) == item["version"]
-                    }
-                    await self._install_locked(
-                        previous_lock, locked, cwd=cwd, background=background
-                    )
-                    changed = {
-                        name: version
-                        for name, version in changed.items()
-                        if name not in locked
-                    }
-                if changed:
-                    await run_uv(
-                        "install",
-                        "--no-deps",
-                        *(f"{name}=={version}" for name, version in changed.items()),
-                        cwd=cwd,
-                        capture=background,
-                    )
-            except Exception as exc:  # noqa: BLE001 - continue independent rollback steps
-                errors.append(exc)
-            try:
-                await self.uninstall_packages(
-                    self.installed().keys() - before.keys(),
-                    cwd=cwd,
-                    background=background,
-                )
-            except Exception as exc:  # noqa: BLE001 - report rollback failures alongside the original error
-                errors.append(exc)
-            try:
-                self.ledger.restore(snapshot)
-            except Exception as exc:  # noqa: BLE001 - report rollback failures alongside the original error
-                errors.append(exc)
-            if errors:
-                raise BaseExceptionGroup(
-                    "Module operation failed and rollback was incomplete; run uv run alira sync",
-                    [failure, *errors],
-                ) from None
-            raise
+                _release_kernel_file_claims(removable, protected)
+                await run_uv("uninstall", *removable, cwd=cwd, capture=background)
+            except (DependencyError, OSError) as exc:
+                raise DependencyInstallError(
+                    f"dependency removal failed: {exc}", hint=sync_hint()
+                ) from exc

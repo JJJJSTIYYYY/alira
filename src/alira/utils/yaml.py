@@ -1,141 +1,115 @@
-from pathlib import Path
-import os
+"""Read YAML data and update mapping files through a shared read/write path."""
+
 import logging
+from pathlib import Path
+from typing import Any
+
 import yaml
 
 logger = logging.getLogger(__name__)
 
-# ==========================================================
-# Yaml
-# ==========================================================
 
-def load_from_yaml(dir, key=None) -> dict | str:
-    """
-    Load yaml file and optionally return a specific key.
-
-    Args:
-        dir (str): Path to yaml file.
-        key (str, optional): Specific key to retrieve from yaml content.
-            If provided, return config[key], otherwise return full config.
-
-    Returns:
-        dict | str:
-            - Full yaml data (dict) if key is None
-            - Value of the specified key if key is provided (may be None if key not found)
-
-    Raises:
-        Exception: If file reading or yaml parsing fails.
-    """
-    config = None
-    try:
-        if os.path.exists(dir):
-            with open(dir, "r", encoding="utf-8") as f:
-                config = yaml.safe_load(f)
-        else:
-            config = {}
-        if key is not None:
-            return config.get(key)
-    
-    except Exception as e:
-        logger.error(f"Error loading yaml file: {e}")
-        raise
-    return config
+def _read_yaml(path: Path) -> Any:
+    """Read one document without imposing a public operation's error context."""
+    if not path.exists():
+        return {}
+    with path.open(encoding="utf-8") as stream:
+        return yaml.safe_load(stream)
 
 
-def write_to_yaml(dir, data: dict):
-    """
-    Write data to yaml file (overwrite mode).
+def _write_yaml(path: Path, data: dict) -> None:
+    """Write one document, creating the destination's parents if needed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as stream:
+        yaml.safe_dump(data, stream, allow_unicode=True)
+
+
+def load_from_yaml(dir: str | Path, key: str | None = None) -> Any:
+    """Load a YAML document or return one key from a YAML mapping.
 
     Args:
-        dir (str): Path to yaml file.
-        data (dict): Data to be written into yaml.
+        dir: File to read as UTF-8.
+        key: Optional top-level mapping key. Missing keys return None.
 
     Returns:
-        None
+        Parsed YAML data. Missing files produce an empty dict; empty documents
+        return None.
+        When key is provided, the document must be a mapping.
 
     Raises:
-        Exception: If file writing fails.
+        OSError: Reading the file failed.
+        yaml.YAMLError: The document contains invalid YAML.
     """
     try:
-        if not os.path.exists(dir):
-            Path(dir).parent.mkdir(parents=True, exist_ok=True)
-        with open(dir, "w", encoding="utf-8") as f:
-            yaml.safe_dump(data, f, allow_unicode=True)
-    except Exception as e:
-        logger.error(f"Error writing to yaml file: {e}")
+        data = _read_yaml(Path(dir))
+        return data if key is None else data.get(key)
+    except (OSError, yaml.YAMLError) as exc:
+        logger.error(f"Error loading yaml file: {exc}")
         raise
 
 
-def append_to_yaml(dir, new_data: dict):
-    """
-    Append (merge) data into yaml file.
-
-    If file exists:
-        - Load existing yaml data
-        - Merge with new_data using dict.update()
-    If file does not exist:
-        - Create a new yaml file with new_data
+def write_to_yaml(dir: str | Path, data: dict) -> None:
+    """Overwrite a UTF-8 YAML file, creating its parent directories when needed.
 
     Args:
-        dir (str): Path to yaml file.
-        new_data (dict): New data to merge into existing yaml.
-
-    Returns:
-        None
+        dir: Destination file.
+        data: Mapping to serialize, preserving Unicode characters.
 
     Raises:
-        Exception: If file read/write or yaml parsing fails.
+        OSError: Creating the parent directory or writing the file failed.
+        yaml.YAMLError: The mapping cannot be serialized as safe YAML.
     """
     try:
-        if os.path.exists(dir):
-            with open(dir, "r", encoding="utf-8") as f:
-                existing_data = yaml.safe_load(f) or {}
-        else:
-            existing_data = {}
-
-        # Update existing data with new data
-        existing_data.update(new_data)
-
-        with open(dir, "w", encoding="utf-8") as f:
-            yaml.safe_dump(existing_data, f, allow_unicode=True)
-    except Exception as e:
-        logger.error(f"Error appending to yaml file: {e}")
+        _write_yaml(Path(dir), data)
+    except (OSError, yaml.YAMLError) as exc:
+        logger.error(f"Error writing to yaml file: {exc}")
         raise
+
+
+def append_to_yaml(dir: str | Path, new_data: dict) -> None:
+    """Merge top-level mapping keys into a YAML file, replacing existing values.
+
+    Args:
+        dir: Mapping file to update; missing files start with an empty mapping.
+        new_data: Keys and values to apply using dict.update.
+
+    Raises:
+        OSError: Reading or writing the file failed.
+        yaml.YAMLError: YAML parsing or serialization failed.
+    """
+    try:
+        path = Path(dir)
+        data = _read_yaml(path) or {}
+        data.update(new_data)
+        _write_yaml(path, data)
+    except (OSError, yaml.YAMLError) as exc:
+        logger.error(f"Error appending to yaml file: {exc}")
+        raise
+
 
 def update_to_yaml(file_path: Path, title: str, content: str) -> dict:
-    """
-    Update or delete a key in yaml file.
+    """Set or delete a top-level mapping key and return the updated mapping.
 
     Args:
-        file_path (Path): yaml file path
-        title (str): memo title
-        content (str): memo content, if empty -> delete
+        file_path: Mapping file to update; missing files start with an empty mapping.
+        title: Key to update or delete.
+        content: Value to store. Whitespace-only content deletes the key if present.
 
     Returns:
-        dict: latest full yaml data
+        The mapping written to the file.
+
+    Raises:
+        OSError: Reading or writing the file failed.
+        yaml.YAMLError: YAML parsing or serialization failed.
     """
     try:
-        # Load existing data
-        if file_path.exists():
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = yaml.safe_load(f) or {}
-        else:
-            data = {}
-
-        if not content.strip():
-            # Delete
-            if title in data:
-                del data[title]
-        else:
-            # Insert / Update
+        data = _read_yaml(file_path) or {}
+        if content.strip():
             data[title] = content
-
-        # Write back
-        with open(file_path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(data, f, allow_unicode=True)
-
+        else:
+            data.pop(title, None)
+        _write_yaml(file_path, data)
         return data
-
-    except Exception as e:
-        logger.error(f"Error updating to yaml file: {e}")
+    except (OSError, yaml.YAMLError) as exc:
+        logger.error(f"Error updating to yaml file: {exc}")
         raise

@@ -104,3 +104,13 @@ def requirements_fingerprint(path: Path | None) -> str | None:
 
     visit(root)
     return digest.hexdigest()
+
+
+def requirements_hash(path: Path | None) -> str | None:
+    """Return the prefixed fingerprint used by declarations and locks, or None.
+
+    Reads the same local inputs as requirements_fingerprint and propagates its
+    DependencyError when an input is unreadable or invalid.
+    """
+    digest = requirements_fingerprint(path)
+    return f"sha256:{digest}" if digest is not None else None

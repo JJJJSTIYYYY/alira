@@ -16,7 +16,6 @@ from threading import Condition, RLock, Thread
 from typing import Any, ClassVar
 
 from alira.shared.application.config import (
-    ALIRA_BASE_DIR,
     DEBUG_LEVEL,
     LOG_BUFFER_SIZE,
     MAX_LOG_FILE_SIZE,
@@ -55,7 +54,9 @@ class LogWriter:
 
     STARTUP_SUFFIX: ClassVar[str] = datetime.now().strftime("%H%M%S%f")[:-3]
 
-    def __init__(self, root: str | Path, capacity: int, file_size: int, interval: float = 0.2):
+    def __init__(
+        self, root: str | Path, capacity: int, file_size: int, interval: float = 0.2
+    ):
         if capacity <= 0 or file_size <= 0 or interval <= 0:
             raise ValueError(
                 "Log capacity, file size and flush interval must be positive"
@@ -272,7 +273,7 @@ class Logger:
     """Colored console logging with bounded, batched background file output."""
 
     _writer: ClassVar[LogWriter] = LogWriter(
-        Path(ALIRA_BASE_DIR) / "logs", LOG_BUFFER_SIZE, MAX_LOG_FILE_SIZE
+        Path.home() / ".alira" / "logs", LOG_BUFFER_SIZE, MAX_LOG_FILE_SIZE
     )
     _time_cache: ClassVar[tuple[int | None, str]] = (None, "")
 
@@ -536,7 +537,7 @@ class Logger:
             log_file = str(time.time())
 
         suffix = ".jsonl" if isinstance(message, dict) else ".log"
-        base = (Path(ALIRA_BASE_DIR) / "logs" / self.name).resolve()
+        base = (Logger._writer.root / self.name).resolve()
         destination = (base / log_folder / f"{log_file}{suffix}").resolve()
         if not destination.is_relative_to(base):
             raise ValueError("Log path must stay inside the logger directory")

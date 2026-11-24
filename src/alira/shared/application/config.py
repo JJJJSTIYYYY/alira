@@ -6,10 +6,8 @@ from alira.utils.config import YamlConfig
 
 _config = YamlConfig("config.yaml")
 
-_base_dir = Path(_config.get("SERVER.base_dir", Path.home() / ".alira")).expanduser()
-ALIRA_BASE_DIR = str(
-    (_base_dir if _base_dir.is_absolute() else Path.home() / _base_dir).resolve()
-)
+# Business modules own how they interpret this data-directory setting.
+ALIRA_BASE_DIR = _config.get("SERVER.base_dir", str(Path.home() / ".alira"))
 
 DEBUG_LEVEL = _config.get("LOG.debug_level", "DEBUG")
 TRACE = _config.get("LOG.trace", True)

@@ -21,14 +21,14 @@ from alira.shared.logger import (
 
 __all__ = [
     "ALIRA_BASE_DIR",
-    "AliraLogHandler",
     "CACHE_CLEAN_INTERVAL",
     "DEBUG_LEVEL",
     "LOG_BUFFER_SIZE",
-    "Logger",
-    "LogWriter",
     "MAX_LOG_FILE_SIZE",
     "TRACE",
+    "AliraLogHandler",
+    "LogWriter",
+    "Logger",
     "compare_version",
     "config",
     "logger",

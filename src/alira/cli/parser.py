@@ -2,7 +2,18 @@
 
 from argparse import ArgumentParser
 
-from alira.cli.commands import add, init, install, list_modules, remove, sync, uninstall
+from alira.cli.commands import (
+    add,
+    init,
+    install,
+    list_modules,
+    lock,
+    migrate,
+    remove,
+    sync,
+    tree,
+    uninstall,
+)
 
 
 def build_parser() -> ArgumentParser:
@@ -22,21 +33,36 @@ def build_parser() -> ArgumentParser:
         nargs="*",
         help="Modules to start together with their prerequisites",
     )
-    runtime.add_argument(
-        "-i",
-        "--install-missing",
+    controls = runtime.add_mutually_exclusive_group()
+    controls.add_argument(
+        "--no-sync",
         action="store_true",
-        help="Explicitly deploy selected module dependencies before starting",
+        help="Run without checking or synchronizing dependencies",
+    )
+    controls.add_argument(
+        "--sync",
+        action="store_true",
+        help="Explicitly synchronize the environment before running",
+    )
+    freshness = runtime.add_mutually_exclusive_group()
+    freshness.add_argument(
+        "--locked",
+        action="store_true",
+        help="Require an up-to-date lock; never resolve",
+    )
+    freshness.add_argument(
+        "--frozen",
+        action="store_true",
+        help="Install from the existing lock without checking freshness",
     )
     for name, description, command in (
         ("init", "Create a new module source skeleton", init),
         ("list", "List module names and versions without starting them", list_modules),
-        (
-            "sync",
-            "Rebuild all module dependencies and synchronize Python packages",
-            sync,
-        ),
-        ("add", "Add existing modules to dependency management", add),
+        ("lock", "Resolve module dependencies without installing", lock),
+        ("sync", "Synchronize sources and Python packages from the lock", sync),
+        ("tree", "Show module and Python package dependencies", tree),
+        ("migrate", "Migrate legacy global state into this source checkout", migrate),
+        ("add", "Declare modules and install their dependencies", add),
         ("remove", "Release dependencies, preserving module sources", remove),
         ("install", "Install a module or a package.yml source set", install),
         (

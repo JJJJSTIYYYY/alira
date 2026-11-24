@@ -65,7 +65,6 @@ def deployment_cli(environment):
         "    canonicalize_name(dist.metadata['Name']): dist.version\n"
         f"    for dist in distributions(path=[{str(site)!r}])\n"
         "}\n"
-        "module_manager._dependencies.restore()\n"
         "from alira import main\n"
         "main.main(sys.argv[1:])\n"
     )
@@ -92,8 +91,11 @@ async def test_cli_deployment_and_removal_survive_process_restarts(deployment_cl
     assert installed(site) == expected
     ledger = root / "state/modules.json"
     deployed = json.loads(ledger.read_text())
-    assert deployed["modules"]["demo"]["packages"] == expected
-    assert (root / "state/pylock.toml").is_file()
+    assert "packages" not in deployed["modules"]["demo"]
+    lock = json.loads((root / "state/modules.lock.json").read_text())
+    assert {
+        name: item["version"] for name, item in lock["packages"].items()
+    } == expected
     original_ledger = ledger.read_bytes()
     assert not (root / "ready").exists()
 
@@ -131,7 +133,9 @@ async def test_cli_deployment_and_removal_survive_process_restarts(deployment_cl
     assert json.loads(ledger.read_text())["modules"] == {}
 
 
-async def test_cli_reports_removed_dependency_and_repair_command(deployment_cli):
+async def test_cli_repairs_missing_locked_packages_without_changing_records(
+    deployment_cli,
+):
     root, site, script = deployment_cli
     added = run_cli(root, script, "add", "demo")
     assert added.returncode == 0, added.stdout + added.stderr
@@ -139,25 +143,13 @@ async def test_cli_reports_removed_dependency_and_repair_command(deployment_cli)
     original_ledger = ledger.read_bytes()
     await run_uv("uninstall", "shared-pkg", cwd=root)
     assert installed(site) == {"left-pkg": "1.0"}
-
-    failed = run_cli(
-        root,
-        script,
-        "run",
-        "demo",
-        env=os.environ | {"PATH": str(root / "no-executables")},
-    )
-    assert failed.returncode != 0
-    assert "module 'demo'" in failed.stderr
-    assert "missing dependency shared-pkg==2.0" in failed.stderr
-    assert "uv run alira sync" in failed.stderr
-    assert "Traceback" not in failed.stderr
-    assert not (root / "ready").exists()
-    assert installed(site) == {"left-pkg": "1.0"}
+    repaired = run_cli(root, script, "sync", "--locked")
+    assert repaired.returncode == 0, repaired.stdout + repaired.stderr
+    assert installed(site) == {"left-pkg": "1.0", "shared-pkg": "2.0"}
     assert ledger.read_bytes() == original_ledger
 
 
-async def test_sync_includes_pending_modules_and_list_never_reads_deployments(
+async def test_sync_uses_declared_modules_and_list_never_reads_deployments(
     deployment_cli,
 ):
     root, site, script = deployment_cli
@@ -171,17 +163,21 @@ async def test_sync_includes_pending_modules_and_list_never_reads_deployments(
     no_installer = os.environ | {"PATH": str(root / "no-executables")}
     listed = run_cli(root, script, "list", env=no_installer)
     assert listed.returncode == 0, listed.stderr
-    assert listed.stdout.splitlines() == ["NAME     VERSION", "demo     1.0", "pending  -"]
+    assert listed.stdout.splitlines() == [
+        "NAME     VERSION",
+        "demo     1.0",
+        "pending  -",
+    ]
     synced = run_cli(root, script, "sync")
     assert synced.returncode == 0, synced.stderr
+    assert installed(site) == {}
+    assert json.loads((root / "state/modules.json").read_text())["modules"] == {}
+    added = run_cli(root, script, "add", "demo", "pending")
+    assert added.returncode == 0, added.stderr
     assert installed(site) == {
         "left-pkg": "1.0",
         "shared-pkg": "2.0",
         "leaf-pkg": "1.0",
-    }
-    assert set(json.loads((root / "state/modules.json").read_text())["modules"]) == {
-        "demo",
-        "pending",
     }
     assert not (root / "ready").exists()
 
@@ -205,7 +201,7 @@ async def test_install_adds_dependencies_and_remove_preserves_sources(deployment
     assert installed(site) == {}
     synced = run_cli(root, script, "sync")
     assert synced.returncode == 0, synced.stderr
-    assert installed(site) == {"left-pkg": "1.0", "shared-pkg": "2.0"}
+    assert installed(site) == {}
 
 
 async def test_management_preserves_kernel_project_files_and_host_environment(
@@ -228,7 +224,7 @@ async def test_management_preserves_kernel_project_files_and_host_environment(
     for command in [("add", "demo"), ("remove", "demo"), ("sync",)]:
         result = run_cli(root, script, *command)
         assert result.returncode == 0, result.stderr
-    assert installed(site) == {"left-pkg": "1.0", "shared-pkg": "2.0"}
+    assert installed(site) == {}
     assert {name: (root / name).read_text() for name in project_files} == project_files
     assert {path: path.read_bytes() for path in kernel.rglob("*.py")} == source_before
     assert {
@@ -236,20 +232,23 @@ async def test_management_preserves_kernel_project_files_and_host_environment(
     } == host_before
 
 
-async def test_real_sync_no_install_and_corrupt_record_recovery(deployment_cli):
+async def test_lock_check_is_offline_read_only_and_sync_installs_it(deployment_cli):
     root, site, script = deployment_cli
-    resolved = run_cli(root, script, "sync", "-n")
+    resolved = run_cli(root, script, "add", "demo", "--no-sync")
     assert resolved.returncode == 0, resolved.stderr
     assert installed(site) == {}
     state = root / "state"
-    assert (state / "modules.json").exists()
-    assert (state / "pylock.toml").exists()
-    (state / "modules.json").write_text("{broken")
-    (state / "pylock.toml").write_text("broken lock")
-    # The CLI must not restore records before dispatching sync.
-    text = script.read_text().replace("module_manager._dependencies.restore()\n", "")
-    script.write_text(text)
-    repaired = run_cli(root, script, "sync")
-    assert repaired.returncode == 0, repaired.stderr
+    before = {path.name: path.read_bytes() for path in state.glob("*.json")}
+    checked = run_cli(
+        root,
+        script,
+        "lock",
+        "--check",
+        env=os.environ | {"PATH": str(root / "no-executables")},
+    )
+    assert checked.returncode == 0, checked.stderr
+    assert {path.name: path.read_bytes() for path in state.glob("*.json")} == before
+    synced = run_cli(root, script, "sync", "--locked")
+    assert synced.returncode == 0, synced.stderr
     assert installed(site) == {"left-pkg": "1.0", "shared-pkg": "2.0"}
-    assert set(json.loads((state / "modules.json").read_text())["modules"]) == {"demo"}
+    assert {path.name: path.read_bytes() for path in state.glob("*.json")} == before

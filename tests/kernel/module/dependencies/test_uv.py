@@ -125,7 +125,7 @@ async def test_shared_transitive_packages_resolve_once_and_uninstall_at_last_ref
     manager = module_manager_factory(root)
     left = add_module(manager, packages, "left", "Left_Pkg>=1\nleft-pkg>=1")
     right = add_module(manager, packages, "right", "right-pkg>=1")
-    await manager.sync()
+    await manager.add(*manager.list())
     await manager.load()
     assert left.running and right.running
     # A separate solve of left would choose shared 2.0; joint solving must find 1.0.
@@ -145,7 +145,7 @@ async def test_shared_transitive_packages_resolve_once_and_uninstall_at_last_ref
     await manager.remove("left")
     assert installed(site) == {"right-pkg": "1.0", "shared-pkg": "1.0"}
     assert manager.dependencies["shared-pkg"].modules == {"right"}
-    await manager.remove(*tuple(manager._dependencies.claims))
+    await manager.remove(*manager.deployments)
     assert installed(site) == {}
     assert not manager.dependencies
 
@@ -158,7 +158,7 @@ async def test_conflicting_versions_fail_before_environment_or_startup_changes(
     first = add_module(manager, packages, "a", "shared-pkg==1.0")
     second = add_module(manager, packages, "b", "shared-pkg==2.0")
     with pytest.raises(DependencyError, match="No solution found"):
-        await manager.sync()
+        await manager.add(*manager.list())
     assert not first.running and not second.running
     assert not manager.dependencies
     assert installed(site) == {}
@@ -178,14 +178,14 @@ async def test_includes_constraints_extras_markers_and_reference_counts(
     (root / "extra" / "included.txt").write_text("extra-pkg[feature]\n")
     (root / "extra" / "constraints.txt").write_text("extra-pkg==1.0\n")
     add_module(manager, packages, "leaf", "leaf-pkg")
-    await manager.sync()
+    await manager.add(*manager.list())
     await manager.load()
     assert installed(site) == {"extra-pkg": "1.0", "leaf-pkg": "1.0"}
     assert manager.dependencies["leaf-pkg"].ref_count == 2
     await manager.stop()
     await manager.remove("extra")
     assert installed(site) == {"leaf-pkg": "1.0"}
-    await manager.remove(*tuple(manager._dependencies.claims))
+    await manager.remove(*manager.deployments)
     assert installed(site) == {}
 
 
@@ -206,9 +206,9 @@ async def test_kernel_packages_are_pinned_and_never_removed(
     )
     manager = module_manager_factory(root)
     add_module(manager, packages, "a", "left-pkg")
-    await manager.sync()
+    await manager.add(*manager.list())
     await manager.load()
-    assert manager.dependencies["shared-pkg"].preinstalled
+    assert "shared-pkg" not in manager.dependencies
     await manager.stop()
     add_module(manager, packages, "incompatible", "shared-pkg==2.0")
     with pytest.raises(DependencyError, match="No solution found"):
@@ -255,7 +255,7 @@ async def test_failed_startup_preserves_deployment_until_explicit_removal(
         raise RuntimeError("business startup failed")
 
     module.startup = fail
-    await manager.sync()
+    await manager.add(*manager.list())
     await manager.load()
     assert "business startup failed" in capsys.readouterr().err
     assert installed(site) == {"left-pkg": "1.0", "shared-pkg": "2.0"}
@@ -282,7 +282,7 @@ async def test_discovery_and_unselected_modules_never_install_packages(
     assert selected.running and not inactive.running
     assert installed(site) == {"left-pkg": "1.0", "shared-pkg": "2.0"}
     await manager.stop()
-    await manager.remove(*tuple(manager._dependencies.claims))
+    await manager.remove(*manager.deployments)
     assert installed(site) == {}
 
 
@@ -298,8 +298,9 @@ async def test_real_resolver_upgrades_managed_packages_after_restart(
 
     from alira.kernel.module import ModuleManager
 
-    second = ModuleManager._new_for_tests(state_dir=state_dir)
+    second = ModuleManager._new_for_tests()
     second.modules_dir = root
+    second._dependencies.ledger = type(first._dependencies.ledger)(state_dir)
     second.register(Service("a"))
     assert second.deployments == {"a"}
     (root / "a/requirements.txt").write_text(
@@ -365,3 +366,36 @@ async def test_per_module_resolution_failure_preserves_uv_error_details(
     monkeypatch.setattr(uv_code, "_compile", compile)
     with pytest.raises(DependencyError, match="detailed uv error"):
         await resolve_requirements({"left": left, "right": right}, {}, work, tmp_path)
+
+
+async def test_lock_preferences_survive_loosened_constraints_but_allow_required_upgrade(
+    environment, module_manager_factory
+):
+    root, packages, site = environment
+    manager = module_manager_factory(root)
+    add_module(manager, packages, "selected", "shared-pkg<2")
+    await manager.add("selected", no_sync=True)
+    path = root / "selected" / "requirements.txt"
+    path.write_text(f"--no-index\n--find-links {packages}\nshared-pkg>=1\n")
+    await manager.add("selected")
+    assert installed(site) == {"shared-pkg": "1.0"}
+    path.write_text(f"--no-index\n--find-links {packages}\nshared-pkg>=2\n")
+    await manager.add("selected")
+    assert installed(site) == {"shared-pkg": "2.0"}
+
+
+async def test_frozen_install_rejects_wheel_changed_after_locking(
+    environment, module_manager_factory
+):
+    root, packages, site = environment
+    manager = module_manager_factory(root)
+    add_module(manager, packages, "selected", "shared-pkg==1.0")
+    await manager.add("selected", no_sync=True)
+    artifact = packages / "shared_pkg-1.0-py3-none-any.whl"
+    with ZipFile(artifact, "a") as archive:
+        archive.writestr("unexpected_file.txt", "changed after locking")
+    before = manager._dependencies.ledger.snapshot()
+    with pytest.raises(DependencyError, match="hash|Hash"):
+        await manager.sync(frozen=True, background=True)
+    assert manager._dependencies.ledger.snapshot() == before
+    assert installed(site) == {}

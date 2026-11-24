@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from alira._version import __version__
 from alira.kernel.module import BaseModule, DependencyError
 from alira.kernel.module.discovery.catalog import ModuleCatalog
 
@@ -63,7 +64,7 @@ async def test_conflicting_consumers_fail_before_any_hook_or_environment_change(
     with pytest.raises(DependencyError, match="version conflict"):
         catalog.select(["web", "other"])
     install = AsyncMock(side_effect=AssertionError("unexpected installation"))
-    monkeypatch.setattr(manager._dependencies, "rebuild", install)
+    monkeypatch.setattr(manager._dependencies, "install", install)
     with pytest.raises(DependencyError, match="version conflict"):
         await manager.load("web", "other")
     install.assert_not_awaited()
@@ -71,7 +72,7 @@ async def test_conflicting_consumers_fail_before_any_hook_or_environment_change(
         module.startup.assert_not_awaited()
 
 
-@pytest.mark.parametrize("kernel", [">=4", "<3", ">=3.0.1"])
+@pytest.mark.parametrize("kernel", [">=4", "<3", f">{__version__}"])
 async def test_kernel_requirement_is_checked_during_resolution(
     tmp_path, module_manager_factory, kernel
 ):
@@ -131,39 +132,43 @@ async def test_invalid_constraint_syntax_is_rejected(
 async def test_added_consumer_must_also_satisfy_retained_deployment_constraints(
     tmp_path, module_manager_factory, monkeypatch
 ):
-    from alira.kernel.module.discovery.catalog import ModuleSpec
-
-    manager = module_manager_factory(tmp_path)
+    manager, catalog = declarations(
+        tmp_path,
+        module_manager_factory,
+        [
+            ("agent", "1.5", [], ">=3.0.0"),
+            ("web", "1.0", ["agent>1.0"], ">=3.0.0"),
+            ("other", "1.0", ["agent<=1.0"], ">=3.0.0"),
+        ],
+    )
     dependencies = manager._dependencies
-    records = {
-        "web": {
-            "requirements": None,
-            "required_modules": [],
-            "version": "1.0",
-            "required_kernel": ">=3.0.0",
-        },
-    }
-    monkeypatch.setattr(dependencies.ledger, "read", lambda: {"modules": records})
+    dependencies.ledger.write_declaration(
+        {
+            "format": 2,
+            "requires-kernel": ">=3,<4",
+            "modules": {
+                name: {
+                    "version": spec.version,
+                    "source": {"type": "builtin"},
+                    "required-modules": list(spec.required_modules),
+                    "requirements": None,
+                    "requirements-hash": None,
+                }
+                for name, spec in catalog.select(["web"]).items()
+            },
+        }
+    )
+    before = dependencies.ledger.snapshot()
     resolution = AsyncMock(
         side_effect=AssertionError("Python resolution must not start")
     )
     monkeypatch.setattr(
         "alira.kernel.module.dependencies.deployment.resolve_requirements", resolution
     )
-    folder = tmp_path / "web"
-    folder.mkdir()
-    (folder / "main.py").write_text(
-        "module=BaseModule('web','1.0',required_modules=['agent>1.0'])"
-    )
-    selected = {
-        "agent": ModuleSpec("agent", tmp_path / "agent", None, version="1.0"),
-        "other": ModuleSpec(
-            "other", tmp_path / "other", None, ("agent<=1.0",), version="1.0"
-        ),
-    }
     with pytest.raises(DependencyError, match="version conflict"):
-        await dependencies.add(selected, cwd=tmp_path)
+        await manager.add("other", no_sync=True)
     resolution.assert_not_awaited()
+    assert dependencies.ledger.snapshot() == before
 
 
 def test_kernel_requirement_defaults_and_static_version_fields(tmp_path):

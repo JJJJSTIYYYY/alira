@@ -60,7 +60,7 @@ async def test_cli_loads_only_requested_modules_and_prerequisites_after_kernel_s
     capsys,
 ):
     manager, calls, _ = application
-    task = asyncio.create_task(cli.run(["run", "child", "base", "child"]))
+    task = asyncio.create_task(cli.run(["run", "child", "base", "child", "--no-sync"]))
     try:
         await asyncio.wait_for(manager.modules["child"].ready.wait(), 2)
         assert manager.loaded == {"base", "child"}
@@ -124,7 +124,7 @@ async def test_cli_keeps_prerequisites_and_independent_modules_running_after_fai
         side_effect=lambda: calls.append("stop:independent")
     )
     manager.register(independent)
-    task = asyncio.create_task(cli.run(["run", "child", "independent"]))
+    task = asyncio.create_task(cli.run(["run", "child", "independent", "--no-sync"]))
     try:
         await asyncio.wait_for(loaded.wait(), 2)
         assert not task.done()
@@ -151,7 +151,7 @@ async def test_cli_keeps_prerequisites_and_independent_modules_running_after_fai
 
 async def test_run_without_modules_runs_only_the_kernel(application):
     manager, calls, core_ready = application
-    task = asyncio.create_task(cli.run(["run"]))
+    task = asyncio.create_task(cli.run(["run", "--no-sync"]))
     try:
         await asyncio.wait_for(core_ready.wait(), 2)
         assert not manager.loaded
@@ -186,7 +186,9 @@ async def test_cli_rejects_unknown_or_abbreviated_flags_without_starting_kernel(
     assert calls == []
 
 
-@pytest.mark.parametrize("arguments", [[], ["run", "unknown"], ["run", "chi"]])
+@pytest.mark.parametrize(
+    "arguments", [[], ["run", "unknown", "--no-sync"], ["run", "chi", "--no-sync"]]
+)
 async def test_cli_rejects_missing_command_or_unknown_modules(
     application, capsys, arguments
 ):
@@ -227,7 +229,9 @@ async def test_run_help_describes_positionals_without_module_discovery(
     assert caught.value.code == 0
     text = capsys.readouterr().out
     assert "[modules ...]" in text
-    assert "-i, --install-missing" in text
+    assert "--no-sync" in text and "--sync" in text
+    assert "--locked" in text and "--frozen" in text
+    assert "--install-missing" not in text
     assert "--modules" not in text
     discover.assert_not_called()
     listing.assert_not_called()
@@ -237,19 +241,50 @@ async def test_run_help_describes_positionals_without_module_discovery(
 @pytest.mark.parametrize(
     "action, arguments, expected, keywords",
     [
-        ("add", ["child"], ("child",), {"no_install": False}),
-        ("add", ["child", "--no-install"], ("child",), {"no_install": True}),
-        ("add", ["child", "-n"], ("child",), {"no_install": True}),
+        (
+            "add",
+            ["child"],
+            ("child",),
+            {"manifest": None, "ref": None, "no_sync": False, "repair": False},
+        ),
+        (
+            "add",
+            ["child", "--no-sync"],
+            ("child",),
+            {"manifest": None, "ref": None, "no_sync": True, "repair": False},
+        ),
+        (
+            "add",
+            ["--manifest", "package.yml"],
+            (),
+            {"manifest": "package.yml", "ref": None, "no_sync": False, "repair": False},
+        ),
         (
             "install",
             ["https://github.com/example/plugin", "--ref", "v1"],
             ("https://github.com/example/plugin",),
-            {"ref": "v1"},
+            {"ref": "v1", "no_sync": False, "repair": False},
         ),
-        ("remove", ["child", "base"], ("child", "base"), {}),
-        ("sync", [], (), {"no_install": False}),
-        ("sync", ["--no-install"], (), {"no_install": True}),
-        ("sync", ["-n"], (), {"no_install": True}),
+        (
+            "remove",
+            ["child", "base"],
+            ("child", "base"),
+            {"purge": False, "no_sync": False, "repair": False},
+        ),
+        (
+            "remove",
+            ["child", "--purge"],
+            ("child",),
+            {"purge": True, "no_sync": False, "repair": False},
+        ),
+        ("sync", [], (), {"locked": False, "frozen": False, "repair": False}),
+        ("sync", ["--locked"], (), {"locked": True, "frozen": False, "repair": False}),
+        ("sync", ["--frozen"], (), {"locked": False, "frozen": True, "repair": False}),
+        ("sync", ["--repair"], (), {"locked": False, "frozen": False, "repair": True}),
+        ("lock", [], (), {"check": False, "repair": False}),
+        ("lock", ["--check"], (), {"check": True, "repair": False}),
+        ("uninstall", ["child"], ("child",), {"repair": False}),
+        ("migrate", [], (), {}),
     ],
 )
 async def test_cli_module_commands_finish_without_starting_modules(
@@ -269,13 +304,13 @@ async def test_cli_module_commands_finish_without_starting_modules(
     assert calls == []
 
 
-@pytest.mark.parametrize("flag", ["--package", "-r"])
+@pytest.mark.parametrize("flag", ["--manifest", "--package", "-r"])
 async def test_cli_package_install_uses_batch_operation(application, monkeypatch, flag):
     manager, calls, _ = application
     operation = AsyncMock()
     monkeypatch.setattr(manager, "install_package", operation)
     await cli.run(["install", flag, "package.yml"])
-    operation.assert_awaited_once_with("package.yml")
+    operation.assert_awaited_once_with("package.yml", no_sync=False, repair=False)
     assert calls == []
 
 
@@ -310,10 +345,14 @@ def test_cli_init_reports_existing_sources_without_a_traceback(application, caps
         ["module", "add", "child"],
         ["init"],
         ["init", "one", "two"],
-        ["add"],
         ["remove"],
         ["sync", "--unknown"],
         ["list", "child"],
+        ["add", "child", "--no-install"],
+        ["sync", "--no-install"],
+        ["run", "--sync", "--no-sync"],
+        ["sync", "--locked", "--frozen"],
+        ["run", "--locked", "--frozen"],
         ["install", "one.zip", "two.zip"],
         ["install"],
         ["install", "one.zip", "-r", "package.yml"],
@@ -352,26 +391,31 @@ async def test_cli_rejects_module_commands_with_runtime_options(
 
 
 @pytest.mark.parametrize(
-    "arguments, expected",
-    [
-        (["run", "--install-missing", "child"], ("child",)),
-        (["run", "child", "--install-missing"], ("child",)),
-        (["run", "child", "-i"], ("child",)),
-        (["run", "-i", "child"], ("child",)),
-        (["run", "child", "base", "--install-missing"], ("child", "base")),
-        (["run", "child", "base", "-i"], ("child", "base")),
-    ],
+    "options", [[], ["--sync"], ["--locked"], ["--frozen"], ["--no-sync"]]
 )
-async def test_install_missing_is_explicit_opt_in(
-    application, monkeypatch, arguments, expected
+async def test_run_prepares_environment_before_discovery_and_startup(
+    application, monkeypatch, options
 ):
-    manager, _, _ = application
-    add = AsyncMock()
-    monkeypatch.setattr(manager, "add", add)
-    task = asyncio.create_task(cli.run(arguments))
+    manager, calls, _ = application
+    prepare = AsyncMock()
+    monkeypatch.setattr(manager, "prepare_run", prepare)
+    discover = manager.discover
+
+    def discover_after_preparation():
+        prepare.assert_awaited_once_with(
+            "child",
+            no_sync="--no-sync" in options,
+            locked="--locked" in options,
+            frozen="--frozen" in options,
+            force_sync="--sync" in options,
+        )
+        return discover()
+
+    monkeypatch.setattr(manager, "discover", discover_after_preparation)
+    task = asyncio.create_task(cli.run(["run", "child", *options]))
     try:
         await asyncio.wait_for(manager.modules["child"].ready.wait(), 2)
-        add.assert_awaited_once_with(*expected, background=True)
+        assert calls == ["core:start", "start:base", "start:child"]
     finally:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -417,7 +461,7 @@ async def test_run_rejects_unavailable_source_before_kernel_start(
     (directory / "main.py").touch()
     monkeypatch.setattr(manager, "discover", lambda: manager.modules)
     with pytest.raises(SystemExit) as caught:
-        await cli.run(["run", "empty_entry"])
+        await cli.run(["run", "empty_entry", "--no-sync"])
     assert caught.value.code == 2
     assert "Unknown or unavailable modules: empty_entry" in capsys.readouterr().err
     assert calls == []
@@ -459,7 +503,7 @@ def test_discovery_load_error_has_clean_nonzero_cli_exit(
         cli, "module_manager", module_manager_factory(root, package=package)
     )
     with pytest.raises(SystemExit) as caught:
-        cli.main(["run", "demo"])
+        cli.main(["run", "demo", "--no-sync"])
     assert caught.value.code == 1
     output = capsys.readouterr()
     assert output.out == ""
