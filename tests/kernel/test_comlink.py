@@ -9,9 +9,21 @@ from alira.kernel.comlink import (
     VERSION,
     ApixEvent,
     ApixisCore,
+    ComlinkData,
     EventType,
     apixis_core,
+    comlink,
 )
+
+
+def module_comlink(extension_point, extension_name=None):
+    """Apply comlink to a test function as if it were defined in a business module."""
+
+    def decorator(func):
+        func.__module__ = "alira.modules.test.src.foo"
+        return comlink(extension_point, extension_name)(func)
+
+    return decorator
 
 
 async def test_lifecycle_delegates_to_apixis(monkeypatch):
@@ -143,3 +155,166 @@ async def test_wait_deadline_is_preserved_and_listeners_are_released():
         with pytest.raises(TimeoutError):
             await waiter.wait()
     assert core.get_event_runtime_status().wait_listeners == 0
+
+
+async def test_comlink_modifies_arguments_and_return_value(monkeypatch):
+    calls = []
+    debug = Mock()
+    monkeypatch.setattr("alira.kernel.comlink.decorator.logger.debug", debug)
+
+    @apixis_core.subscribe("test.compute.entry", group="comlink-decorator")
+    async def modify_entry(event: ApixEvent):
+        assert isinstance(event.context, ComlinkData)
+        assert event.context.point == "entry"
+        calls.append(("entry", event.context.args, dict(event.context.kwargs)))
+        event.context.args = (event.context.args[0] + 1,)
+        event.context.kwargs["factor"] = 3
+
+    @apixis_core.subscribe("test.compute.exit", group="comlink-decorator")
+    async def modify_exit(event: ApixEvent):
+        assert event.context.point == "exit"
+        calls.append(("exit", event.context.returns))
+        event.context.returns *= 2
+
+    @module_comlink("both")
+    async def compute(value, *, factor=1):
+        return value * factor
+
+    try:
+        assert await compute(1) == 12
+    finally:
+        apixis_core.unsubscribe(group="comlink-decorator")
+
+    assert calls == [("entry", (1,), {}), ("exit", 6)]
+    assert debug.call_args_list == [
+        call("Comlink entry extension point completed by: ['modify_entry']"),
+        call("Comlink exit extension point completed by: ['modify_exit']"),
+    ]
+
+
+async def test_comlink_extension_points_run_only_where_selected():
+    calls = []
+
+    @apixis_core.subscribe("test.entry_only.entry", group="comlink-decorator")
+    async def record_entry(event: ApixEvent):
+        calls.append(("entry", event.context.args))
+
+    @apixis_core.subscribe("test.exit_only.exit", group="comlink-decorator")
+    async def record_exit(event: ApixEvent):
+        calls.append(("exit", event.context.returns))
+
+    @module_comlink("entry")
+    async def entry_only(value):
+        return value
+
+    @module_comlink("exit")
+    async def exit_only(value):
+        return value
+
+    try:
+        assert await entry_only(1) == 1
+        assert await exit_only(2) == 2
+    finally:
+        apixis_core.unsubscribe(group="comlink-decorator")
+
+    assert calls == [("entry", (1,)), ("exit", 2)]
+
+
+async def test_comlink_uses_named_extension_events():
+    @apixis_core.subscribe("test.named.entry", group="comlink-decorator")
+    async def modify_entry(event: ApixEvent):
+        event.context.args = (event.context.args[0] + 1,)
+
+    @apixis_core.subscribe("test.named.exit", group="comlink-decorator")
+    async def modify_exit(event: ApixEvent):
+        event.context.returns *= 2
+
+    @module_comlink("both", extension_name="named")
+    async def calculate(value):
+        return value
+
+    try:
+        assert await calculate(1) == 4
+    finally:
+        apixis_core.unsubscribe(group="comlink-decorator")
+
+
+async def test_comlink_preserves_function_metadata():
+    @module_comlink("exit")
+    async def named(value: int) -> int:
+        """Return the supplied value."""
+        return value
+
+    assert named.__name__ == "named"
+    assert named.__doc__ == "Return the supplied value."
+    assert await named(1) == 1
+
+
+def test_comlink_validates_extension_point_and_async_function():
+    with pytest.raises(ValueError, match="extension_point"):
+        comlink("before")
+    with pytest.raises(TypeError, match="async"):
+        comlink("both")(lambda: None)
+
+
+def test_comlink_rejects_functions_outside_modules():
+    async def operation():
+        return None
+
+    with pytest.raises(ValueError, match="alira.modules"):
+        comlink("both")(operation)
+
+    operation.__module__ = "alira.modules_extra"
+    with pytest.raises(ValueError, match="alira.modules"):
+        comlink("both")(operation)
+
+    operation.__module__ = "alira.modules"
+    with pytest.raises(ValueError, match="alira.modules"):
+        comlink("both")(operation)
+
+
+async def test_comlink_logs_extension_handler_failure(monkeypatch):
+    warning = Mock()
+    debug = Mock()
+    monkeypatch.setattr("alira.kernel.comlink.decorator.logger.warning", warning)
+    monkeypatch.setattr("alira.kernel.comlink.decorator.logger.debug", debug)
+
+    @apixis_core.subscribe("test.operation.entry", group="comlink-decorator")
+    async def broken_entry(event: ApixEvent):
+        raise ValueError("broken extension")
+
+    @module_comlink("entry")
+    async def operation():
+        return "unused"
+
+    try:
+        assert await operation() == "unused"
+    finally:
+        apixis_core.unsubscribe(group="comlink-decorator")
+
+    warning.assert_called_once()
+    error = warning.call_args.args[0]
+    assert isinstance(error, RuntimeError)
+    assert "broken extension" in str(error)
+    debug.assert_not_called()
+
+
+async def test_comlink_keeps_original_data_when_event_is_cancelled(monkeypatch):
+    exception = Mock()
+    debug = Mock()
+    monkeypatch.setattr("alira.kernel.comlink.decorator.logger.exception", exception)
+    monkeypatch.setattr("alira.kernel.comlink.decorator.logger.debug", debug)
+    monkeypatch.setattr(apixis_core, "post_and_wait", AsyncMock(return_value=None))
+
+    @module_comlink("both")
+    async def compute(value):
+        return value + 1
+
+    assert await compute(1) == 2
+    assert exception.call_count == 2
+    messages = [str(logged.args[0]) for logged in exception.call_args_list]
+    assert all(isinstance(logged.args[0], RuntimeError) for logged in exception.call_args_list)
+    assert all("cancelled" in message for message in messages)
+    assert any("entry" in message for message in messages)
+    assert any("exit" in message for message in messages)
+    debug.assert_not_called()
