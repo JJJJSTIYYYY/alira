@@ -11,7 +11,7 @@ import pytest
 @pytest.mark.parametrize("first_import", [
     "alira.utils.config", "alira.utils.yaml", "alira.shared.application.config",
     "alira.shared.logger", "alira.kernel.module",
-    "alira.kernel.comlink", "alira.kernel.comlink.apixis_core",
+    "alira.kernel.comlink", "alira.kernel.comlink.bus",
     "alira.kernel.module.discovery.catalog", "alira.kernel.module.discovery.resolution",
     "alira.kernel.module.runtime.registry", "alira.kernel.module.runtime.lifecycle",
     "alira.kernel.module.sources.archive", "alira.kernel.module.sources.package",
@@ -48,19 +48,19 @@ assert utils.YamlConfig is import_module("alira.utils.config").YamlConfig
 assert shared.config is import_module("alira.shared.application.config")
 assert kernel.module_manager is import_module("alira.kernel.module").module_manager
 assert kernel.lifespan is import_module("alira.kernel.initialize").lifespan
-assert kernel.apixis_core is comlink.apixis_core
+assert kernel.bus is comlink.bus
 assert kernel.ApixisCore is comlink.ApixisCore
-assert not kernel.apixis_core.get_event_runtime_status().initialized
+assert not kernel.bus.get_event_runtime_status().initialized
 import asyncio
-asyncio.run(kernel.apixis_core.stop())
-assert not kernel.apixis_core.get_event_runtime_status().initialized
+asyncio.run(kernel.bus.stop())
+assert not kernel.bus.get_event_runtime_status().initialized
 upstream = import_module("apixis")
 namespace = {{}}
 exec("from alira.kernel.comlink import *", namespace)
 assert namespace.keys() == set(comlink.__all__) | {{"__builtins__"}}
 for name in upstream.__all__:
     assert namespace[name] is getattr(upstream, name)
-assert namespace["apixis_core"] is kernel.apixis_core
+assert namespace["bus"] is kernel.bus
 assert kernel.DependencyError is modules.DependencyError is dependencies.DependencyError
 assert kernel.ModuleStatus is modules.ModuleStatus is import_module("alira.kernel.module.base_module").ModuleStatus
 '''

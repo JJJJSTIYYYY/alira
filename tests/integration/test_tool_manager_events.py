@@ -19,7 +19,7 @@ from my_llm import ToolCall
 from alira.modules.tool.src import FunctionToolManager, ToolNode
 from alira.modules.tool.src.utils.request import EventRequest, send_request
 from alira.modules.agent.src.shared.message import AliraAssistantMessage
-from alira.kernel.comlink import apixis_core
+from alira.kernel.comlink import bus
 
 pytestmark = pytest.mark.parametrize(
     "event_runtime_capacity",
@@ -54,7 +54,7 @@ async def test_core_shutdown_cancels_a_tool_request_waiting_for_its_reply():
 
     task = asyncio.create_task(send_request("test.tool-manager.unanswered", request))
     await asyncio.wait_for(received.wait(), 2)
-    await apixis_core.stop()
+    await bus.stop()
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, 2)
     assert request.cancelled

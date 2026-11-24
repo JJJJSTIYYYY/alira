@@ -2,7 +2,7 @@
 
 from contextlib import asynccontextmanager
 
-from alira.kernel.comlink import apixis_core
+from alira.kernel.comlink import bus
 from alira.kernel.lifespan import auto_init, resource_cleaner
 from alira.kernel.module import module_manager
 from alira.shared.logger import logger
@@ -17,7 +17,7 @@ def initialize() -> None:
     """
     for service in (
         logger,
-        apixis_core,
+        bus,
         resource_cleaner,
         module_manager,
     ):

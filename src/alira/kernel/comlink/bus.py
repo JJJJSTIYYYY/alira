@@ -6,7 +6,7 @@ import apixis
 class ApixisCore:
     """Kernel lifecycle service exposing Apixis 3.0.0 communication APIs.
 
-    Import apixis_core and event types from ``alira.kernel.comlink``. The kernel
+    Import bus and event types from ``alira.kernel.comlink``. The kernel
     starts this service before modules and stops it afterwards. Instances share
     Apixis's process-global runtime; constructing another instance creates no
     isolated bus and starts no background services.
@@ -63,12 +63,12 @@ class ApixisCore:
         import asyncio
         from uuid import uuid4
 
-        from alira.kernel.comlink import EventType, apixis_core
+        from alira.kernel.comlink import EventType, bus
 
         reply_name = f"example.reply.{uuid4().hex}"
         async with asyncio.timeout(30):
-            async with apixis_core.expect_event(reply_name) as waiter:
-                await apixis_core.post_event(
+            async with bus.expect_event(reply_name) as waiter:
+                await bus.post_event(
                     event_type=EventType.TRANSIENT,
                     event_name="example.request",
                     context={"reply_to": reply_name},
@@ -123,4 +123,4 @@ class ApixisCore:
         return apixis.VERSION
 
 
-apixis_core = ApixisCore()
+bus = ApixisCore()

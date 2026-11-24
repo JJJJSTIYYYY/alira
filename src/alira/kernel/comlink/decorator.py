@@ -10,9 +10,8 @@ from functools import wraps
 from inspect import iscoroutinefunction
 from typing import Any, Literal
 
-from apixis import ApixEvent, EventType
+from apixis import ApixEvent, EventType, post_and_wait
 
-from alira.kernel.comlink.apixis_core import apixis_core
 from alira.shared import logger
 
 type ComlinkPoint = Literal["entry", "exit"]
@@ -115,7 +114,7 @@ def comlink(
             if dispatch_entry:
                 payload = ComlinkData("entry", args, kwargs)
                 data = _completed_data(
-                    await apixis_core.post_and_wait(
+                    await post_and_wait(
                         event_type=EventType.WORKFLOW,
                         event_name=entry_event,
                         context=payload,
@@ -130,7 +129,7 @@ def comlink(
             if dispatch_exit:
                 payload = ComlinkData("exit", returns=returns)
                 data = _completed_data(
-                    await apixis_core.post_and_wait(
+                    await post_and_wait(
                         event_type=EventType.WORKFLOW,
                         event_name=exit_event,
                         context=payload,

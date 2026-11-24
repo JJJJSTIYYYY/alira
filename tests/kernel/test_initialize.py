@@ -2,7 +2,7 @@ import importlib
 import subprocess
 import sys
 
-from alira.kernel.comlink import apixis_core
+from alira.kernel.comlink import bus
 from alira.kernel.lifespan.resource_cleaner import resource_cleaner
 from alira.kernel.module import ModuleManager, module_manager
 from alira.shared.logger import logger
@@ -15,7 +15,7 @@ def test_initialize_registers_kernel_singletons_once_in_order(monkeypatch, auto_
     monkeypatch.setattr(initialization, "auto_init", registry)
     initialization.initialize()
     initialization.initialize()
-    expected = [logger, apixis_core, resource_cleaner, module_manager]
+    expected = [logger, bus, resource_cleaner, module_manager]
     assert len(registry._services) == len(expected)
     assert all(actual is service for actual, service in zip(registry._services, expected))
     assert ModuleManager() is module_manager
@@ -27,13 +27,13 @@ def test_kernel_import_order_does_not_register_or_import_legacy_services():
             "import sys\n"
             "from alira.kernel.module import ModuleManager, module_manager\n"
             "from alira.kernel.lifespan.resource_cleaner import resource_cleaner\n"
-            "from alira.kernel.comlink import apixis_core\n"
+            "from alira.kernel.comlink import bus\n"
             "from alira.kernel.lifespan import auto_init\n"
             "from alira.shared.logger import logger\n"
             "assert auto_init._services == []\n"
             "from alira.kernel.initialize import initialize\n"
             "initialize()\n"
-            "assert auto_init._services == [logger, apixis_core, resource_cleaner, module_manager]\n"
+            "assert auto_init._services == [logger, bus, resource_cleaner, module_manager]\n"
             "assert 'alira.modules.database.src' not in sys.modules\n"
             "assert 'alira.modules.tool.src.mcp' not in sys.modules\n"
             "assert ModuleManager() is module_manager\n"

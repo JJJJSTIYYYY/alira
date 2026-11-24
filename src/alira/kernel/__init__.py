@@ -1,6 +1,6 @@
 """Kernel lifecycle services and module management APIs."""
 
-from alira.kernel.comlink import ApixisCore, apixis_core
+from alira.kernel.comlink import ApixisCore, bus
 from alira.kernel.initialize import lifespan
 from alira.kernel.lifespan import (
     AutoInit,
@@ -30,7 +30,7 @@ __all__ = [
     "ModuleManager",
     "ModuleStatus",
     "ResourceCleaner",
-    "apixis_core",
+    "bus",
     "auto_init",
     "lifespan",
     "module_manager",

@@ -11,7 +11,7 @@ from alira.kernel.comlink import (
     ApixisCore,
     ComlinkData,
     EventType,
-    apixis_core,
+    bus,
     comlink,
 )
 
@@ -50,20 +50,20 @@ async def test_lifecycle_delegates_to_apixis(monkeypatch):
 async def test_plugin_request_reply_preserves_payload_and_group_cleanup():
     payload = {"value": 42}
 
-    @apixis_core.subscribe("comlink.request", group="comlink-test")
+    @bus.subscribe("comlink.request", group="comlink-test")
     async def respond(event: ApixEvent):
         assert event.context is payload
-        await apixis_core.post_event(
+        await bus.post_event(
             event_type=EventType.TRANSIENT,
             event_name="comlink.reply",
             context=event.context,
         )
 
     try:
-        assert apixis_core.is_registered("respond")
-        assert apixis_core.get_handler_meta("respond") is not None
-        async with apixis_core.expect_event("comlink.reply", time_out=1) as waiter:
-            request = await apixis_core.post_and_wait(
+        assert bus.is_registered("respond")
+        assert bus.get_handler_meta("respond") is not None
+        async with bus.expect_event("comlink.reply", time_out=1) as waiter:
+            request = await bus.post_and_wait(
                 event_type=EventType.TRANSIENT,
                 event_name="comlink.request",
                 context=payload,
@@ -74,9 +74,9 @@ async def test_plugin_request_reply_preserves_payload_and_group_cleanup():
         assert reply.event_name == "comlink.reply"
         assert reply.context is payload
     finally:
-        apixis_core.unsubscribe(group="comlink-test")
-    assert not apixis_core.is_registered("respond")
-    assert apixis_core.get_handler_meta("respond") is None
+        bus.unsubscribe(group="comlink-test")
+    assert not bus.is_registered("respond")
+    assert bus.get_handler_meta("respond") is None
 
 
 @pytest.mark.parametrize(
@@ -96,7 +96,7 @@ async def test_plugin_request_reply_preserves_payload_and_group_cleanup():
 def test_communication_interfaces_keep_upstream_signatures(name):
     import apixis
 
-    assert getattr(apixis_core, name) is getattr(apixis, name)
+    assert getattr(bus, name) is getattr(apixis, name)
 
 
 async def test_start_is_running_and_stop_closes_event_work():
@@ -162,7 +162,7 @@ async def test_comlink_modifies_arguments_and_return_value(monkeypatch):
     debug = Mock()
     monkeypatch.setattr("alira.kernel.comlink.decorator.logger.debug", debug)
 
-    @apixis_core.subscribe("test.compute.entry", group="comlink-decorator")
+    @bus.subscribe("test.compute.entry", group="comlink-decorator")
     async def modify_entry(event: ApixEvent):
         assert isinstance(event.context, ComlinkData)
         assert event.context.point == "entry"
@@ -170,7 +170,7 @@ async def test_comlink_modifies_arguments_and_return_value(monkeypatch):
         event.context.args = (event.context.args[0] + 1,)
         event.context.kwargs["factor"] = 3
 
-    @apixis_core.subscribe("test.compute.exit", group="comlink-decorator")
+    @bus.subscribe("test.compute.exit", group="comlink-decorator")
     async def modify_exit(event: ApixEvent):
         assert event.context.point == "exit"
         calls.append(("exit", event.context.returns))
@@ -183,7 +183,7 @@ async def test_comlink_modifies_arguments_and_return_value(monkeypatch):
     try:
         assert await compute(1) == 12
     finally:
-        apixis_core.unsubscribe(group="comlink-decorator")
+        bus.unsubscribe(group="comlink-decorator")
 
     assert calls == [("entry", (1,), {}), ("exit", 6)]
     assert debug.call_args_list == [
@@ -195,11 +195,11 @@ async def test_comlink_modifies_arguments_and_return_value(monkeypatch):
 async def test_comlink_extension_points_run_only_where_selected():
     calls = []
 
-    @apixis_core.subscribe("test.entry_only.entry", group="comlink-decorator")
+    @bus.subscribe("test.entry_only.entry", group="comlink-decorator")
     async def record_entry(event: ApixEvent):
         calls.append(("entry", event.context.args))
 
-    @apixis_core.subscribe("test.exit_only.exit", group="comlink-decorator")
+    @bus.subscribe("test.exit_only.exit", group="comlink-decorator")
     async def record_exit(event: ApixEvent):
         calls.append(("exit", event.context.returns))
 
@@ -215,17 +215,17 @@ async def test_comlink_extension_points_run_only_where_selected():
         assert await entry_only(1) == 1
         assert await exit_only(2) == 2
     finally:
-        apixis_core.unsubscribe(group="comlink-decorator")
+        bus.unsubscribe(group="comlink-decorator")
 
     assert calls == [("entry", (1,)), ("exit", 2)]
 
 
 async def test_comlink_uses_named_extension_events():
-    @apixis_core.subscribe("test.named.entry", group="comlink-decorator")
+    @bus.subscribe("test.named.entry", group="comlink-decorator")
     async def modify_entry(event: ApixEvent):
         event.context.args = (event.context.args[0] + 1,)
 
-    @apixis_core.subscribe("test.named.exit", group="comlink-decorator")
+    @bus.subscribe("test.named.exit", group="comlink-decorator")
     async def modify_exit(event: ApixEvent):
         event.context.returns *= 2
 
@@ -236,7 +236,7 @@ async def test_comlink_uses_named_extension_events():
     try:
         assert await calculate(1) == 4
     finally:
-        apixis_core.unsubscribe(group="comlink-decorator")
+        bus.unsubscribe(group="comlink-decorator")
 
 
 async def test_comlink_preserves_function_metadata():
@@ -279,7 +279,7 @@ async def test_comlink_logs_extension_handler_failure(monkeypatch):
     monkeypatch.setattr("alira.kernel.comlink.decorator.logger.warning", warning)
     monkeypatch.setattr("alira.kernel.comlink.decorator.logger.debug", debug)
 
-    @apixis_core.subscribe("test.operation.entry", group="comlink-decorator")
+    @bus.subscribe("test.operation.entry", group="comlink-decorator")
     async def broken_entry(event: ApixEvent):
         raise ValueError("broken extension")
 
@@ -290,7 +290,7 @@ async def test_comlink_logs_extension_handler_failure(monkeypatch):
     try:
         assert await operation() == "unused"
     finally:
-        apixis_core.unsubscribe(group="comlink-decorator")
+        bus.unsubscribe(group="comlink-decorator")
 
     warning.assert_called_once()
     error = warning.call_args.args[0]
@@ -304,7 +304,9 @@ async def test_comlink_keeps_original_data_when_event_is_cancelled(monkeypatch):
     debug = Mock()
     monkeypatch.setattr("alira.kernel.comlink.decorator.logger.exception", exception)
     monkeypatch.setattr("alira.kernel.comlink.decorator.logger.debug", debug)
-    monkeypatch.setattr(apixis_core, "post_and_wait", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        "alira.kernel.comlink.decorator.post_and_wait", AsyncMock(return_value=None)
+    )
 
     @module_comlink("both")
     async def compute(value):

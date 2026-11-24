@@ -93,8 +93,8 @@ from alira.kernel.comlink import *
 
 
 async def request_example(payload):
-    async with apixis_core.expect_event("example.reply", time_out=30) as waiter:
-        await apixis_core.post_event(
+    async with bus.expect_event("example.reply", time_out=30) as waiter:
+        await bus.post_event(
             event_type=EventType.TRANSIENT,
             event_name="example.request",
             context=payload,
@@ -106,14 +106,14 @@ async def request_example(payload):
 ```
 
 `comlink` 通过 `__all__` 重导出 Apixis 的公开事件、图和类型接口，`import *` 不导出内部实现。
-`apixis_core` 提供 `post_event`、`post_and_wait`、`subscribe`、`unsubscribe`、`expect_event`、`wait_event`、
+`bus` 提供 `post_event`、`post_and_wait`、`subscribe`、`unsubscribe`、`expect_event`、`wait_event`、
 `get_handler_meta`、`is_registered` 和 `get_event_runtime_status`，均直接复用 Apixis 3.0.0 的公开接口，保留签名、默认值和返回类型。
 `post_event` 只等待事件入队，`post_and_wait` 等待本次事件前台处理完并返回事件，调用方先处理取消时的 `None`，再检查 `has_error`。
 请求/响应场景先进入 `expect_event` 再发送请求，使用可关联到本次请求的结果事件名；上例的固定名称只用于演示。
 只等待其他地方产生的事件使用 `wait_event`；查询运行时概况使用核心所属循环上的 `get_event_runtime_status()`。
 通信接口在核心所属的 asyncio 循环调用；内核统一管理核心生命周期。
-模块在 `startup()` 中通过 `apixis_core.subscribe(..., group="模块名")` 注册处理器，
-在 `shutdown()` 中通过 `apixis_core.unsubscribe(group="模块名")` 清理；内核 `ApixisCore.start()` 执行 `create_core() → start_core()`，返回时状态为 `RUNNING`；
+模块在 `startup()` 中通过 `bus.subscribe(..., group="模块名")` 注册处理器，
+在 `shutdown()` 中通过 `bus.unsubscribe(group="模块名")` 清理；内核 `ApixisCore.start()` 执行 `create_core() → start_core()`，返回时状态为 `RUNNING`；
 `stop()` 执行 `stop_core() → close_core()`，返回时状态为 `CLOSED`，释放订阅并取消活动事件工作。
 关闭后再次启动会创建新核心，模块需要重新注册订阅并编译图。
 
@@ -289,7 +289,7 @@ kernel/
 ├── initialize.py             # 内核服务注册顺序和整体生命周期
 ├── comlink/
 │   ├── __init__.py           # 插件通信统一导入入口，重导出 Apixis 公开 API
-│   └── apixis_core.py        # Apixis 生命周期和事件通信接口
+│   └── bus.py        # Apixis 生命周期和事件通信接口
 ├── lifespan/
 │   ├── auto_init.py          # 通用服务注册、一次启动和退出关闭
 │   └── resource_cleaner.py   # 资源清理调度
