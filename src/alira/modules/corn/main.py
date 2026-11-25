@@ -1,8 +1,7 @@
 """Module declaration and lifecycle hooks."""
 
+from alira._version import __version__
 from alira.kernel.module import BaseModule, ModuleStatus
-
-__version__ = "0.1.0"
 
 
 class Module(BaseModule):
