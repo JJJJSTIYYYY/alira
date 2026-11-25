@@ -12,16 +12,16 @@ from alira.kernel.comlink import (
     ComlinkData,
     EventType,
     bus,
-    comlink,
+    method_comlink,
 )
 
 
 def module_comlink(extension_point, extension_name=None):
-    """Apply comlink to a test function as if it were defined in a business module."""
+    """Apply method_comlink to a test function as if it were defined in a business module."""
 
     def decorator(func):
         func.__module__ = "alira.modules.test.src.foo"
-        return comlink(extension_point, extension_name)(func)
+        return method_comlink(extension_point, extension_name)(func)
 
     return decorator
 
@@ -192,6 +192,32 @@ async def test_comlink_modifies_arguments_and_return_value(monkeypatch):
     ]
 
 
+async def test_comlink_entry_refuse_returns_without_calling_function():
+    calls = []
+
+    @bus.subscribe("test.refused.entry", group="comlink-decorator")
+    async def refuse_entry(event: ApixEvent):
+        calls.append("entry")
+        event.context.refuse = True
+        event.context.returns = "refused"
+
+    @bus.subscribe("test.refused.exit", group="comlink-decorator")
+    async def record_exit(event: ApixEvent):
+        calls.append("exit")
+
+    @module_comlink("both")
+    async def refused():
+        calls.append("function")
+        return "called"
+
+    try:
+        assert await refused() == "refused"
+    finally:
+        bus.unsubscribe(group="comlink-decorator")
+
+    assert calls == ["entry"]
+
+
 async def test_comlink_extension_points_run_only_where_selected():
     calls = []
 
@@ -250,11 +276,27 @@ async def test_comlink_preserves_function_metadata():
     assert await named(1) == 1
 
 
+async def test_comlink_rejects_replaced_event_context():
+    @bus.subscribe("test.replaced.entry", group="comlink-decorator")
+    async def replace_context(event: ApixEvent):
+        event.context = None
+
+    @module_comlink("entry")
+    async def replaced():
+        return "called"
+
+    try:
+        with pytest.raises(TypeError, match="unexpected type"):
+            await replaced()
+    finally:
+        bus.unsubscribe(group="comlink-decorator")
+
+
 def test_comlink_validates_extension_point_and_async_function():
     with pytest.raises(ValueError, match="extension_point"):
-        comlink("before")
+        method_comlink("before")
     with pytest.raises(TypeError, match="async"):
-        comlink("both")(lambda: None)
+        method_comlink("both")(lambda: None)
 
 
 def test_comlink_rejects_functions_outside_modules():
@@ -262,15 +304,15 @@ def test_comlink_rejects_functions_outside_modules():
         return None
 
     with pytest.raises(ValueError, match="alira.modules"):
-        comlink("both")(operation)
+        method_comlink("both")(operation)
 
     operation.__module__ = "alira.modules_extra"
     with pytest.raises(ValueError, match="alira.modules"):
-        comlink("both")(operation)
+        method_comlink("both")(operation)
 
     operation.__module__ = "alira.modules"
     with pytest.raises(ValueError, match="alira.modules"):
-        comlink("both")(operation)
+        method_comlink("both")(operation)
 
 
 async def test_comlink_logs_extension_handler_failure(monkeypatch):

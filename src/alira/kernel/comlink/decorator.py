@@ -27,12 +27,16 @@ class ComlinkData:
     Handlers replace ``args`` or ``kwargs`` at the entry point and ``returns``
     at the exit point. The decorator reads the payload back from the processed
     event, so each extension point can modify the decorated call.
+
+    Additionally, handlers can set ``refuse`` to ``True`` at the entry
+    point to skip the decorated function and return ``returns`` instead.
     """
 
     point: ComlinkPoint
     args: tuple[Any, ...] = ()
     kwargs: dict[str, Any] = field(default_factory=dict)
     returns: Any = None
+    refuse: bool = False
 
 
 def _completed_data(
@@ -59,7 +63,7 @@ def _completed_data(
     return event.context
 
 
-def comlink(
+def method_comlink(
     extension_point: Literal["entry", "exit", "both"],
     extension_name: str | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -95,13 +99,13 @@ def comlink(
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         if not iscoroutinefunction(func):
-            raise TypeError(f"comlink can only decorate async functions, got {func!r}.")
+            raise TypeError(f"method_comlink can only decorate async functions, got {func!r}.")
 
         module = func.__module__
         module_parts = module.split(".")
         if tuple(module_parts[:2]) != _MODULES_PACKAGE_PARTS or len(module_parts) < 3:
             raise ValueError(
-                f"comlink can only decorate functions in a module under the "
+                f"method_comlink can only decorate functions in a module under the "
                 f"'{_MODULES_PACKAGE}' package (src/alira/modules), got {module!r}."
             )
 
@@ -122,6 +126,12 @@ def comlink(
                     "entry",
                     payload,
                 )
+                if not isinstance(data, ComlinkData):
+                    raise TypeError(
+                        f"Comlink {entry_event} returned unexpected type: {type(data)}"
+                    )
+                if data.refuse:
+                    return data.returns
                 args, kwargs = data.args, data.kwargs
 
             returns = await func(*args, **kwargs)
@@ -137,6 +147,10 @@ def comlink(
                     "exit",
                     payload,
                 )
+                if not isinstance(data, ComlinkData):
+                    raise TypeError(
+                        f"Comlink {exit_event} returned unexpected type: {type(data)}"
+                    )
                 returns = data.returns
 
             return returns
@@ -146,4 +160,4 @@ def comlink(
     return decorator
 
 
-__all__ = ["ComlinkData", "comlink"]
+__all__ = ["ComlinkData", "method_comlink"]
