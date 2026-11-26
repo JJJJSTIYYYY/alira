@@ -42,9 +42,10 @@ def initialize_module(modules_dir: Path, name: str) -> Path:
         name: Python module identifier accepted by module_directory.
 
     Returns:
-        The new module directory with main.py, an empty requirements.txt, package
-        markers and src/shared/events.py. Lifecycle hooks are editable no-ops;
-        the health hook delegates to the base implementation until customized.
+        The new module directory with main.py, README.md, an empty requirements.txt,
+        package markers and src/shared/events.py. The shared package re-exports
+        event definitions. Lifecycle hooks are editable no-ops; the health hook
+        delegates to the base implementation until customized.
 
     Raises:
         DependencyError: The name is invalid, the destination is a symlink or escapes
@@ -69,8 +70,9 @@ def initialize_module(modules_dir: Path, name: str) -> Path:
             "__init__.py": "",
             "main.py": _MAIN_TEMPLATE.format(name=name),
             "requirements.txt": "",
+            "README.md": f"Hello from {name}!",
             "src/__init__.py": "",
-            "src/shared/__init__.py": "",
+            "src/shared/__init__.py": "from .events import *\n",
             "src/shared/events.py": '"""Public event names and payload types for this module."""\n',
         }
         for relative, content in files.items():

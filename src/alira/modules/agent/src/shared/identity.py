@@ -3,7 +3,7 @@
 from typing import TypedDict
 
 
-class AliraIdentity(TypedDict):
+class AgentIdentity(TypedDict):
     """Identify an Alira user on a platform."""
 
     id: str  # user_uid
@@ -11,13 +11,13 @@ class AliraIdentity(TypedDict):
     platform: str
 
 
-class ConversationIdentity(AliraIdentity):
+class ConversationIdentity(AgentIdentity):
     """Identify one conversation belonging to an Alira user."""
 
     conversation_uid: str
 
 
-def key(identity: AliraIdentity) -> str:
+def key(identity: AgentIdentity) -> str:
     """Return a unique key for the identity."""
     conversation_uid = identity.get("conversation_uid")
     if conversation_uid:

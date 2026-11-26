@@ -78,13 +78,13 @@ async def test_chat_hook_compensates_visible_reasoning_and_tool_images(monkeypat
     result = ToolMessage(
         role="tool", call_id="c1", content=[TextContent("image:"), ImageContent(source)]
     )
+    bot.bind_tools([weather.get_schema()]).set_tool_permission()
     await bot.invoke(
         [
             UserMessage(role="user", content=[TextContent("look")]),
             assistant,
             result,
         ],
-        tools=[weather],
         api_key="test",
     )
     sent = requests[0]["messages"]

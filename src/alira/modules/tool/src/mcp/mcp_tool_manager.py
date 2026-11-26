@@ -24,7 +24,7 @@ from alira.modules.tool.src.mcp.mcp_tool import MCPTool
 from alira.modules.tool.src.mcp.mcp_tool_runtime import MCPToolRuntime
 from alira.modules.tool.src.utils.manager import ToolManager
 from alira.modules.tool.src.utils.request import ToolRequest
-from alira.modules.agent.src.shared.identity import AliraIdentity, ConversationIdentity
+from alira.modules.agent.src.shared.identity import AgentIdentity, ConversationIdentity
 from alira.shared.logger import logger
 
 IdentityKey = tuple[str, str, str]
@@ -52,9 +52,9 @@ class MCPToolManager(ToolManager):
         self._closing_users: dict[UserKey, asyncio.Task[None]] = {}
 
     @staticmethod
-    def user_key(identity: AliraIdentity) -> UserKey:
+    def user_key(identity: AgentIdentity) -> UserKey:
         if not isinstance(identity, dict):
-            raise TypeError("MCP requires an AliraIdentity dictionary.")
+            raise TypeError("MCP requires an AgentIdentity dictionary.")
         values = tuple(identity.get(field) for field in ("id", "platform"))
         if any(not isinstance(value, str) or not value for value in values):
             raise ValueError("MCP identity requires non-empty id and platform.")
@@ -338,7 +338,7 @@ class MCPToolManager(ToolManager):
         task.add_done_callback(self._observe_cleanup)
         return task
 
-    async def close_user(self, identity: AliraIdentity) -> None:
+    async def close_user(self, identity: AgentIdentity) -> None:
         """Close every conversation for the same user and platform."""
         await asyncio.shield(self._begin_close_user(self.user_key(identity)))
 

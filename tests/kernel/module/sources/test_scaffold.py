@@ -1,6 +1,7 @@
 """Generated modules follow the documented structure and declaration contract."""
 
 import sys
+from importlib import import_module
 from pathlib import Path
 from typing import get_type_hints
 from uuid import uuid4
@@ -37,6 +38,7 @@ async def test_init_creates_importable_minimal_module_without_deployment(manager
         "__init__.py",
         "main.py",
         "requirements.txt",
+        "README.md",
         "src/__init__.py",
         "src/shared/__init__.py",
         "src/shared/events.py",
@@ -62,6 +64,16 @@ async def test_init_creates_importable_minimal_module_without_deployment(manager
         "health": False, "message": "Health check is not implemented."
     }
     await module.shutdown()
+
+
+async def test_scaffold_shared_reexports_events_from_the_configured_package(manager):
+    directory = await manager.init("demo")
+    (directory / "src/shared/events.py").write_text('EVENT_NAME = "demo_received"\n')
+
+    shared = import_module(f"{manager.package}.demo.src.shared")
+    events = import_module(f"{manager.package}.demo.src.shared.events")
+
+    assert shared.EVENT_NAME == events.EVENT_NAME == "demo_received"
 
 
 @pytest.mark.parametrize("name", ["../outside", "/absolute", "bad-name", "class", "__hidden"])

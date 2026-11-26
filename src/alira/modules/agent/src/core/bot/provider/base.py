@@ -89,7 +89,22 @@ class BaseProvider:
         )
 
     def create_llm(self, model: str) -> MyLLM:
-        """Create the model runtime; pass per-call credentials to generate()."""
+        """Create a middleware runtime with message translation caching disabled.
+
+        Args:
+            model: Exact model ID in this provider's catalogue.
+
+        Returns:
+            A my-llm-py runtime using the resolved profile. Pass per-call
+            credentials to generate(). Resolved Chat profiles use the library's
+            input semantic-loss hook.
+
+        Raises:
+            TypeError: model is not a string.
+            ValueError: model is absent from the catalogue.
+
+        Invalid profile errors propagate from my-llm-py.
+        """
         selected = self.get_model(model)
         profile = self.get_profile()
         llm = MyLLM(
@@ -97,6 +112,7 @@ class BaseProvider:
             model=selected,
             stdio_protocol="middleware",
             semantic_loss_protocol="ignore",
+            enable_message_cache=False,
         )
         if llm.resolved_profile.protocol == "openai_chat":
             llm.set_semantic_loss_policy(

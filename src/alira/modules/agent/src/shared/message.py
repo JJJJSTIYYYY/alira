@@ -11,9 +11,17 @@ from my_llm import (
     InstructionMessage,
     ItemIdentity,
     Message,
+    MessageStream,
     Origin,
     ToolMessage,
     UserMessage,
+    ImageContent,
+    MessageContent,
+    ReasoningContent,
+    TextContent,
+    ToolCall,
+    ToolResult,
+    Usage
 )
 from my_llm.middleware.models import messages_from_wire
 
@@ -184,6 +192,8 @@ class AliraToolMessage(ToolMessage, AliraMessageExtension):
 AliraMessage: TypeAlias = (
     AliraSystemMessage | AliraUserMessage | AliraAssistantMessage | AliraToolMessage
 )
+AliraMessageStream: TypeAlias = MessageStream
+
 _MESSAGE_CLASSES_BY_ROLE = {
     "system": AliraSystemMessage,
     "user": AliraUserMessage,
@@ -232,11 +242,19 @@ def message_wire_from_record(record: dict[str, Any]) -> dict[str, Any]:
 
 
 __all__ = [
-    "AliraAssistantMessage",
     "AliraMessage",
+    "AliraMessageStream",
+    "AliraAssistantMessage",
     "AliraMessageExtension",
     "AliraSystemMessage",
     "AliraToolMessage",
     "AliraUserMessage",
     "message_wire_from_record",
+    "ImageContent",
+    "MessageContent",
+    "ReasoningContent",
+    "TextContent",
+    "ToolCall",
+    "ToolResult",
+    "Usage"
 ]

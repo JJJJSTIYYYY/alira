@@ -328,9 +328,9 @@ async def test_history_replays_reasoning_according_to_provider_policy(
                 ToolMessage(role="tool", content=[TextContent("sunny")], call_id="c1"),
             ]
         )
-    result = await bot.invoke(
-        messages, tools=[weather] if tool_round else None, api_key="test"
-    )
+    if tool_round:
+        bot.bind_tools([weather.get_schema()]).set_tool_permission()
+    result = await bot.invoke(messages, api_key="test")
     assert result.content[0].text == "hello"
 
     if protocol == "openai_chat":
@@ -681,7 +681,8 @@ async def test_each_builtin_preset_dispatches_through_official_sdk(
 
     install_sdk(monkeypatch, protocol, handler)
     history = [{"role": "user", "content": "hi"}]
-    options = {"max_tokens": 1024, "tools": [weather]}
+    bot.bind_tools([weather.get_schema()]).set_tool_permission()
+    options = {"max_tokens": 1024}
     if explicit_reasoning:
         options["reasoning"] = True
     if streaming:

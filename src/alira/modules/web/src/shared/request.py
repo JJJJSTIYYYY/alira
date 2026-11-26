@@ -2,16 +2,16 @@
 
 from dataclasses import dataclass, field
 
-from alira.modules.agent.src.shared.identity import AliraIdentity
+from alira.modules.agent.src.shared.identity import AgentIdentity
 
 
 @dataclass
 class BasePayload:
-    _identity: AliraIdentity | None = field(default=None, init=False)
+    _identity: AgentIdentity | None = field(default=None, init=False)
     _request_id: str | None = field(default=None, init=False)
 
     @property
-    def identity(self) -> AliraIdentity | None:
+    def identity(self) -> AgentIdentity | None:
         return self._identity
 
     @property
@@ -22,7 +22,7 @@ class BasePayload:
 @dataclass
 class BaseRequest:
     request_id: str
-    identity: AliraIdentity
+    identity: AgentIdentity
     payload: BasePayload | None = field(default=None, kw_only=True)
 
     def __post_init__(self):

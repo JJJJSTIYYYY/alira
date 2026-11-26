@@ -3,7 +3,7 @@
 from alira.modules.tool.src.base import ToolFunction
 from alira.modules.tool.src.function.tool import Tool
 from alira.modules.tool.src.utils.manager import ToolManager
-from alira.modules.agent.src.shared.identity import AliraIdentity
+from alira.modules.agent.src.shared.identity import AgentIdentity
 
 
 class FunctionToolManager(ToolManager):
@@ -32,5 +32,5 @@ class FunctionToolManager(ToolManager):
     def tool_set(self) -> list[Tool]:
         return list(self._tools_by_name.values())
 
-    def tools_for(self, identity: AliraIdentity | None = None) -> list[Tool]:
+    def tools_for(self, identity: AgentIdentity | None = None) -> list[Tool]:
         return self.tool_set

@@ -151,15 +151,16 @@ async def test_sdk_protocols_keep_chat_input_and_output(
             supports_function_calling=Config(default_value=True),
         ),
     )
+    bot.bind_tools([weather.get_schema()]).set_tool_permission()
     messages = [AliraUserMessage(content=[TextContent("hi")])]
     if streaming:
-        stream = await bot.stream(messages, tools=[weather], api_key="test")
+        stream = await bot.stream(messages, api_key="test")
         async with stream:
             events = [event async for event in stream]
         assert all(isinstance(event, MessageEvent) for event in events)
         result = AliraAssistantMessage.from_middleware(stream.result)
     else:
-        result = await bot.invoke(messages, tools=[weather], api_key="test")
+        result = await bot.invoke(messages, api_key="test")
     assert result.content[0].text == "hello"
     body = json.loads(requests[0].content)
     assert "hi" in str(body)
@@ -221,7 +222,7 @@ async def test_sdk_tool_round_trip_is_standard_and_executable(monkeypatch):
             model=Attribute(default_value="test"),
             supports_function_calling=Config(default_value=True),
         ),
-    ).bind_tools([weather])
+    ).bind_tools([weather.get_schema()]).set_tool_permission()
     prompt = AliraUserMessage(content=[TextContent("weather?")])
     first = await bot.invoke([prompt])
     output = await ToolNode(weather).execute({"messages": [first]})

@@ -144,7 +144,9 @@ async def test_one_graph_node_routes_function_and_mcp_managers(manager):
     ]
     assert functions.is_started and manager.is_started
     assert not manager.clients[0].closed
-    schemas = AliraBot._schemas([*functions.tool_set, *mcp_tools])
+    bot = AliraBot(provider="deepseek", model="deepseek-flash")
+    bot.bind_tools([item.get_schema() for item in [*functions.tool_set, *mcp_tools]])
+    schemas = bot.tool_schemas
     assert [schema.name for schema in schemas] == [
         "local",
         "first",
