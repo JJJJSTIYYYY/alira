@@ -7,9 +7,9 @@ from copy import deepcopy
 from typing import Any, Self
 
 from alira.modules.agent.src.core.bot.provider import BaseProvider
-from alira.modules.agent.src.shared.parameter import RoleDefinition
-from alira.modules.agent.src.shared.message import *
-from alira.modules.agent.src.shared.tools import *
+from alira.modules.agent.src.shared.model.parameter import RoleDefinition
+from alira.modules.agent.src.shared.model.message import *
+from alira.modules.agent.src.shared.model.tools import *
 
 
 class AliraBot:

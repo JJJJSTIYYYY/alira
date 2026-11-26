@@ -101,7 +101,7 @@ async def test_query_store_round_trip_cache_isolation_and_restart(
             "metadata": {"usage": {"total": 2}},
         }
         if as_object:
-            from alira.modules.agent.src.shared.message import AliraAssistantMessage
+            from alira.modules.agent.src.shared.model.message import AliraAssistantMessage
 
             message = AliraAssistantMessage.from_record(message)
         await query_store("append_message", {**payload, "message": message})
@@ -772,7 +772,7 @@ async def test_tool_role_survives_branch_filter_cache_and_restart(manager):
     from my_llm import TextContent, ToolCall
     from my_llm.middleware.protocol import generation_input
 
-    from alira.modules.agent.src.shared.message import (
+    from alira.modules.agent.src.shared.model.message import (
         AliraAssistantMessage,
         AliraMessageExtension,
         AliraToolMessage,
@@ -819,8 +819,8 @@ async def test_tool_role_survives_branch_filter_cache_and_restart(manager):
 async def test_full_generation_ids_keep_message_nodes_distinct_after_restart(manager):
     from my_llm import TextContent
 
-    from alira.modules.agent.src.shared.generation import Generation
-    from alira.modules.agent.src.shared.message import (
+    from alira.modules.agent.src.shared.model.generation import Generation
+    from alira.modules.agent.src.shared.model.message import (
         AliraAssistantMessage,
         AliraUserMessage,
     )
@@ -882,7 +882,7 @@ async def test_full_generation_ids_keep_message_nodes_distinct_after_restart(man
 async def test_system_messages_are_rejected_before_persistence(manager, as_record):
     from my_llm import TextContent
 
-    from alira.modules.agent.src.shared.message import AliraSystemMessage
+    from alira.modules.agent.src.shared.model.message import AliraSystemMessage
 
     payload = await create_conversation(manager)
     message = AliraSystemMessage(content=[TextContent("runtime rules")])
@@ -908,7 +908,7 @@ async def test_search_returns_business_messages_and_separate_conversation_detail
 ):
     from my_llm import TextContent
 
-    from alira.modules.agent.src.shared.message import AliraAssistantMessage, AliraUserMessage
+    from alira.modules.agent.src.shared.model.message import AliraAssistantMessage, AliraUserMessage
 
     payload = await create_conversation(manager)
     original = [

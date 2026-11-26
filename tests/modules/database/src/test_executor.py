@@ -10,7 +10,7 @@ import pytest
 from alira.modules.database.src import executor as execute_module
 from alira.modules.database.src.executor import StoreExecutor
 from alira.modules.database.src.services.cache import CacheService
-from alira.modules.agent.src.shared.message import AliraMessageExtension, AliraUserMessage
+from alira.modules.agent.src.shared.model.message import AliraMessageExtension, AliraUserMessage
 
 _PARSED_RECORD = {"message_uid": "parsed-1", "role": "user", "content": []}
 

@@ -18,7 +18,7 @@ from my_llm import ToolCall
 
 from alira.modules.tool.src import FunctionToolManager, ToolNode
 from alira.modules.tool.src.utils.request import EventRequest, send_request
-from alira.modules.agent.src.shared.message import AliraAssistantMessage
+from alira.modules.agent.src.shared.model.message import AliraAssistantMessage
 from alira.kernel.comlink import bus
 
 pytestmark = pytest.mark.parametrize(

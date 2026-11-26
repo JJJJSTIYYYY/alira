@@ -43,9 +43,10 @@ def initialize_module(modules_dir: Path, name: str) -> Path:
 
     Returns:
         The new module directory with main.py, README.md, an empty requirements.txt,
-        package markers and src/shared/events.py. The shared package re-exports
-        event definitions. Lifecycle hooks are editable no-ops; the health hook
-        delegates to the base implementation until customized.
+        src/shared/events.py and an empty src/shared/model package, with package
+        markers throughout. The shared package re-exports event definitions.
+        Lifecycle hooks are editable no-ops; the health hook delegates to the
+        base implementation until customized.
 
     Raises:
         DependencyError: The name is invalid, the destination is a symlink or escapes
@@ -65,7 +66,7 @@ def initialize_module(modules_dir: Path, name: str) -> Path:
     modules_dir.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix=".alira-init-", dir=modules_dir) as temporary:
         staged = Path(temporary) / name
-        (staged / "src/shared").mkdir(parents=True)
+        (staged / "src/shared/model").mkdir(parents=True)
         files = {
             "__init__.py": "",
             "main.py": _MAIN_TEMPLATE.format(name=name),
@@ -74,6 +75,7 @@ def initialize_module(modules_dir: Path, name: str) -> Path:
             "src/__init__.py": "",
             "src/shared/__init__.py": "from .events import *\n",
             "src/shared/events.py": '"""Public event names and payload types for this module."""\n',
+            "src/shared/model/__init__.py": "",
         }
         for relative, content in files.items():
             (staged / relative).write_text(content, encoding="utf-8")

@@ -4,7 +4,7 @@ from my_llm import TextContent
 from sqlalchemy import event, text
 
 from alira.modules.database.src.services.data import DataService
-from alira.modules.agent.src.shared.message import AliraToolMessage, AliraUserMessage
+from alira.modules.agent.src.shared.model.message import AliraToolMessage, AliraUserMessage
 from tests.modules.database.src.services.data.test_data_service import (
     create_user_and_conversation,
 )

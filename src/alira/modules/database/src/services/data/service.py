@@ -68,7 +68,7 @@ from alira.modules.database.config import (
     SQLITE_EMBEDDING_OPTIONS,
     VECTOR_DIMENSION,
 )
-from alira.modules.agent.src.shared.message import message_wire_from_record
+from alira.modules.agent.src.shared.model.message import message_wire_from_record
 from alira.shared.logger import logger
 
 MESSAGE_RECORD_COLUMNS = tuple(

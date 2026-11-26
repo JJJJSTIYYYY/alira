@@ -42,6 +42,7 @@ async def test_init_creates_importable_minimal_module_without_deployment(manager
         "src/__init__.py",
         "src/shared/__init__.py",
         "src/shared/events.py",
+        "src/shared/model/__init__.py",
     }
     assert (directory / "requirements.txt").read_text() == ""
     assert ledger.path.read_text() == "{broken records"

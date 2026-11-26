@@ -18,6 +18,7 @@ from alira.shared.logger import (
     register_log_level,
     unregister_log_level,
 )
+from alira.shared.type import ModuleNotLoaded, ModuleNotLoadedError
 
 __all__ = [
     "ALIRA_BASE_DIR",
@@ -29,6 +30,8 @@ __all__ = [
     "AliraLogHandler",
     "LogWriter",
     "Logger",
+    "ModuleNotLoaded",
+    "ModuleNotLoadedError",
     "compare_version",
     "config",
     "logger",

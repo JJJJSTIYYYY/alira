@@ -108,7 +108,7 @@ async def test_sdk_reasoning_survives_database_and_cache_restart(
     from alira.modules.agent.src.core.bot import AliraBot
     from alira.modules.database.src.services.cache import CacheService
     from alira.modules.database.src.services.data import DataService
-    from alira.modules.agent.src.shared.message import AliraMessageExtension, AliraUserMessage
+    from alira.modules.agent.src.shared.model.message import AliraMessageExtension, AliraUserMessage
     from tests.modules.agent.src.sdk.test_provider_presets import reasoning_wire
     from tests.modules.database.src.services.data.test_data_service import (
         create_user_and_conversation,

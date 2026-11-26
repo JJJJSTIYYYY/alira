@@ -10,8 +10,8 @@ from alira.modules.tool.src.base import BaseTool, ToolFunction
 from alira.modules.tool.src.function import FunctionToolManager, Tool
 from alira.modules.tool.src.utils.manager import ToolManager
 from alira.modules.tool.src.utils.request import ToolRequest
-from alira.modules.agent.src.shared.identity import ConversationIdentity
-from alira.modules.agent.src.shared.message import AliraToolMessage
+from alira.modules.agent.src.shared.model.identity import ConversationIdentity
+from alira.modules.agent.src.shared.model.message import AliraToolMessage
 
 
 class ToolNode(BaseNode):

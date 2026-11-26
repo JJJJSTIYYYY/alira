@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from alira.modules.agent.src.shared.generation import (
+from alira.modules.agent.src.shared.model.generation import (
     Generation,
     generation_context,
     get_generation,

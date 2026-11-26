@@ -2,7 +2,7 @@
 
 import pytest
 
-from alira.modules.agent.src.shared.identity import (
+from alira.modules.agent.src.shared.model.identity import (
     AgentIdentity,
     ConversationIdentity,
 )

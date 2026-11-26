@@ -18,7 +18,7 @@ from my_llm import (
 from openai import AsyncOpenAI
 
 from alira.modules.tool.src import ToolNode
-from alira.modules.agent.src.shared.message import AliraAssistantMessage, AliraUserMessage
+from alira.modules.agent.src.shared.model.message import AliraAssistantMessage, AliraUserMessage
 from tests.modules.agent.src.sdk.test_bot import make_profile_bot, weather
 
 

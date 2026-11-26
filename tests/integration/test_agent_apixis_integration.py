@@ -10,7 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from my_llm import ToolCall
 
 from alira.modules.agent.src.core.graph import AgentGraphCreator, agent_graph
-from alira.modules.agent.src.shared.message import (
+from alira.modules.agent.src.shared.model.message import (
     AliraAssistantMessage,
     AliraToolMessage,
 )

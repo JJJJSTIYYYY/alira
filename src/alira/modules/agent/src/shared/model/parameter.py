@@ -2,7 +2,7 @@
 
 from typing import NotRequired, TypedDict
 
-from alira.modules.agent.src.shared.identity import AgentIdentity
+from alira.modules.agent.src.shared.model.identity import AgentIdentity
 
 
 class LoopParameter(TypedDict):

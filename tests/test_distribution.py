@@ -1,6 +1,7 @@
 """Publishing checks parse wheel versions without importing the application."""
 
 import subprocess
+import shutil
 import sys
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
@@ -106,3 +107,26 @@ def test_distribution_script_does_not_import_application(tmp_path):
     subprocess.run(
         [sys.executable, "-c", script], cwd=tmp_path, check=True, capture_output=True
     )
+
+
+def test_wheel_contains_agent_model_contracts(tmp_path):
+    project = Path(__file__).resolve().parents[1]
+    for name in ("pyproject.toml", "README.md", "LICENSE"):
+        shutil.copy2(project / name, tmp_path / name)
+    shutil.copytree(
+        project / "src/alira", tmp_path / "src/alira",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "config.yaml", "graph"),
+    )
+    built = subprocess.run(
+        [sys.executable, "-c",
+         "from setuptools.build_meta import build_wheel; build_wheel('dist')"],
+        cwd=tmp_path, capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert built.returncode == 0, built.stdout + built.stderr
+    with ZipFile(next((tmp_path / "dist").glob("*.whl"))) as archive:
+        required = {
+            f"alira/modules/agent/src/shared/model/{name}.py"
+            for name in ("generation", "identity", "message", "parameter", "tools")
+        }
+        missing = required - set(archive.namelist())
+    assert not missing, f"Wheel omits public Agent contracts: {sorted(missing)}"

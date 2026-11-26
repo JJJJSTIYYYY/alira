@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from uuid import uuid4
 
-from alira.modules.agent.src.shared.identity import ConversationIdentity
+from alira.modules.agent.src.shared.model.identity import ConversationIdentity
 
 
 @dataclass

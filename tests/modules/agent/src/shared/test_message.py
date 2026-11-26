@@ -11,7 +11,7 @@ from my_llm import (
     UserMessage,
 )
 
-from alira.modules.agent.src.shared.message import (
+from alira.modules.agent.src.shared.model.message import (
     AliraAssistantMessage,
     AliraMessageExtension,
     AliraSystemMessage,

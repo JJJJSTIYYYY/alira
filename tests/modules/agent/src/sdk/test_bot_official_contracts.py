@@ -3,7 +3,7 @@
 from my_llm import FunctionTool, Message, ProtocolMiddleWare, TextContent, ToolCall
 from my_llm.middleware.protocol import generation_input
 
-from alira.modules.agent.src.shared.message import (
+from alira.modules.agent.src.shared.model.message import (
     AliraAssistantMessage,
     AliraSystemMessage,
     AliraToolMessage,

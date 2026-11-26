@@ -283,9 +283,10 @@ class ModuleManager:
 
         Returns:
             Path to modules_dir / name containing main.py, README.md, an empty
-            requirements.txt, package markers and src/shared/events.py. The shared
-            package re-exports event definitions. The declaration includes editable
-            startup, shutdown and health hooks.
+            requirements.txt, src/shared/events.py and an empty src/shared/model
+            package, with package markers throughout. The shared package re-exports
+            event definitions. The declaration includes editable startup, shutdown
+            and health hooks.
 
         Raises:
             DependencyError: The name is invalid, points outside modules_dir, is a

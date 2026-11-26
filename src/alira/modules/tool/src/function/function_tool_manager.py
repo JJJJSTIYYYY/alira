@@ -3,7 +3,7 @@
 from alira.modules.tool.src.base import ToolFunction
 from alira.modules.tool.src.function.tool import Tool
 from alira.modules.tool.src.utils.manager import ToolManager
-from alira.modules.agent.src.shared.identity import AgentIdentity
+from alira.modules.agent.src.shared.model.identity import AgentIdentity
 
 
 class FunctionToolManager(ToolManager):

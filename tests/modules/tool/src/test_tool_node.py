@@ -33,7 +33,7 @@ from alira.modules.tool.src import (
     ToolNode,
     tool,
 )
-from alira.modules.agent.src.shared.message import (
+from alira.modules.agent.src.shared.model.message import (
     AliraAssistantMessage,
     AliraToolMessage,
 )

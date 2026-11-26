@@ -44,7 +44,7 @@ uv run alira init echo
 
 命令在当前 Alira 包的模块目录下创建 `echo`，输出实际路径；已有同名文件或目录时会报错并保留原内容。
 生成的 `main.py` 声明版本为 `0.1.0`，预留 `startup()` / `shutdown()` / `health()` 钩子，
-`requirements.txt` 为空，`src/shared/events.py` 预留事件契约。初始化不导入模块、不安装依赖，也不写依赖记录。
+`requirements.txt` 为空，`src/shared/events.py` 预留事件契约，`src/shared/model/` 预留公共模型并包含 `__init__.py`。初始化不导入模块、不安装依赖，也不写依赖记录。
 下文展示如何填充骨架并添加 `src/runtime.py`，完成一个接收并输出文本的 Echo 模块。
 
 在源码仓库中使用以下目录；安装后的对应目录为 `alira/modules/echo/`。
@@ -58,7 +58,9 @@ src/alira/modules/echo/
     ├── __init__.py
     ├── shared/
     │   ├── __init__.py
-    │   └── events.py
+    │   ├── events.py
+    │   └── model/
+    │       └── __init__.py
     └── ...
 ```
 
@@ -126,7 +128,7 @@ module = EchoModule()
 from dataclasses import dataclass
 
 # EchoRuntime 订阅；发布者发送需要输出的文本。
-ECHO_RECEIVED = "alira.echo.received"
+ECHO_RECEIVED = "echo.received"
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,13 +335,13 @@ from alira.modules.echo.src.shared.events import EchoReceived  # 公开契约
 
 ### 事件契约
 
-事件名建议使用 `alira.<模块>.<领域>.<动作>`，常量定义在拥有该业务契约的模块 `src/shared` 中。
+事件名建议使用 `<模块>.<领域>.<动作>`，常量定义在拥有该业务契约的模块 `src/shared` 中。
 例如，事实通知可以使用 `created`、`persisted`；请求和回复可以使用 `requested`、`replied`。
 
 - 写明 payload 类型、订阅者或预期消费者、回复格式、失败语义，以及是否要求幂等。
 - 示例使用 `frozen=True` 的 dataclass。它只阻止字段重新赋值，不会冻结字段内部的列表或字典；
   订阅方按只读契约使用，不通过修改 payload 偷渡返回值。
-- 通配符用于契约允许的请求/回复前缀或观测范围，避免用 `alira.*` 接管无关业务。
+- 通配符用于契约允许的请求/回复前缀或观测范围，避免用 `*` 接管无关业务。
 
 ### 运行时前置模块
 

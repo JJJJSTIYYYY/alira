@@ -12,7 +12,7 @@ from alira.modules.database.src.utils.errors import StoreCode, business_error_re
 from alira.modules.database.src.utils.handlers import store_action
 from alira.modules.database.src.utils.message_tree import MessageNodeTree
 from alira.modules.database.src.utils.serialization import decode_message_row
-from alira.modules.agent.src.shared.message import AliraMessageExtension
+from alira.modules.agent.src.shared.model.message import AliraMessageExtension
 from alira.shared.logger import logger
 
 

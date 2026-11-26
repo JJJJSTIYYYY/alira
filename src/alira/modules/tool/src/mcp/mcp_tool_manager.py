@@ -24,7 +24,7 @@ from alira.modules.tool.src.mcp.mcp_tool import MCPTool
 from alira.modules.tool.src.mcp.mcp_tool_runtime import MCPToolRuntime
 from alira.modules.tool.src.utils.manager import ToolManager
 from alira.modules.tool.src.utils.request import ToolRequest
-from alira.modules.agent.src.shared.identity import AgentIdentity, ConversationIdentity
+from alira.modules.agent.src.shared.model.identity import AgentIdentity, ConversationIdentity
 from alira.shared.logger import logger
 
 IdentityKey = tuple[str, str, str]

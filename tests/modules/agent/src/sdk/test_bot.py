@@ -22,7 +22,7 @@ from my_llm import (
 
 from alira.modules.agent.src.core.bot import AliraBot, BaseProvider, CustomProvider
 from alira.modules.tool.src import tool
-from alira.modules.agent.src.shared.message import (
+from alira.modules.agent.src.shared.model.message import (
     AliraAssistantMessage,
     AliraSystemMessage,
     AliraUserMessage,

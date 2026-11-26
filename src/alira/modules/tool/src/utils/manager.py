@@ -12,7 +12,7 @@ from apixis.core.event.base import suspend_process
 
 from alira.modules.tool.src.base import BaseTool
 from alira.modules.tool.src.utils.request import ToolRequest, send_request
-from alira.modules.agent.src.shared.identity import ConversationIdentity
+from alira.modules.agent.src.shared.model.identity import ConversationIdentity
 
 
 class ToolManager(ABC):

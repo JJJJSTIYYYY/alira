@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 
-from alira.modules.agent.src.shared.identity import AgentIdentity
+from alira.modules.agent.src.shared.model.identity import AgentIdentity
 
 
 @dataclass

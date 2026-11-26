@@ -10,7 +10,7 @@ import pytest
 
 @pytest.mark.parametrize("first_import", [
     "alira.utils.config", "alira.utils.yaml", "alira.shared.application.config",
-    "alira.shared.logger", "alira.kernel.module",
+    "alira.shared.logger", "alira.shared.type", "alira.kernel.module",
     "alira.kernel.comlink", "alira.kernel.comlink.bus",
     "alira.kernel.module.discovery.catalog", "alira.kernel.module.discovery.resolution",
     "alira.kernel.module.runtime.registry", "alira.kernel.module.runtime.lifecycle",
@@ -44,6 +44,8 @@ for package in (utils, shared, kernel, lifespan, comlink, modules, dependencies,
         assert getattr(package, name) is not None
 assert shared.logger is import_module("alira.shared.logger").logger
 assert shared.Logger is import_module("alira.shared.logger").Logger
+assert shared.ModuleNotLoaded is import_module("alira.shared.type").ModuleNotLoaded
+assert shared.ModuleNotLoadedError is import_module("alira.shared.type").ModuleNotLoadedError
 assert utils.YamlConfig is import_module("alira.utils.config").YamlConfig
 assert shared.config is import_module("alira.shared.application.config")
 assert kernel.module_manager is import_module("alira.kernel.module").module_manager

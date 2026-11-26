@@ -545,6 +545,11 @@ def test_uv_run_sync_preserves_kernel_files_shared_with_removed_distribution(
     installation, isolated_wheel, obsolete_name, editable, interrupted
 ):
     app = installation
+    # Reuse the runtime versions installed by the fixture. Resolving newer cached
+    # metadata can select wheels that are unavailable in offline mode.
+    core_constraints = [
+        f"{name}=={version}" for name, version in app.packages().items()
+    ]
     if editable:
         project = app.root / "editable-project"
         project.mkdir()
@@ -616,6 +621,9 @@ def test_uv_run_sync_preserves_kernel_files_shared_with_removed_distribution(
             else "alira-harness @ " + isolated_wheel.as_uri()
         )
         + "]\n"
+        + "[tool.uv]\nconstraint-dependencies="
+        + json.dumps(core_constraints)
+        + "\n"
         + (
             '[tool.uv.sources]\nalira-harness={path="editable-project",editable=true}\n'
             if editable
@@ -722,6 +730,7 @@ def test_installed_cli_init_creates_a_deployable_module(installation):
     directory = app.modules / "sample_module"
     assert initialized.stdout.strip() == f"Initialized module: {directory}"
     assert (directory / "src/shared/events.py").is_file()
+    assert (directory / "src/shared/model/__init__.py").is_file()
     assert (directory / "requirements.txt").read_text() == ""
     assert app.packages() == packages
     assert app.records() == records

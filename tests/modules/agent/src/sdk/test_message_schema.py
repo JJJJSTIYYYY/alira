@@ -8,7 +8,7 @@ from my_llm import (
     ToolMessage,
 )
 
-from alira.modules.agent.src.shared.message import AliraAssistantMessage, AliraToolMessage
+from alira.modules.agent.src.shared.model.message import AliraAssistantMessage, AliraToolMessage
 
 
 def test_message_object_keeps_application_fields_out_of_protocol():
