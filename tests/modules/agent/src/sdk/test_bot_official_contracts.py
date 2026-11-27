@@ -1,7 +1,6 @@
 """Library middleware models define the application's inference boundary."""
 
-from my_llm import FunctionTool, Message, ProtocolMiddleWare, TextContent, ToolCall
-from my_llm.middleware.protocol import generation_input
+from my_llm import FunctionTool, Message, TextContent, ToolCall
 
 from alira.modules.agent.src.shared.model.message import (
     AliraAssistantMessage,
@@ -21,7 +20,3 @@ def test_messages_and_tools_use_library_middleware_contracts():
     ]
     assert all(isinstance(message, Message) for message in messages)
     assert isinstance(weather.get_schema(), FunctionTool)
-    middleware = generation_input(messages, [weather.get_schema()])
-    assert isinstance(middleware, ProtocolMiddleWare)
-    assert middleware.messages[-1].call_id == "c1"
-    assert middleware.tools[0].name == "weather"

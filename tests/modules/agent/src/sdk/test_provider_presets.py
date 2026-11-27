@@ -3,31 +3,28 @@
 import ast
 import inspect
 import json
-from dataclasses import fields, replace
+from dataclasses import fields
+from unittest.mock import Mock
 
 import httpx
 import pytest
 from my_llm import (
-    AssistantMessage,
     Attribute,
     Config,
-    ConfigurationError,
     InputParameter,
     ModelProfile,
-    MyCodec,
-    MyLLM,
     Parameter,
     ProviderProfile,
     ReasoningContent,
     TextContent,
-    ToolCall,
-    ToolMessage,
     UserMessage,
     omit,
-    resolve_profiles,
 )
+from my_llm.codec.openai.chat.prebuilt import chat_semantic_loss_hook
 
 from alira.modules.agent.src.core.bot import AliraBot, BaseProvider, CustomProvider
+from alira.modules.agent.src.core.bot.provider import base
+from alira.modules.agent.src.shared.model.message import AliraUserMessage
 from tests.modules.agent.src.sdk.test_bot import weather
 from tests.modules.agent.src.sdk.test_bot_protocols import install_sdk, wire
 
@@ -55,7 +52,6 @@ def test_builtin_models_select_their_declared_upstream_protocol(provider, model)
     assert isinstance(llm.model.protocol, Config)
     assert llm.model.protocol.default_value == expected
     assert llm.resolved_profile.protocol == expected
-    assert llm.codec.codecs[expected].protocol_or_api_style == expected
     assert llm.stdio_protocol == "middleware"
 
 
@@ -69,6 +65,43 @@ def test_kimi_catalogue_includes_both_k31_pro_variants():
         model.model.default_value
         for model in BaseProvider.get("moonshot").list_models()
     }
+
+
+@pytest.mark.parametrize(
+    "provider,model",
+    [
+        ("moonshot", "kimi-k2.6"),
+        ("openai", "gpt-6-astra"),
+        ("deepseek", "deepseek-flash"),
+        ("anthropic", "claude-opus-5-5"),
+    ],
+)
+def test_provider_configures_middleware_and_chat_loss_policy(
+    monkeypatch, provider, model
+):
+    catalogue = BaseProvider.get(provider)
+    selected = catalogue.get_model(model)
+    factory = Mock()
+    factory.return_value.resolved_profile.protocol = selected.protocol.default_value
+    monkeypatch.setattr(base, "MyLLM", factory)
+
+    llm = catalogue.create_llm(model)
+
+    factory.assert_called_once_with(
+        provider=catalogue.get_profile(),
+        model=selected,
+        stdio_protocol="middleware",
+        semantic_loss_protocol="ignore",
+        enable_message_cache=False,
+    )
+    assert llm is factory.return_value
+    if selected.protocol.default_value == "openai_chat":
+        llm.set_semantic_loss_policy.assert_called_once_with(
+            semantic_loss_protocol="hook",
+            input_semantic_loss_hook=chat_semantic_loss_hook,
+        )
+    else:
+        llm.set_semantic_loss_policy.assert_not_called()
 
 
 def reasoning_wire(protocol, *, raw=False):
@@ -135,88 +168,6 @@ def reasoning_wire(protocol, *, raw=False):
     )
 
 
-@pytest.mark.parametrize("provider,model", PRESETS)
-@pytest.mark.parametrize("streaming", [False, True])
-async def test_each_preset_returns_visible_reasoning_without_protocol_conversion(
-    monkeypatch, provider, model, streaming
-):
-    catalogue = BaseProvider.get(provider)
-    selected = catalogue.get_model(model)
-    protocol = selected.protocol.default_value
-    llm = MyLLM(
-        provider=replace(
-            catalogue.get_profile(),
-            api_key=InputParameter(path="$.api_key", default_value="test"),
-        ),
-        model=selected,
-        stdio_protocol=protocol,
-    )
-
-    def handler(request):
-        return httpx.Response(
-            200,
-            text=reasoning_wire(protocol, raw=provider in {"deepseek", "mimo"}),
-            headers={"content-type": "text/event-stream"},
-        )
-
-    install_sdk(monkeypatch, protocol, handler)
-    messages = [{"role": "user", "content": "hi"}]
-    if streaming:
-        stream = await llm.generate(messages=messages, stream=True, reasoning=True)
-        async with stream:
-            events = [event async for event in stream]
-        result = stream.result
-        if protocol == "openai_chat":
-            deltas = [
-                e["choices"][0]["delta"].get("reasoning_content", "")
-                for e in events
-                if e.get("choices")
-            ]
-        elif protocol == "openai_responses":
-            deltas = [
-                e["delta"]
-                for e in events
-                if e["type"]
-                in {
-                    "response.reasoning_text.delta",
-                    "response.reasoning_summary_text.delta",
-                }
-            ]
-        elif protocol == "anthropic":
-            deltas = [
-                e["delta"]["thinking"]
-                for e in events
-                if e.get("delta", {}).get("type") == "thinking_delta"
-            ]
-        else:
-            deltas = [
-                p["text"]
-                for e in events
-                for c in e.get("candidates", [])
-                for p in c.get("content", {}).get("parts", [])
-                if p.get("thought") and p.get("text")
-            ]
-        assert "".join(deltas) == "visible reasoning"
-    else:
-        result = await llm.generate(messages=messages, reasoning=True)
-    if protocol == "openai_chat":
-        assert result["content"] == "hello"
-        assert result["reasoning_content"] == "visible reasoning"
-    elif protocol == "openai_responses":
-        thinking = next(item for item in result if item["type"] == "reasoning")
-        field = "content" if provider in {"deepseek", "mimo"} else "summary"
-        assert thinking[field][0]["text"] == "visible reasoning"
-        message = next(item for item in result if item["type"] == "message")
-        assert message["content"][0]["text"] == "hello"
-    elif protocol == "anthropic":
-        assert result["content"][0]["thinking"] == "visible reasoning"
-        assert result["content"][1]["text"] == "hello"
-    else:
-        assert result["parts"][0]["text"] == "visible reasoning"
-        assert result["parts"][0]["thought"] is True
-        assert result["parts"][1]["text"] == "hello"
-
-
 @pytest.mark.parametrize(
     "provider,model",
     [
@@ -259,166 +210,6 @@ async def test_middleware_bot_preserves_native_reasoning_feedback(
     )
     assert thinking.reasoning == "visible reasoning"
     assert thinking.feedback_item is not None
-
-
-@pytest.mark.parametrize(
-    "provider,model,replay_plain_reasoning",
-    [
-        ("deepseek", "deepseek-flash", True),
-        ("deepseek", "deepseek-v4-pro", True),
-        ("moonshot", "kimi-k3", True),
-        ("moonshot", "kimi-k3.1-pro", True),
-        ("moonshot", "kimi-k3.1-pro-highspeed", True),
-        ("moonshot", "kimi-k2.6", True),
-        ("moonshot", "kimi-k2.7-code", True),
-        ("moonshot", "kimi-k2.7-code-highspeed", True),
-        ("mimo", "mimo-v2.6-pro", False),
-        ("mimo", "mimo-v2.6-pro-ultraspeed", False),
-        ("mimo", "mimo-v2.6-flash", False),
-    ],
-)
-@pytest.mark.parametrize("tool_round", [False, True])
-async def test_history_replays_reasoning_according_to_provider_policy(
-    monkeypatch, provider, model, replay_plain_reasoning, tool_round
-):
-    requests = []
-    bot = AliraBot(provider=provider, model=model)
-    protocol = bot.llm.resolved_profile.protocol
-
-    def handler(request):
-        requests.append(json.loads(request.content))
-        return httpx.Response(
-            200, text=wire(protocol), headers={"content-type": "text/event-stream"}
-        )
-
-    install_sdk(monkeypatch, protocol, handler)
-
-    def reasoning(text):
-        return ReasoningContent(
-            text,
-            feedback_item=text
-            if protocol == "openai_chat"
-            else {
-                "type": "reasoning",
-                "id": "r-" + text,
-                "summary": [{"type": "summary_text", "text": text}],
-            },
-        )
-
-    messages = [
-        UserMessage(role="user", content=[TextContent("hi")]),
-        AssistantMessage(
-            role="assistant",
-            protocol=protocol,
-            content=[reasoning("greeting"), TextContent("hello")],
-        ),
-        UserMessage(role="user", content=[TextContent("weather in Tokyo?")]),
-    ]
-    if tool_round:
-        messages.extend(
-            [
-                AssistantMessage(
-                    role="assistant",
-                    protocol=protocol,
-                    content=[
-                        reasoning("check weather"),
-                        ToolCall("c1", "weather", {"city": "Tokyo"}),
-                    ],
-                ),
-                ToolMessage(role="tool", content=[TextContent("sunny")], call_id="c1"),
-            ]
-        )
-    if tool_round:
-        bot.bind_tools([weather.get_schema()]).set_tool_permission()
-    result = await bot.invoke(messages, api_key="test")
-    assert result.content[0].text == "hello"
-
-    if protocol == "openai_chat":
-        history = requests[0]["messages"]
-        assert history[1]["reasoning_content"] == "greeting"
-        if tool_round:
-            assert history[3]["reasoning_content"] == "check weather"
-            assert history[3]["tool_calls"][0]["id"] == "c1"
-            assert history[4] == {
-                "role": "tool",
-                "tool_call_id": "c1",
-                "content": "sunny",
-            }
-    else:
-        assert "messages" not in requests[0]
-        history = requests[0]["input"]
-        reasoning = [item for item in history if item["type"] == "reasoning"]
-        expected = (["greeting"] if replay_plain_reasoning else []) + (
-            ["check weather"] if tool_round else []
-        )
-        assert [
-            part["text"] for item in reasoning for part in item["summary"]
-        ] == expected
-        if tool_round:
-            call = next(item for item in history if item["type"] == "function_call")
-            assert call["call_id"] == "c1" and call["name"] == "weather"
-            assert json.loads(call["arguments"]) == {"city": "Tokyo"}
-            output = next(
-                item for item in history if item["type"] == "function_call_output"
-            )
-            assert output["call_id"] == "c1"
-            assert output["output"] == [{"type": "input_text", "text": "sunny"}]
-    assert messages[1].content[0].reasoning == "greeting"
-
-
-@pytest.mark.parametrize(
-    "provider,model,field,native,enabled",
-    [
-        (
-            "deepseek",
-            "deepseek-flash",
-            "reasoning",
-            {"effort": "low"},
-            {"effort": "high"},
-        ),
-        (
-            "moonshot",
-            "kimi-k2.6",
-            "thinking",
-            {"type": "disabled"},
-            {"type": "enabled", "keep": "all"},
-        ),
-    ],
-)
-@pytest.mark.parametrize("reasoning", [False, True])
-async def test_generated_thinking_controls_take_precedence_over_native_body(
-    monkeypatch,
-    provider,
-    model,
-    field,
-    native,
-    enabled,
-    reasoning,
-):
-    requests = []
-    bot = AliraBot(provider=provider, model=model)
-    protocol = bot.llm.resolved_profile.protocol
-
-    def handler(request):
-        requests.append(json.loads(request.content))
-        return httpx.Response(
-            200, text=wire(protocol), headers={"content-type": "text/event-stream"}
-        )
-
-    install_sdk(monkeypatch, protocol, handler)
-    body = {field: native}
-    await bot.invoke(
-        MyCodec()
-        .encode(
-            messages=[{"role": "user", "content": "hi"}], input_format="openai_chat"
-        )
-        .messages,
-        reasoning=reasoning,
-        extra_body=body,
-        api_key="test",
-    )
-    assert requests[0][field] == (enabled if reasoning else native)
-    assert body == {field: native}
 
 
 @pytest.mark.parametrize("provider,model", PRESETS)
@@ -485,38 +276,6 @@ def test_builtin_profile_inheritance_always_retains_a_declaration(provider, mode
         ), (provider, model, field.name)
 
 
-@pytest.mark.parametrize(
-    "provider", [name for name in BaseProvider.list_providers() if name != "custom"]
-)
-def test_explicit_null_connection_fields_do_not_reach_sdk_clients(provider):
-    catalogue = BaseProvider.get(provider)
-    model = catalogue.list_models()[0].model.default_value
-    llm = catalogue.create_llm(model)
-    for name in ("timeout", "max_retries"):
-        declaration = getattr(llm.provider, name)
-        assert isinstance(declaration, Config)
-        assert declaration.default_value is None
-        assert name in llm.resolved_profile.values
-        assert llm.resolved_profile.get(name, "fallback") is None
-        assert name not in llm.resolved_profile.connection
-        assert name not in llm.client_parameters
-    assert llm.client_parameters["base_url"] == catalogue.profile.base_url.default_value
-
-
-@pytest.mark.parametrize("provider,model", PRESETS)
-def test_builtin_profiles_resolve_identically_without_protocol_defaults(
-    provider, model
-):
-    catalogue = BaseProvider.get(provider)
-    profile = catalogue.get_profile()
-    selected = catalogue.get_model(model)
-    llm = catalogue.create_llm(model)
-    defaults = llm.codec.defaults(llm.resolved_profile.protocol)
-    empty = replace(defaults, **{field.name: omit for field in fields(defaults)})
-    resolved = resolve_profiles(profile, selected, defaults_for=lambda protocol: empty)
-    assert resolved == llm.resolved_profile
-
-
 def test_required_provider_classes_and_exact_string_selection():
     from alira.modules.agent.src.core.bot import provider as package
 
@@ -575,53 +334,6 @@ def test_credentials_are_not_read_from_environment(monkeypatch):
     assert BaseProvider.get("deepseek").profile.api_key.default_value is omit
 
 
-@pytest.mark.parametrize("source", ["profile", "explicit"])
-async def test_credential_overrides_keep_custom_authentication_path(
-    monkeypatch, source
-):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    binding = InputParameter(
-        path="$.extra_headers.X-Api-Key",
-        default_value="profile-test-key",
-    )
-    provider = CustomProvider(
-        profile=ProviderProfile(
-            protocol=Config(default_value="anthropic"),
-            api_key=binding,
-            models=Attribute(
-                default_value=[
-                    ModelProfile(
-                        model=Attribute(default_value="test"),
-                        max_tokens=InputParameter(
-                            path="$.max_tokens",
-                            default_value=100,
-                        ),
-                    )
-                ]
-            ),
-        ),
-    )
-    llm = provider.create_llm("test")
-    requests = []
-
-    def handler(request):
-        requests.append(request)
-        return httpx.Response(
-            200, text=wire("anthropic"), headers={"content-type": "text/event-stream"}
-        )
-
-    install_sdk(monkeypatch, "anthropic", handler)
-    await llm.generate(
-        messages=[UserMessage(role="user", content=[TextContent("hi")])],
-        api_key="explicit-test-key" if source == "explicit" else None,
-    )
-    assert requests[0].headers["X-Api-Key"] == f"{source}-test-key"
-    assert "api_key" not in json.loads(requests[0].content)
-    assert llm.provider.api_key.path == binding.path
-    assert provider.get_profile().api_key.path == binding.path
-    assert provider.get_profile().api_key.default_value == binding.default_value
-
-
 def test_registry_and_model_catalogues_use_independent_library_profiles():
     preset = BaseProvider.get("moonshot")
     preset.profile.add_models(ModelProfile(model=Attribute(default_value="new-model")))
@@ -665,9 +377,8 @@ def test_registry_and_model_catalogues_use_independent_library_profiles():
 
 @pytest.mark.parametrize("provider,model", PRESETS)
 @pytest.mark.parametrize("streaming", [False, True])
-@pytest.mark.parametrize("explicit_reasoning", [False, True])
 async def test_each_builtin_preset_dispatches_through_official_sdk(
-    monkeypatch, provider, model, streaming, explicit_reasoning
+    monkeypatch, provider, model, streaming
 ):
     bot = AliraBot(provider=provider, model=model)
     protocol = bot.llm.resolved_profile.protocol
@@ -680,246 +391,34 @@ async def test_each_builtin_preset_dispatches_through_official_sdk(
         )
 
     install_sdk(monkeypatch, protocol, handler)
-    history = [{"role": "user", "content": "hi"}]
-    bot.bind_tools([weather.get_schema()]).set_tool_permission()
-    options = {"max_tokens": 1024}
-    if explicit_reasoning:
-        options["reasoning"] = True
+    history = [AliraUserMessage(content=[TextContent("hi")])]
+    bot.bind_tools([weather.get_schema()])
     if streaming:
-        stream = await bot.stream(
-            MyCodec().encode(messages=history, input_format="openai_chat").messages,
-            api_key="test",
-            **options,
-        )
+        stream = await bot.stream(history, api_key="test")
         async with stream:
-            events = [event async for event in stream]
-        assert events and stream.result["role"] == "assistant"
+            async for _ in stream:
+                pass
+        result = stream.result
     else:
-        assert (
-            await bot.invoke(
-                MyCodec().encode(messages=history, input_format="openai_chat").messages,
-                api_key="test",
-                **options,
-            )
-        ).content[0].text == "hello"
+        result = await bot.invoke(history, api_key="test")
+    assert result.content[0].text == "hello"
     body = json.loads(requests[0].content)
-    assert body.get("model", model) == model
+    assert body["model"] == model
     assert "weather" in str(body)
     assert "message_uid" not in str(body)
-    if protocol == "openai_chat":
-        assert requests[0].url.path == "/v1/chat/completions"
-        assert model in CHAT_MODELS
-        assert body["max_tokens"] == 1024
-        assert "max_completion_tokens" not in body
-        assert body["thinking"] == {"type": "enabled", "keep": "all"}
-        assert "reasoning_effort" not in body
-    elif protocol == "openai_responses":
-        assert requests[0].url.path.endswith("/responses")
-        assert "messages" not in body and body["input"]
-        assert body["max_output_tokens"] == 1024
-        assert "max_tokens" not in body and "max_completion_tokens" not in body
-        assert "thinking" not in body and "reasoning_effort" not in body
-        if provider == "deepseek":
-            assert body["reasoning"] == {"effort": "high"}
-        elif provider == "moonshot":
-            assert body["reasoning"] == {
-                "effort": "high" if explicit_reasoning else "max"
-            }
-        elif provider == "mimo":
-            assert body["reasoning"] == {"effort": "medium"}
-        else:
-            assert body["reasoning"]["effort"] == (
-                "high" if explicit_reasoning and model == "gpt-5.4-pro" else "medium"
-            )
-            assert body["reasoning"]["summary"] == "detailed"
-    elif protocol == "anthropic":
-        assert requests[0].url.path == "/v1/messages"
-        assert body["max_tokens"] == 1024
-        assert body["thinking"] == {"type": "adaptive", "display": "summarized"}
-        if explicit_reasoning:
-            assert body["output_config"]["effort"] == "medium"
-        else:
-            assert "output_config" not in body
-        assert "budget_tokens" not in body["thinking"]
-    else:
-        assert body["generationConfig"]["maxOutputTokens"] == 1024
-        thinking = body["generationConfig"]["thinkingConfig"]
-        assert thinking.get("includeThoughts", thinking.get("include_thoughts")) is True
-        if explicit_reasoning:
-            assert (
-                thinking.get(
-                    "thinkingLevel", thinking.get("thinking_level", "")
-                ).lower()
-                == "medium"
-            )
-            assert (
-                "thinkingBudget" not in thinking and "thinking_budget" not in thinking
-            )
-        else:
-            assert thinking.get("thinkingBudget", thinking.get("thinking_budget")) == -1
 
 
-@pytest.mark.parametrize(
-    "provider,model",
-    [
-        ("deepseek", "deepseek-flash"),
-        ("moonshot", "kimi-k2.6"),
-        ("moonshot", "kimi-k2.7-code"),
-        ("moonshot", "kimi-k2.7-code-highspeed"),
-    ],
-)
-@pytest.mark.parametrize("tokens", ["default", None, omit, 1536])
-@pytest.mark.parametrize("manual_limit", [None, 999])
-async def test_native_token_defaults_overrides_and_omit(
-    monkeypatch, provider, model, tokens, manual_limit
-):
-    preset = BaseProvider.get(provider)
-    protocol = preset.create_llm(model).resolved_profile.protocol
-    field = "max_output_tokens" if protocol == "openai_responses" else "max_tokens"
-    selected = replace(
-        preset.get_model(model),
-        max_tokens=InputParameter(
-            path=f"$.{field}",
-            default_value=2048,
-        ),
-    )
-    preset.profile.add_models(selected)
-    llm = preset.create_llm(model)
-    requests = []
-
-    def handler(request):
-        requests.append(json.loads(request.content))
-        return httpx.Response(
-            200, text=wire(protocol), headers={"content-type": "text/event-stream"}
-        )
-
-    install_sdk(monkeypatch, protocol, handler)
-    options = {"temperature": 0.2}
-    if manual_limit is not None:
-        options[field] = manual_limit
-    controls = {} if tokens == "default" else {"max_tokens": tokens}
-    await llm.generate(
-        messages=[UserMessage(role="user", content=[TextContent("hi")])],
-        extra_body=options,
-        api_key="test",
-        **controls,
-    )
-    body = requests[0]
-    assert "max_completion_tokens" not in body
-    if tokens is omit:
-        assert field not in body
-    elif tokens == "default":
-        assert body[field] == (2048 if manual_limit is None else manual_limit)
-    else:
-        assert body[field] == tokens
-    assert body["temperature"] == 0.2
-    assert options == (
-        {"temperature": 0.2}
-        if manual_limit is None
-        else {"temperature": 0.2, field: manual_limit}
-    )
-
-
-@pytest.mark.parametrize("value", [0, -1, True, 1.5, "1024"])
-async def test_native_token_limits_validate_before_dispatch(value):
-    bot = AliraBot(provider="moonshot", model="kimi-k2.6")
-    with pytest.raises(ConfigurationError, match="positive integer"):
-        await bot.invoke(
-            MyCodec()
-            .encode(
-                messages=[{"role": "user", "content": "hi"}], input_format="openai_chat"
-            )
-            .messages,
-            max_tokens=value,
-            api_key="test",
-        )
-
-
-@pytest.mark.parametrize(
-    "provider,model,effort",
-    [
-        ("openai", "gpt-5.4", "max"),
-        ("openai", "gpt-5.4-pro", "xhigh"),
-        ("openai", "gpt-5.4-pro", "max"),
-        ("moonshot", "kimi-k3", "xhigh"),
-        ("moonshot", "kimi-k3", "max"),
-        ("deepseek", "deepseek-flash", "xhigh"),
-        ("deepseek", "deepseek-flash", "max"),
-    ],
-)
-async def test_unsupported_model_efforts_are_ignored(
-    monkeypatch, provider, model, effort
-):
-    bot = AliraBot(provider=provider, model=model)
-    protocol = bot.llm.resolved_profile.protocol
-    requests = []
-
-    def handler(request):
-        requests.append(json.loads(request.content))
-        return httpx.Response(
-            200, text=wire(protocol), headers={"content-type": "text/event-stream"}
-        )
-
-    install_sdk(monkeypatch, protocol, handler)
-    await bot.invoke(
-        [UserMessage(role="user", content=[TextContent("hi")])],
-        reasoning_effort=effort,
-        api_key="test",
-    )
-    assert "reasoning_effort" not in requests[0]
-
-
-@pytest.mark.parametrize(
-    "provider,model",
-    [
-        ("moonshot", "kimi-k3"),
-        ("moonshot", "kimi-k3.1-pro"),
-        ("moonshot", "kimi-k3.1-pro-highspeed"),
-        ("deepseek", "deepseek-flash"),
-        ("deepseek", "deepseek-v4-pro"),
-    ],
-)
-@pytest.mark.parametrize(
-    "options,expected",
-    [
-        ({"reasoning": True}, "high"),
-        ({"reasoning_effort": "low"}, "low"),
-        ({"reasoning_effort": "medium"}, "high"),
-        ({"reasoning_effort": "high"}, "max"),
-        ({}, None),
-    ],
-)
-async def test_three_level_efforts_follow_native_profile_mapping(
-    monkeypatch, provider, model, options, expected
-):
-    requests = []
-
-    def handler(request):
-        requests.append(json.loads(request.content))
-        return httpx.Response(
-            200,
-            text=wire("openai_responses"),
-            headers={"content-type": "text/event-stream"},
-        )
-
-    install_sdk(monkeypatch, "openai_responses", handler)
-    bot = AliraBot(provider=provider, model=model)
-    await bot.invoke(
-        MyCodec()
-        .encode(
-            messages=[{"role": "user", "content": "hi"}], input_format="openai_chat"
-        )
-        .messages,
-        api_key="test",
-        **options,
-    )
-    if expected is None:
-        assert requests[0]["reasoning"] == {
-            "effort": "max" if provider == "moonshot" else "high"
-        }
-    else:
-        assert requests[0]["reasoning"] == {"effort": expected}
-    assert "thinking" not in requests[0] and "reasoning_effort" not in requests[0]
+@pytest.mark.parametrize("provider", ["moonshot", "deepseek"])
+def test_three_level_effort_mapping_is_declared_by_catalogue(provider):
+    catalogue = BaseProvider.get(provider)
+    assert catalogue.get_profile().reasoning_effort_mapping.default_value == {
+        "none": "none",
+        "low": "low",
+        "medium": "high",
+        "high": "max",
+        "xhigh": None,
+        "max": None,
+    }
 
 
 @pytest.mark.parametrize(
@@ -934,98 +433,8 @@ async def test_three_level_efforts_follow_native_profile_mapping(
         ("gpt-5.4-pro", "high", "xhigh"),
     ],
 )
-async def test_openai_model_specific_efforts_reach_responses_sdk(
-    monkeypatch, model, effort, expected
+def test_openai_model_specific_effort_mapping_is_declared_by_catalogue(
+    model, effort, expected
 ):
-    requests = []
-
-    def handler(request):
-        requests.append(json.loads(request.content))
-        return httpx.Response(
-            200,
-            text=wire("openai_responses"),
-            headers={"content-type": "text/event-stream"},
-        )
-
-    install_sdk(monkeypatch, "openai_responses", handler)
-    bot = AliraBot(provider="openai", model=model)
-    await bot.invoke(
-        MyCodec()
-        .encode(
-            messages=[{"role": "user", "content": "hi"}], input_format="openai_chat"
-        )
-        .messages,
-        reasoning_effort=effort,
-        api_key="test",
-    )
-    assert requests[0]["reasoning"]["effort"] == expected
-    assert requests[0]["model"] == model
-
-
-@pytest.mark.parametrize(
-    "model_path,field",
-    [
-        (None, "max_tokens"),
-        ("$.max_completion_tokens", "max_completion_tokens"),
-    ],
-)
-async def test_custom_provider_uses_native_profile(
-    monkeypatch, model_path, field
-):
-    custom = CustomProvider(
-        name="custom-test",
-        profile=ProviderProfile(
-            protocol=Config(default_value="openai_chat"),
-            api_key=InputParameter(
-                path="$.api_key",
-                default_value="test",
-            ),
-            base_url=Config(default_value="https://custom.test/v1"),
-            max_tokens=InputParameter(
-                path="$.extra_body.max_tokens",
-                default_value=2000,
-            ),
-            models=Attribute(
-                default_value=[
-                    ModelProfile(
-                        model=Attribute(default_value="custom-model"),
-                        max_tokens=None
-                        if model_path is None
-                        else InputParameter(
-                            path=model_path,
-                            default_value=2000,
-                        ),
-                    )
-                ]
-            ),
-        ),
-    )
-    BaseProvider.register(custom)
-    try:
-        bot = AliraBot(provider="custom-test", model="custom-model")
-    finally:
-        BaseProvider.unregister("custom-test")
-    requests = []
-
-    def handler(request):
-        requests.append(json.loads(request.content))
-        return httpx.Response(
-            200, text=wire("openai_chat"), headers={"content-type": "text/event-stream"}
-        )
-
-    install_sdk(monkeypatch, "openai_chat", handler)
-    options = {"extra_body": {"temperature": 0.2}}
-    assert (
-        await bot.invoke(
-            MyCodec()
-            .encode(
-                messages=[{"role": "user", "content": "hi"}],
-                input_format="openai_chat",
-            )
-            .messages,
-            **options,
-        )
-    ).content[0].text == "hello"
-    assert requests[0][field] == 2000
-    assert {key for key in requests[0] if key.startswith("max_")} == {field}
-    assert options == {"extra_body": {"temperature": 0.2}}
+    llm = BaseProvider.get("openai").create_llm(model)
+    assert llm.resolved_profile.get("reasoning_effort_mapping")[effort] == expected

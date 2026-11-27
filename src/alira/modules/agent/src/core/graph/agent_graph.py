@@ -1,3 +1,8 @@
+'''AgentGraph should only manage a context prepare node, a messages compressor node and a llm node.
+The tool node should be portable; we simply send a tool call event to the foreign tool module
+and wait its result whenever a tool call is generated.
+'''
+
 from typing import get_type_hints
 
 from apixis.core.graph import BaseNode, GraphManager, NodeGraph
@@ -5,7 +10,7 @@ from apixis.core.graph import BaseNode, GraphManager, NodeGraph
 from alira.modules.tool.src import BaseTool, ToolNode
 from alira.modules.tool.src.base import ToolFunction
 from alira.modules.tool.src.utils.manager import ToolManager
-from alira.modules.agent.src.shared.identity import ConversationIdentity
+from alira.modules.agent.src.shared.model.identity import ConversationIdentity
 
 
 class AgentGraph(NodeGraph):

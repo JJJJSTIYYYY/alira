@@ -48,7 +48,7 @@ def _completed_data(
     if event is None:
         logger.exception(
             RuntimeError(
-                f"Comlink {point} extension point was cancelled or the event core closed."
+                f"Comlink {point} extension point was timeout, cancelled or the event core closed."
             )
         )
         return fallback
@@ -66,6 +66,7 @@ def _completed_data(
 def method_comlink(
     extension_point: Literal["entry", "exit", "both"],
     extension_name: str | None = None,
+    time_out: float | None = None
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Run extension events before and after an asynchronous function.
 
@@ -122,6 +123,7 @@ def method_comlink(
                         event_type=EventType.WORKFLOW,
                         event_name=entry_event,
                         context=payload,
+                        time_out=time_out
                     ),
                     "entry",
                     payload,
@@ -143,6 +145,7 @@ def method_comlink(
                         event_type=EventType.WORKFLOW,
                         event_name=exit_event,
                         context=payload,
+                        time_out=time_out
                     ),
                     "exit",
                     payload,

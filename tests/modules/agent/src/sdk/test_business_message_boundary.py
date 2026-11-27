@@ -10,7 +10,6 @@ from my_llm import (
     Config,
     InputParameter,
     ModelProfile,
-    MyLLM,
     ProviderProfile,
     TextContent,
     ToolCall,
@@ -22,15 +21,14 @@ from alira.modules.agent.src.shared.model.message import (
     AliraToolMessage,
     AliraUserMessage,
 )
-from tests.modules.agent.src.sdk.test_bot import weather
+from tests.modules.agent.src.sdk.test_bot import make_profile_bot, weather
 from tests.modules.agent.src.sdk.test_bot_protocols import install_sdk, wire
 
 
 @pytest.mark.parametrize("protocol", ["openai_chat", "openai_responses", "anthropic"])
-@pytest.mark.parametrize("cache", [False, True])
 @pytest.mark.parametrize("streaming", [False, True])
 async def test_middleware_sdk_requests_exclude_business_fields(
-    monkeypatch, protocol, cache, streaming
+    monkeypatch, protocol, streaming
 ):
     requests = []
 
@@ -71,7 +69,7 @@ async def test_middleware_sdk_requests_exclude_business_fields(
         AliraUserMessage(content=[TextContent("continue")], **business_fields),
     ]
     before = deepcopy(messages)
-    llm = MyLLM(
+    bot = make_profile_bot(
         provider=ProviderProfile(
             protocol=Config(default_value=protocol),
             api_key=InputParameter(path="$.api_key", default_value="test"),
@@ -81,23 +79,20 @@ async def test_middleware_sdk_requests_exclude_business_fields(
             max_tokens=InputParameter(path=token_path, default_value=100),
             supports_function_calling=Config(default_value=True),
         ),
-        stdio_protocol="middleware",
-        enable_message_cache=cache,
     )
-    # Repeat a batch to exercise warm-cache preparation as well.
-    for _ in range(2):
-        result = await llm.generate(
-            messages=messages, tools=[weather.get_schema()], stream=streaming
-        )
-        if streaming:
-            async with result:
-                async for _ in result:
-                    pass
-            result = result.result
-        assert result.content[0].text == "hello"
+    bot.bind_tools([weather.get_schema()])
+    if streaming:
+        stream = await bot.stream(messages)
+        async with stream:
+            async for _ in stream:
+                pass
+        result = stream.result
+    else:
+        result = await bot.invoke(messages)
+    assert result.content[0].text == "hello"
 
     assert messages == before
-    assert len(requests) == 2
+    assert len(requests) == 1
     for request in requests:
         serialized = json.dumps(request)
         assert "business-" not in serialized

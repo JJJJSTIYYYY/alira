@@ -770,7 +770,6 @@ async def test_stop_waits_for_active_driver_io_and_rolls_back_before_restart(
 
 async def test_tool_role_survives_branch_filter_cache_and_restart(manager):
     from my_llm import TextContent, ToolCall
-    from my_llm.middleware.protocol import generation_input
 
     from alira.modules.agent.src.shared.model.message import (
         AliraAssistantMessage,
@@ -801,7 +800,8 @@ async def test_tool_role_survives_branch_filter_cache_and_restart(manager):
     ]
     restored = cold["messages"]["messages"]
     assert all(isinstance(message, AliraMessageExtension) for message in restored)
-    assert generation_input(restored, None).messages[2].role == "tool"
+    assert isinstance(restored[2], AliraToolMessage)
+    assert restored[2].call_id == "c1"
     hot = await manager.query("list_messages", request)
     assert hot["messages"]["messages"] == cold["messages"]["messages"]
     await manager.stop()
