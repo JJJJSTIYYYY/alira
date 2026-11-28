@@ -4,6 +4,7 @@ import importlib
 import platform
 import shutil
 import tomllib
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -152,6 +153,59 @@ async def test_existing_fresh_lock_is_reused_without_resolving(deployment):
         await env.dependency.resolve(env.declaration, env.specs, cwd=env.root) == lock
     )
     assert len(env.calls) == 1
+
+
+async def test_upload_times_survive_resolution_json_storage_and_installation(
+    deployment, monkeypatch
+):
+    env = deployment
+    uv_code = importlib.import_module("alira.kernel.module.dependencies.uv")
+    packages = {name: package(name) for name in ("left-pkg", "right-pkg", "shared-pkg")}
+    packages["shared-pkg"]["sdist"] = {
+        "url": "https://example.test/shared-pkg-1.0.tar.gz",
+        "hashes": {"sha256": "b" * 64},
+    }
+    timestamp = "2026-11-28T01:02:03.456789Z"
+    expected = datetime.fromisoformat(timestamp)
+    pylock = installation_lock({"packages": packages}).decode().replace(
+        '"url" =', f'"upload-time" = {timestamp}, "url" ='
+    )
+
+    async def compile_uv(*arguments, **kwargs):
+        assert arguments[0] == "compile"
+        path = Path(arguments[arguments.index("--output-file") + 1])
+        if path.exists():
+            previous = tomllib.loads(path.read_text())
+            assert previous["packages"][0]["wheels"][0]["upload-time"] == expected
+        path.write_text(pylock)
+
+    monkeypatch.setattr(uv_code, "run_uv", compile_uv)
+    monkeypatch.setattr(code, "resolve_requirements", uv_code.resolve_requirements)
+    lock = await env.dependency.resolve(env.declaration, env.specs, cwd=env.root)
+    shared = lock["packages"]["shared-pkg"]
+    assert shared["wheels"][0]["upload-time"] == expected.isoformat()
+    assert shared["sdist"]["upload-time"] == expected.isoformat()
+    env.dependency.ledger.write_lock(lock)
+    restored = env.dependency.ledger.read_lock()
+    assert restored == lock
+
+    async def install_uv(*arguments, **kwargs):
+        assert arguments[0] == "install"
+        path = Path(arguments[arguments.index("--requirements") + 1])
+        installed = tomllib.loads(path.read_text())["packages"]
+        shared = next(item for item in installed if item["name"] == "shared-pkg")
+        assert shared["wheels"][0]["upload-time"] == expected
+        assert shared["sdist"]["upload-time"] == expected
+
+    installer = AsyncMock(side_effect=install_uv)
+    monkeypatch.setattr(code, "run_uv", installer)
+    monkeypatch.setattr(code, "_installed_distributions", lambda: ({}, set()))
+    await env.dependency.install(restored, cwd=env.root, prune=False)
+    installer.assert_awaited_once()
+
+    env.declaration["requires-kernel"] = ">=3.0.1,<4"
+    updated = await env.dependency.resolve(env.declaration, env.specs, cwd=env.root)
+    assert updated["packages"] == lock["packages"]
 
 
 async def test_changed_inputs_use_previous_lock_as_preference(deployment):

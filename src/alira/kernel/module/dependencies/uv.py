@@ -6,6 +6,7 @@ import importlib
 import json
 import sys
 import tomllib
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -44,9 +45,13 @@ def complete_local_artifacts(lock: dict, directory: Path) -> None:
                     ).hexdigest()
 
 
-def _toml_value(value) -> str:
-    """Encode JSON-compatible lock values as TOML, including nested artifact tables."""
+def _toml_value(value, *, key: str | None = None) -> str:
+    """Encode lock values as TOML, restoring JSON upload times as datetime literals."""
+    if isinstance(value, datetime):
+        return value.isoformat()
     if isinstance(value, str):
+        if key == "upload-time":
+            return datetime.fromisoformat(value).isoformat()
         return json.dumps(value, ensure_ascii=False)
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -58,7 +63,7 @@ def _toml_value(value) -> str:
         return (
             "{ "
             + ", ".join(
-                f"{json.dumps(key)} = {_toml_value(item)}"
+                f"{json.dumps(key)} = {_toml_value(item, key=key)}"
                 for key, item in value.items()
             )
             + " }"
@@ -70,8 +75,9 @@ def installation_lock(lock: dict, names=None) -> bytes:
     """Build a temporary PEP 751 artifact solely from the authoritative JSON lock.
 
     Package URLs, local artifact paths, hashes, dependency markers and installation
-    metadata survive the conversion. ``names`` selects an already closed subset;
-    it does not trigger resolution or read requirements files.
+    metadata survive the conversion, including typed upload timestamps. ``names``
+    selects an already closed subset; it does not trigger resolution or read
+    requirements files.
     """
     header = lock.get(
         "install-metadata",

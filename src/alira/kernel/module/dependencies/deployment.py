@@ -373,13 +373,19 @@ class ModuleDependencies:
         ownership: Mapping,
         protected: Mapping,
     ) -> dict:
-        """Convert resolved PEP 751 artifacts and module closures into one JSON lock."""
+        """Convert PEP 751 artifacts to a JSON lock with ISO 8601 upload times."""
         packages = {}
         for original in resolved.get("packages", []):
             name = canonicalize_name(original["name"])
             if name in protected:
                 continue
             package = original | {"name": name}
+            artifacts = [*package.get("wheels", [])]
+            if "sdist" in package:
+                artifacts.append(package["sdist"])
+            for artifact in artifacts:
+                if "upload-time" in artifact:
+                    artifact["upload-time"] = artifact["upload-time"].isoformat()
             packages[name] = package | {"sha256": _artifact_digest(package)}
         modules = {
             name: {
