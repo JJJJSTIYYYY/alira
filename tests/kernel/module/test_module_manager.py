@@ -389,13 +389,15 @@ async def test_join_waits_for_all_prerequisites_and_skips_after_failure(
         child.startup.assert_not_awaited()
     else:
         child.startup.assert_awaited_once()
-    expected = []
+    parents = []
     for name in entered:
         parent = f"\033[31m{name}[x]\033[0m" if name in failed else name
         result = "failed" if failed else "success"
         tail = "\033[90mchild\033[0m" if failed else "child"
-        expected.append(f"modules load {result}: {parent} -> {tail}")
-    assert capsys.readouterr().out.splitlines() == expected
+        parents.append(parent)
+    assert capsys.readouterr().out.splitlines() == [
+        f"modules load {result}: ({', '.join(parents)}) -> {tail}"
+    ]
     assert manager.loaded == set(entered) - set(failed) | (
         set() if failed else {"child"}
     )
@@ -490,8 +492,7 @@ async def test_startup_errors_are_logged_before_other_prerequisites_finish(
     for name in manager.loaded:
         manager.modules[name].shutdown.assert_not_awaited()
     assert capsys.readouterr().out.splitlines() == [
-        "modules load failed: parent -> \033[31mfirst[x]\033[0m -> \033[90mchild\033[0m",
-        "modules load failed: late -> \033[90mchild\033[0m",
+        "modules load failed: (parent -> \033[31mfirst[x]\033[0m, late) -> \033[90mchild\033[0m",
         "modules load failed: \033[31msecond[x]\033[0m",
         "modules load success: late -> other",
     ]
@@ -772,3 +773,72 @@ async def test_cancellation_waits_for_failed_startup_cleanup_without_repeating_s
     finally:
         release_cleanup.set()
         await asyncio.gather(loading, return_exceptions=True)
+
+
+async def test_load_groups_converging_dependency_branches(manager, capsys):
+    for name, dependencies in [("A", []), ("B", ["A"]), ("C", []), ("D", ["B", "C"])]:
+        manager.register(Service(name, [], required_modules=dependencies))
+    await manager.load("D")
+    assert capsys.readouterr().out.splitlines() == [
+        "modules load success: (A -> B, C) -> D"
+    ]
+    await manager.stop()
+
+
+async def test_load_reports_long_dependency_chain_without_recursion(manager, capsys):
+    names = [f"chain_{index}" for index in range(1200)]
+    for index, name in enumerate(names):
+        manager.register(
+            Service(
+                name, [], required_modules=names[index - 1 : index] if index else []
+            )
+        )
+    await manager.load(names[-1])
+    assert manager.loaded == set(names)
+    assert (
+        capsys.readouterr().out == "modules load success: " + " -> ".join(names) + "\n"
+    )
+    await manager.stop()
+    for module in manager.modules.values():
+        module.startup.assert_awaited_once()
+        module.shutdown.assert_awaited_once()
+
+
+async def test_load_reports_shared_subgraph_once(manager, capsys):
+    for name, dependencies in [
+        ("A", []),
+        ("B", ["A"]),
+        ("C", ["B"]),
+        ("D", ["B"]),
+        ("E", ["C", "D"]),
+    ]:
+        manager.register(Service(name, [], required_modules=dependencies))
+    await manager.load("E")
+    assert capsys.readouterr().out.splitlines() == [
+        "modules load success: (B -> C, B -> D) -> E",
+        "modules load success: A -> B",
+    ]
+    await manager.stop()
+
+
+@pytest.mark.parametrize("layers", [20, 100])
+async def test_load_keeps_repeated_diamonds_compact(manager, capsys, layers):
+    previous = []
+    names = []
+    for layer in range(layers):
+        current = [f"layer_{layer}_left", f"layer_{layer}_right"]
+        for name in current:
+            manager.register(Service(name, [], required_modules=previous))
+        names.extend(current)
+        previous = current
+    await manager.load(*previous)
+    output = capsys.readouterr().out
+    assert manager.loaded == set(names)
+    assert len(output.splitlines()) <= len(names)
+    assert len(output) < 20 * sum(len(name) for name in names)
+    for name in names:
+        assert name in output
+    await manager.stop()
+    for module in manager.modules.values():
+        module.startup.assert_awaited_once()
+        module.shutdown.assert_awaited_once()

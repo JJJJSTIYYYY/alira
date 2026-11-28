@@ -3,7 +3,6 @@
 import asyncio
 from dataclasses import dataclass
 from graphlib import TopologicalSorter
-from typing import Literal
 
 from alira.kernel.module.dependencies.types import ModuleLoadError, sync_hint
 from alira.kernel.module.runtime.registry import ModuleRegistry
@@ -12,51 +11,65 @@ from alira.shared.logger import logger
 
 @dataclass
 class _LoadPlan:
-    """Display one dependency path and its results; never drive scheduling."""
+    """Display one compact dependency expression; never drive scheduling."""
 
+    parts: tuple[str, ...]
     modules: tuple[str, ...]
-    results: tuple[Literal["success", "failed", "skipped"], ...] = ()
 
     def render(self, loaded: set[str], failed: set[str]) -> str:
-        """Record final outcomes and format failed/skipped modules with ANSI colors."""
-        self.results = tuple(
-            "success" if name in loaded else "failed" if name in failed else "skipped"
-            for name in self.modules
-        )
-        chain = " -> ".join(
-            name
-            if result == "success"
+        """Format module outcomes while preserving branch grouping and references."""
+        labels = {
+            name: name
+            if name in loaded
             else (
                 f"\033[31m{name}[x]\033[0m"
-                if result == "failed"
+                if name in failed
                 else f"\033[90m{name}\033[0m"
             )
-            for name, result in zip(self.modules, self.results)
-        )
-        result = (
-            "success" if all(item == "success" for item in self.results) else "failed"
-        )
-        return f"modules load {result}: {chain}"
+            for name in self.modules
+        }
+        expression = "".join(labels.get(part, part) for part in self.parts)
+        result = "success" if all(name in loaded for name in self.modules) else "failed"
+        return f"modules load {result}: {expression}"
 
 
 def _load_plans(graph: dict[str, set[str]]) -> list[_LoadPlan]:
-    """Expand maximal dependency paths in selection order for reporting only."""
+    """Build compact expressions iteratively without enumerating dependency paths.
+
+    Each shared non-leaf prerequisite gets its own expression; consumers reference
+    its name instead of expanding it again. Other prerequisites are grouped at
+    joins. Every non-leaf is expanded once and every edge produces at most one
+    reference, bounding display storage by O(V + E), including nested diamonds.
+    """
+    consumers = dict.fromkeys(graph, 0)
+    for dependencies in graph.values():
+        for name in dependencies:
+            consumers[name] += 1
+    shared = {name for name in graph if consumers[name] > 1 and graph[name]}
+    roots = [name for name in graph if not consumers[name] or name in shared]
     plans = []
-    prerequisites = {
-        dependency for dependencies in graph.values() for dependency in dependencies
-    }
-
-    def visit(name: str, suffix: tuple[str, ...]) -> None:
-        path = (name, *suffix)
-        if graph[name]:
-            for dependency in sorted(graph[name]):
-                visit(dependency, path)
-        else:
-            plans.append(_LoadPlan(path))
-
-    for name in graph:
-        if name not in prerequisites:
-            visit(name, ())
+    for root in roots:
+        parts = []
+        pending = [(root, True)]
+        while pending:
+            name, expand = pending.pop()
+            if not expand or not graph[name] or (name != root and name in shared):
+                parts.append(name)
+                continue
+            dependencies = sorted(graph[name])
+            pending.append((name, False))
+            pending.append((" -> ", False))
+            if len(dependencies) > 1:
+                pending.append((")", False))
+            for index in range(len(dependencies) - 1, -1, -1):
+                pending.append((dependencies[index], True))
+                if index:
+                    pending.append((", ", False))
+            if len(dependencies) > 1:
+                pending.append(("(", False))
+        plans.append(
+            _LoadPlan(tuple(parts), tuple(part for part in parts if part in graph))
+        )
     return plans
 
 
@@ -97,8 +110,9 @@ class ModuleRuntime:
             A failed startup skips its dependents without cancelling other branches.
             Startup exceptions are logged immediately and contained in this runtime;
             they do not terminate the application or stop successful prerequisites.
-            All dependency paths and their results are printed together after tasks
-            finish. These display plans do not control the topological scheduler.
+            Compact dependency expressions and their results are printed after tasks
+            finish. Shared subgraphs are expanded once and referenced by name.
+            These display plans do not control the topological scheduler.
             Failed or cancelled startups immediately close their partial resources.
             Successful modules remain running until stop; there is no runtime reload,
             individual unload or cleanup retry.
