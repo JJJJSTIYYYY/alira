@@ -261,6 +261,21 @@ async def test_locked_sync_restores_missing_source_before_loading_and_checks_sel
     await managed.lock(check=True)
 
 
+async def test_run_preparation_repairs_a_stale_journal(managed, monkeypatch):
+    manager = managed
+    declare(manager.modules_dir, "demo")
+    await manager.add("demo", no_sync=True)
+    ledger = manager._dependencies.ledger
+    sync = AsyncMock()
+    sync.side_effect = lambda **_: ledger.journal.unlink(missing_ok=True)
+    ledger.journal.write_text("stale")
+    monkeypatch.setattr(manager, "sync", sync)
+
+    await manager.prepare_run("demo")
+
+    assert sync.await_args_list[0].kwargs["repair"] is True
+
+
 async def test_run_retries_a_concurrent_state_replacement_once(managed, monkeypatch):
     declare(managed.modules_dir, "demo")
     await managed.add("demo", no_sync=True)
@@ -298,7 +313,7 @@ async def test_frozen_run_routes_incompatible_kernel_through_install_validation(
     monkeypatch.setattr(managed, "sync", AsyncMock())
     await managed.prepare_run("demo", frozen=True)
     managed.sync.assert_awaited_once_with(
-        locked=False, frozen=True, background=True, prune=False
+        locked=False, frozen=True, background=True, prune=False, repair=True
     )
 
 

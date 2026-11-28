@@ -695,16 +695,25 @@ class ModuleManager:
         Default launch checks inputs and synchronizes missing packages. ``locked``
         prohibits resolving; ``frozen`` skips freshness checks but still installs
         locked packages. ``no_sync`` skips all dependency reads and mutations.
+        A stale journal left by an interrupted operation is restored before launch.
         """
         self._require_source_root()
         if no_sync:
             return
         ledger = self._dependencies.ledger
+
+        async def synchronize() -> None:
+            await self.sync(
+                locked=locked,
+                frozen=frozen,
+                background=True,
+                prune=False,
+                repair=True,
+            )
+
         for attempt in range(2):
             if ledger.journal.exists():
-                await self.sync(
-                    locked=locked, frozen=frozen, background=True, prune=False
-                )
+                await synchronize()
             before = ledger.snapshot()
             try:
                 needs_sync = self._run_needs_sync(names, locked=locked, frozen=frozen)
@@ -718,15 +727,11 @@ class ModuleManager:
                 if attempt == 0:
                     continue
                 # A second concurrent update converges under the short process lock.
-                await self.sync(
-                    locked=locked, frozen=frozen, background=True, prune=False
-                )
+                await synchronize()
                 self._run_needs_sync(names, locked=locked, frozen=frozen)
                 return
             if force_sync or needs_sync:
-                await self.sync(
-                    locked=locked, frozen=frozen, background=True, prune=False
-                )
+                await synchronize()
             return
 
     def _run_needs_sync(

@@ -217,7 +217,7 @@ requirements 支持 uv 的 includes、constraints、extras 和 markers；本地 
 
 文件使用临时同目录文件、fsync 和 os.replace 原子替换。失败或取消时，在 shield 保护下恢复声明和锁原始字节。
 包安装可能部分完成，后续 sync 可幂等修复；恢复失败仍保留原错误退出码并提示 `alira lock`。
-崩溃残留 journal 且状态变化时，下一次修改命令会提示 `alira sync --repair`，该选项先还原快照再继续同步。
+崩溃残留 journal 且状态变化时，`alira run` 在未指定 `--no-sync` 时会自动还原快照后继续；其他修改命令会提示 `alira sync --repair`，该选项先还原快照再继续同步。
 journal 的死进程未改状态时可自动清理；`.lock` 留在磁盘不代表锁仍被占用。
 
 退出码：成功 0；声明、解析、锁过期 1；并发锁冲突 2；依赖安装或卸载失败 3；用户取消 130。

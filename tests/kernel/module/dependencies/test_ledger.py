@@ -363,9 +363,21 @@ async def test_failed_restore_preserves_original_exception_and_journal(
     assert "run alira lock" in capsys.readouterr().err
 
 
-async def test_live_journal_owner_is_a_lock_conflict(tmp_path):
+async def test_live_pid_does_not_mask_a_stale_journal(tmp_path):
     ledger = DependencyLedger(tmp_path)
-    ledger.journal.write_text(json.dumps({"pid": os.getpid()}))
-    with pytest.raises(DependencyLockError):
-        async with ledger.transaction("sync", repair=True):
-            pytest.fail("A live journal owner requires investigation")
+    ledger.write_declaration(declaration())
+    original = ledger.snapshot()
+    interrupted_update(tmp_path, changed=True)
+    journal = json.loads(ledger.journal.read_bytes())
+    journal["pid"] = os.getpid()
+    ledger.journal.write_text(json.dumps(journal))
+    damaged = ledger.snapshot()
+
+    with pytest.raises(DependencyError, match="sync --repair"):
+        async with ledger.transaction("sync"):
+            pytest.fail("A stale journal must require explicit repair")
+    assert ledger.snapshot() == damaged
+
+    async with ledger.transaction("sync", repair=True):
+        assert ledger.snapshot() == original
+    assert not ledger.journal.exists()

@@ -283,20 +283,16 @@ class DependencyLedger:
         return DependencyLockError(message)
 
     def _recover(self, *, repair: bool) -> None:
-        """Check an interrupted journal and optionally restore its complete snapshot."""
+        """Recover a journal left by an interrupted transaction.
+
+        The caller holds the process lock. A successful acquisition proves no
+        local Alira transaction is active, so a surviving journal is stale even
+        when its recorded PID now belongs to another process.
+        """
         if not self.journal.exists():
             return
         try:
             journal = json.loads(self.journal.read_bytes())
-            if journal.get("host", socket.gethostname()) == socket.gethostname():
-                try:
-                    os.kill(journal["pid"], 0)
-                except ProcessLookupError:
-                    pass
-                except PermissionError:
-                    raise self._lock_error() from None
-                else:
-                    raise self._lock_error()
             snapshot = {
                 path: (
                     base64.b64decode(journal["contents"][path.name], validate=True)
@@ -336,8 +332,7 @@ class DependencyLedger:
             repair: Restore a prior interrupted operation's snapshot before starting.
 
         Raises:
-            DependencyLockError: Another process holds the lock for thirty seconds,
-                or an interrupted journal still names a live process.
+            DependencyLockError: Another process holds the lock for thirty seconds.
             DependencyError: Recovery requires explicit ``--repair``.
             BaseException: The body failed, including caller cancellation. File
                 restoration completes under shield before the original error escapes.
