@@ -8,7 +8,9 @@ from alira.kernel.module import ModuleManager
 def configure(parser: ArgumentParser) -> None:
     parser.add_argument("names", nargs="+", help="Declared module names")
     parser.add_argument(
-        "--purge", action="store_true", help="Also send module sources to system trash"
+        "--purge",
+        action="store_true",
+        help="Also trash module sources; prompt for permanent deletion if trash fails",
     )
     parser.add_argument(
         "--no-sync",

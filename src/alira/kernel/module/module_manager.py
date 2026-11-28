@@ -8,6 +8,7 @@ import platform
 import sys
 import tomllib
 from collections.abc import Mapping
+from contextlib import nullcontext
 from pathlib import Path
 from types import MappingProxyType
 from typing import ClassVar, Self
@@ -449,8 +450,9 @@ class ModuleManager:
 
         Default mode resolves only stale inputs. ``locked`` requires a current lock;
         ``frozen`` installs the existing lock without checking declarations. Both
-        modes prohibit lock replacement. Exact sync prunes non-kernel extra packages;
-        application launch passes prune=False, matching uv run's inexact default.
+        modes prohibit lock replacement. Exact sync preserves kernel packages and
+        installed project dev dependencies, pruning other unmanaged packages.
+        Application launch passes prune=False, matching uv run's inexact default.
         File snapshots are restored on errors/cancellation; installed sources and
         partial package changes remain available for an idempotent retry.
         """
@@ -614,8 +616,11 @@ class ModuleManager:
         """Release declarations and exclusive packages, preserving sources by default.
 
         Retained modules must not require a removed name. ``purge`` sends selected
-        sources to the system trash after dependency installation succeeds. Errors
-        restore declaration/lock snapshots; package recovery is an explicit sync.
+        sources to the system trash before changing packages. If trash fails,
+        permanent deletion requires an exact y/Y confirmation; other input or
+        unavailable stdin cancels without changing packages. Errors restore
+        sources and declaration/lock snapshots; package recovery after a package
+        operation fails is an explicit sync.
         """
         self._require_source_root()
         async with self._lock:
@@ -646,24 +651,35 @@ class ModuleManager:
                 specs = self._specifications(declaration)
                 previous = ledger.read_lock()
                 lock = await self._resolve(declaration, specs)
-                if not no_sync:
-                    await self._dependencies.install(
-                        lock, cwd=self.modules_dir, background=background, prune=False
-                    )
-                    old = set(previous["packages"]) if previous is not None else set()
-                    await self._dependencies.uninstall_packages(
-                        old - lock["packages"].keys(),
-                        cwd=self.modules_dir,
-                        background=background,
-                    )
-                if purge:
-                    with uninstall_sources(self.modules_dir, names):
-                        pass
+                with (
+                    uninstall_sources(self.modules_dir, names)
+                    if purge
+                    else nullcontext()
+                ):
+                    if not no_sync:
+                        await self._dependencies.install(
+                            lock,
+                            cwd=self.modules_dir,
+                            background=background,
+                            prune=False,
+                        )
+                        old = (
+                            set(previous["packages"]) if previous is not None else set()
+                        )
+                        await self._dependencies.uninstall_packages(
+                            old - lock["packages"].keys(),
+                            cwd=self.modules_dir,
+                            background=background,
+                        )
 
     async def uninstall(
         self, *names: str, background: bool = False, repair: bool = False
     ) -> None:
-        """Remove declarations/packages and move their module sources to system trash."""
+        """Remove declarations, packages and sources using ``remove(purge=True)``.
+
+        If the system trash fails, only y/Y confirms permanent source deletion;
+        other input or unavailable stdin cancels before packages are changed.
+        """
         await self.remove(*names, purge=True, background=background, repair=repair)
 
     async def prepare_run(

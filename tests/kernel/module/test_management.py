@@ -183,6 +183,67 @@ async def test_remove_rejects_required_module_without_state_or_source_changes(ma
     assert (managed.modules_dir / "base/main.py").is_file()
 
 
+@pytest.mark.parametrize("operation", ["remove", "uninstall"])
+@pytest.mark.parametrize("response", ["y", "Y", "n", "N", "x", "", "yes"])
+async def test_purge_requires_confirmation_when_trash_is_unavailable(
+    managed, monkeypatch, operation, response
+):
+    for name in ("one", "two"):
+        declare(managed.modules_dir, name)
+    await managed.add("one", "two", no_sync=True)
+    snapshot = managed._dependencies.ledger.snapshot()
+    prompts = []
+
+    def unavailable(path):
+        raise OSError("trash unavailable")
+
+    def confirm(prompt):
+        prompts.append(prompt)
+        return response
+
+    monkeypatch.setattr("send2trash.send2trash", unavailable)
+    monkeypatch.setattr("builtins.input", confirm)
+    arguments = {"purge": True} if operation == "remove" else {}
+    if response in {"y", "Y"}:
+        await getattr(managed, operation)("one", "two", **arguments)
+        assert managed.deployments == set()
+        for name in ("one", "two"):
+            assert not (managed.modules_dir / name).exists()
+        managed._dependencies.install.assert_awaited_once()
+        managed._dependencies.uninstall_packages.assert_awaited_once()
+    else:
+        with pytest.raises(DependencyError, match="cancelled"):
+            await getattr(managed, operation)("one", "two", **arguments)
+        assert managed._dependencies.ledger.snapshot() == snapshot
+        for name in ("one", "two"):
+            assert (managed.modules_dir / name / "main.py").is_file()
+        managed._dependencies.install.assert_not_awaited()
+        managed._dependencies.uninstall_packages.assert_not_awaited()
+    assert len(prompts) == 1
+    assert "permanently" in prompts[0].lower()
+
+
+async def test_purge_restores_permanently_deleted_sources_when_package_removal_fails(
+    managed, monkeypatch
+):
+    directory = declare(managed.modules_dir, "demo")
+    (directory / "data.txt").write_text("original")
+    await managed.add("demo", no_sync=True)
+    snapshot = managed._dependencies.ledger.snapshot()
+
+    def unavailable(path):
+        raise OSError("trash unavailable")
+
+    monkeypatch.setattr("send2trash.send2trash", unavailable)
+    monkeypatch.setattr("builtins.input", lambda prompt: "Y")
+    managed._dependencies.uninstall_packages.side_effect = OSError("removal failed")
+    with pytest.raises(OSError, match="removal failed"):
+        await managed.uninstall("demo")
+    assert managed._dependencies.ledger.snapshot() == snapshot
+    assert (directory / "main.py").is_file()
+    assert (directory / "data.txt").read_text() == "original"
+
+
 async def test_locked_sync_restores_missing_source_before_loading_and_checks_selection(
     managed, tmp_path
 ):

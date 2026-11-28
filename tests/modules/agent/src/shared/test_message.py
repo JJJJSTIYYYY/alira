@@ -13,6 +13,7 @@ from my_llm import (
 
 from alira.modules.agent.src.shared.model.message import (
     AliraAssistantMessage,
+    AliraCompressedMessage,
     AliraMessageExtension,
     AliraSystemMessage,
     AliraToolMessage,
@@ -111,6 +112,36 @@ def test_record_round_trip_restores_business_message(message_type, role, tool_fi
     assert restored.origin == message.origin
     assert restored.uploaded_files == ["brief.pdf"]
     assert all(not hasattr(restored, key) for key in storage_fields)
+
+
+@pytest.mark.parametrize(
+    "factory", [AliraMessageExtension, AliraUserMessage, AliraCompressedMessage]
+)
+@pytest.mark.parametrize("source", ["record", "middleware"])
+def test_compressed_message_round_trip_preserves_variant(factory, source):
+    message = AliraCompressedMessage(
+        content=[TextContent("Conversation summary")],
+        user_uid="user-1",
+        conversation_uid="conversation-1",
+    )
+    assert isinstance(message, AliraUserMessage)
+    assert message.to_wire() == {
+        "role": "user",
+        "name": "__COMPRESSOR__",
+        "content": [{"type": "text", "text": "Conversation summary"}],
+    }
+
+    if source == "record":
+        restored = factory.from_record(message.to_record())
+        assert restored.to_record() == message.to_record()
+    else:
+        native = UserMessage(
+            role="user", name="__COMPRESSOR__", content=message.content
+        )
+        restored = factory.from_middleware(native)
+        assert restored.content is native.content
+    assert type(restored) is AliraCompressedMessage
+    assert restored.to_wire() == message.to_wire()
 
 
 @pytest.mark.parametrize("source", ["record", "middleware"])

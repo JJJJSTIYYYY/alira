@@ -299,25 +299,28 @@ async def publish_source(
 
 @contextmanager
 def uninstall_sources(modules_dir: Path, names: Collection[str]) -> Iterator[None]:
-    """Back up selected sources and move them to system trash after the body succeeds.
+    """Back up and remove selected sources before yielding to dependency removal.
 
     Args:
         modules_dir: Source root containing the selected module directories.
         names: Existing module names; duplicates identify the same directory once.
 
     Yields:
-        None after source validation and backup. The caller removes dependency
+        None after source removal. The caller removes dependency
         claims inside the body and owns the surrounding dependency transaction.
 
     Raises:
-        DependencyError: A name is invalid or a source entry is absent.
-        OSError: Backup, system trash or restoration failed.
+        DependencyError: A name is invalid, a source entry is absent or permanent
+            deletion was declined after the system trash failed.
+        OSError: Backup, permanent deletion or restoration failed.
         BaseExceptionGroup: The original failure and incomplete source restoration.
 
     Notes:
-        Body failure, cancellation or partial trash failure restores missing sources
-        before propagating to the caller's dependency transaction. Existing source
-        directories are preserved. No dependency records or packages are accessed.
+        System trash failure prompts once for permission to permanently delete
+        remaining sources. Only an exact y or Y response accepts; every other
+        response or unavailable input cancels. Body failure, cancellation or
+        partial removal restores sources before propagating to the caller's
+        dependency transaction. No dependency records or packages are accessed.
     """
     from send2trash import send2trash
 
@@ -329,17 +332,38 @@ def uninstall_sources(modules_dir: Path, names: Collection[str]) -> Iterator[Non
         backup = Path(temporary)
         for directory in directories:
             shutil.copytree(directory, backup / directory.name, symlinks=True)
+        permanent = set()
+        confirmed = False
         try:
-            yield
             for directory in directories:
-                send2trash(str(directory))
+                try:
+                    send2trash(str(directory))
+                except OSError as exc:
+                    if not confirmed:
+                        try:
+                            response = input(
+                                f"System trash unavailable: {exc}\n"
+                                f"Permanently delete remaining module sources in {modules_dir}? "
+                                "This cannot be undone. [y/N]: "
+                            )
+                        except (EOFError, OSError):
+                            response = ""
+                        if response not in {"y", "Y"}:
+                            raise DependencyError("Module removal cancelled") from None
+                        confirmed = True
+                    permanent.add(directory)
+                    shutil.rmtree(directory)
+            yield
         except BaseException as failure:
             errors = []
             for directory in directories:
-                if not directory.exists():
+                if not directory.exists() or directory in permanent:
                     try:
                         shutil.copytree(
-                            backup / directory.name, directory, symlinks=True
+                            backup / directory.name,
+                            directory,
+                            symlinks=True,
+                            dirs_exist_ok=True,
                         )
                     except OSError as exc:
                         errors.append(exc)

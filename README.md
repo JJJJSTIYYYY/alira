@@ -77,6 +77,10 @@ PyPI 发行包名为 `alira-harness`，Python 导入名和命令均为 `alira`�
 源码留在模块根；声明 `modules.json` 和锁 `modules.lock.json` 保存在
 `~/.alira/projects/<sha256(realpath(modules_root))[:16]>/`，根目录固定且不可配置。
 各 checkout 状态独立；Python 包仍安装到运行命令的解释器，建议每个 checkout 使用独立虚拟环境。
+`alira sync` 清理时保留项目 `pyproject.toml` 中 `[dependency-groups].dev` 已安装的包及其传递依赖，
+包括引用的依赖组和 extras；缺失的开发依赖仍通过 `uv sync --locked --inexact` 安装。
+`remove --purge` 和 `uninstall` 优先将源码送入回收站；回收站不可用时提示永久删除，
+仅输入 `y` / `Y` 确认，其他输入或无法读取输入均取消，保留源码、声明和依赖包。
 
 批量安装清单示例（本地 ZIP 路径相对于 `package.yml`）：
 
@@ -102,10 +106,8 @@ modules:
 
 ## 许可证
 
+```md
 [GNU GPL v3.0](https://github.com/JJJJSTIYYYY/alira/blob/develop/LICENSE)
-
-```Alira
-
 ```
 
 <div align="center">

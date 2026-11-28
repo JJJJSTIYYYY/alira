@@ -13,7 +13,7 @@ import pytest
 
 from alira.kernel.module.dependencies import run_uv
 from tests.kernel.module.dependencies.test_uv import environment as environment  # noqa: PLC0414 - export the shared pytest fixture
-from tests.kernel.module.dependencies.test_uv import installed
+from tests.kernel.module.dependencies.test_uv import installed, wheel
 
 
 @pytest.fixture
@@ -71,11 +71,12 @@ def deployment_cli(environment):
     return root, site, script
 
 
-def run_cli(root, script, *arguments, env=None):
+def run_cli(root, script, *arguments, env=None, input_text=None):
     return subprocess.run(
         [sys.executable, str(script), *arguments],
         cwd=root,
         env=env,
+        input=input_text,
         capture_output=True,
         text=True,
         timeout=10,
@@ -230,6 +231,95 @@ async def test_management_preserves_kernel_project_files_and_host_environment(
     assert {
         dist.metadata["Name"]: dist.version for dist in distributions()
     } == host_before
+
+
+@pytest.mark.parametrize("with_module", [False, True])
+async def test_sync_preserves_project_dev_closure_and_prunes_unrelated_packages(
+    deployment_cli, with_module
+):
+    root, site, script = deployment_cli
+    wheelhouse = root / "wheels"
+    wheel(
+        wheelhouse,
+        "dev-pkg",
+        "1.0",
+        ["extra-pkg[feature]", "shared-pkg>=1,<3", 'right-pkg; extra == "unused"'],
+        ["unused"],
+    )
+    project = root / "pyproject.toml"
+    project.write_text(
+        "[dependency-groups]\n"
+        'dev = [{include-group = "testing"}, "missing-pkg; python_version < \'2\'"]\n'
+        'testing = ["Dev_Pkg>=1"]\n'
+    )
+    before = project.read_bytes()
+    await run_uv(
+        "install",
+        "--no-index",
+        "--find-links",
+        str(wheelhouse),
+        "dev-pkg",
+        "right-pkg",
+        cwd=root,
+    )
+    if with_module:
+        added = run_cli(root, script, "add", "demo", "--no-sync")
+        assert added.returncode == 0, added.stderr
+    expected = {
+        "dev-pkg": "1.0",
+        "extra-pkg": "1.0",
+        "leaf-pkg": "1.0",
+        "shared-pkg": "1.0",
+    }
+    if with_module:
+        expected["left-pkg"] = "1.0"
+        expected["shared-pkg"] = "2.0"
+    for _ in range(2):
+        synced = run_cli(root, script, "sync")
+        assert synced.returncode == 0, synced.stderr
+        assert installed(site) == expected
+        assert project.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "command", [("remove", "demo", "--purge"), ("uninstall", "demo")]
+)
+@pytest.mark.parametrize("input_text", ["y\n", "n\n", ""])
+async def test_cli_purge_without_trash_requires_explicit_confirmation(
+    deployment_cli, command, input_text
+):
+    root, site, script = deployment_cli
+    added = run_cli(root, script, "add", "demo")
+    assert added.returncode == 0, added.stderr
+    before = installed(site)
+    state = root / "state"
+    records = {path.name: path.read_bytes() for path in state.glob("*.json")}
+    script.write_text(
+        script.read_text().replace(
+            "from alira import main\n",
+            "import send2trash\n"
+            "def unavailable(path):\n"
+            "    raise OSError('trash unavailable')\n"
+            "send2trash.send2trash = unavailable\n"
+            "from alira import main\n",
+        )
+    )
+    result = run_cli(root, script, *command, input_text=input_text)
+    assert "[y/N]" in result.stdout
+    source = root / "cli_modules/demo"
+    if input_text == "y\n":
+        assert result.returncode == 0, result.stderr
+        assert not source.exists()
+        assert installed(site) == {}
+    else:
+        assert result.returncode != 0
+        assert "Module removal cancelled" in result.stderr
+        assert "Traceback" not in result.stderr
+        assert (source / "main.py").is_file()
+        assert installed(site) == before
+        assert {
+            path.name: path.read_bytes() for path in state.glob("*.json")
+        } == records
 
 
 async def test_lock_check_is_offline_read_only_and_sync_installs_it(deployment_cli):

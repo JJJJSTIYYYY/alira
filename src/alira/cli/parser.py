@@ -67,7 +67,7 @@ def build_parser() -> ArgumentParser:
         ("install", "Install a module or a package.yml source set", install),
         (
             "uninstall",
-            "Remove dependencies and send module sources to the system trash",
+            "Remove modules; prompt for permanent deletion if the system trash fails",
             uninstall,
         ),
     ):

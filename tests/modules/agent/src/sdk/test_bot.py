@@ -18,12 +18,14 @@ from my_llm import (
     TextContent,
     ToolCall,
     UserMessage,
+    omit,
 )
 
 from alira.modules.agent.src.core.bot import AliraBot, BaseProvider, CustomProvider
 from alira.modules.tool.src import tool
 from alira.modules.agent.src.shared.model.message import (
     AliraAssistantMessage,
+    AliraCompressedMessage,
     AliraSystemMessage,
     AliraUserMessage,
 )
@@ -80,6 +82,116 @@ def test_tool_binding_exposes_independent_schema_copies():
     schemas[0].name = "changed"
     schemas[0].parameters["properties"]["city"]["type"] = "integer"
     assert bot.tool_schemas == [weather.get_schema()]
+
+
+@pytest.mark.parametrize("method", ["invoke", "stream", "generate_json"])
+@pytest.mark.parametrize("max_tokens", [40, None, omit])
+async def test_generation_options_are_forwarded(monkeypatch, method, max_tokens):
+    bot = make_bot()
+    generate = AsyncMock(
+        return_value=AssistantMessage(role="assistant", content=[TextContent("ok")])
+    )
+    monkeypatch.setattr(bot.llm, "generate", generate)
+    options = {
+        "api_key": omit,
+        "max_tokens": max_tokens,
+        "reasoning": True,
+        "reasoning_effort": "high",
+        "extra_headers": {"X-Request-ID": "request-1"},
+        "extra_body": {"temperature": 0.2},
+        "previous_response_id": "response-1",
+    }
+    if method == "generate_json":
+        options.update(schema={"type": "object"}, max_retries=2)
+        generate.return_value = {"answer": "ok"}
+        monkeypatch.setattr(bot.llm, "generate_json", generate)
+
+    await getattr(bot, method)([AliraUserMessage(content=[TextContent("hi")])], **options)
+
+    sent = generate.await_args.kwargs
+    assert {name: sent[name] for name in options} == options
+    if method == "generate_json":
+        assert "stream" not in sent
+    else:
+        assert sent["stream"] is (method == "stream")
+
+
+@pytest.mark.parametrize("method", ["invoke", "stream", "generate_json"])
+async def test_unspecified_token_limit_is_left_to_library(monkeypatch, method):
+    bot = make_bot()
+    generate = AsyncMock(
+        return_value=AssistantMessage(role="assistant", content=[TextContent("ok")])
+    )
+    monkeypatch.setattr(bot.llm, "generate", generate)
+    options = {}
+    if method == "generate_json":
+        options["schema"] = {"type": "object"}
+        generate.return_value = {}
+        monkeypatch.setattr(bot.llm, "generate_json", generate)
+
+    await getattr(bot, method)([AliraUserMessage(content=[TextContent("hi")])], **options)
+
+    assert "max_tokens" not in generate.await_args.kwargs
+
+
+async def test_generate_json_orders_context_and_returns_library_result(monkeypatch):
+    bot = make_bot(role_schema={"name": "Alice", "definition": "Be concise"})
+    bot.bind_tools([weather.get_schema()]).set_tool_permission({"weather"})
+    result = {"answer": "ok"}
+    generate_json = AsyncMock(return_value=result)
+    monkeypatch.setattr(bot.llm, "generate_json", generate_json)
+    history = [AliraUserMessage(content=[TextContent("question")])]
+    prompts = [AliraSystemMessage(content=[TextContent("rules")])]
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+
+    assert await bot.generate_json(history, prompts, schema=schema) is result
+
+    generate_json.assert_awaited_once()
+    sent = generate_json.await_args.kwargs
+    assert sent["schema"] is schema
+    assert sent["max_retries"] == 0
+    assert sent["messages"][0] is prompts[0]
+    assert isinstance(sent["messages"][1], AliraSystemMessage)
+    assert "Alice" in sent["messages"][1].content[0].text
+    assert "Be concise" in sent["messages"][1].content[0].text
+    assert sent["messages"][2] is history[0]
+    assert len(history) == len(prompts) == 1
+    assert "tools" not in sent and "stream" not in sent
+    assert bot.tool_schemas == [weather.get_schema()]
+
+
+@pytest.mark.parametrize("method", ["invoke", "stream", "generate_json"])
+@pytest.mark.parametrize(
+    "length,compressed_indices,expected_start",
+    [(0, (), 0), (3, (), 0), (3, (0,), 0), (3, (1,), 1), (3, (2,), 2), (5, (1, 3), 3)],
+)
+async def test_generation_keeps_history_from_last_compressed_message(
+    monkeypatch, method, length, compressed_indices, expected_start
+):
+    bot = make_bot(role_schema={"name": "Alice", "definition": "Be concise"})
+    history = [AliraUserMessage(content=[TextContent(str(i))]) for i in range(length)]
+    for index in compressed_indices:
+        history[index] = AliraCompressedMessage(content=[TextContent(f"Summary {index}")])
+    original_history = history.copy()
+    prompts = [AliraSystemMessage(content=[TextContent("rules")])]
+    generate = AsyncMock(return_value=AssistantMessage(role="assistant"))
+    options = {}
+    if method == "generate_json":
+        generate.return_value = {}
+        options["schema"] = {"type": "object"}
+    monkeypatch.setattr(
+        bot.llm, "generate_json" if method == "generate_json" else "generate", generate
+    )
+
+    await getattr(bot, method)(history, prompts, **options)
+
+    sent = generate.await_args.kwargs["messages"]
+    assert sent[0] is prompts[0]
+    assert isinstance(sent[1], AliraSystemMessage)
+    assert "Alice" in sent[1].content[0].text
+    assert sent[2:] == original_history[expected_start:]
+    assert history == original_history
+    assert len(prompts) == 1
 
 
 @pytest.mark.parametrize("streaming", [False, True])

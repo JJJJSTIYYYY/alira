@@ -91,6 +91,72 @@ def kernel_packages() -> dict[str, str]:
     return protected
 
 
+def _development_packages(directory: Path) -> set[str]:
+    """Preserve installed dev dependencies from the nearest project configuration.
+
+    Follow included groups and installed distribution metadata, evaluating markers
+    and requested extras for the current interpreter. Missing development packages
+    are not installed here; this only determines which packages pruning retains.
+    No resolver, project lock or network access is needed.
+    """
+    project = next(
+        (
+            candidate / "pyproject.toml"
+            for candidate in (directory, *directory.parents)
+            if (candidate / "pyproject.toml").is_file()
+        ),
+        None,
+    )
+    if project is None:
+        return set()
+    try:
+        with project.open("rb") as stream:
+            groups = tomllib.load(stream).get("dependency-groups", {})
+    except tomllib.TOMLDecodeError as exc:
+        raise DependencyError(f"Cannot read development dependencies: {exc}") from exc
+    if "dev" not in groups:
+        return set()
+
+    pending_groups = ["dev"]
+    visited_groups = set()
+    pending = []
+    while pending_groups:
+        group = pending_groups.pop()
+        if group in visited_groups:
+            continue
+        visited_groups.add(group)
+        for entry in groups[group]:
+            if isinstance(entry, str):
+                requirement = Requirement(entry)
+                if requirement.marker is None or requirement.marker.evaluate():
+                    pending.extend(
+                        (canonicalize_name(requirement.name), extra)
+                        for extra in {"", *requirement.extras}
+                    )
+            else:
+                pending_groups.append(entry["include-group"])
+
+    installed, _ = _installed_distributions()
+    visited = set()
+    protected = set()
+    while pending:
+        name, extra = pending.pop()
+        if (name, extra) in visited or name not in installed:
+            continue
+        visited.add((name, extra))
+        protected.add(name)
+        for text in installed[name].requires or ():
+            requirement = Requirement(text)
+            if requirement.marker is None or requirement.marker.evaluate(
+                {"extra": extra}
+            ):
+                pending.extend(
+                    (canonicalize_name(requirement.name), child_extra)
+                    for child_extra in {"", *requirement.extras}
+                )
+    return protected
+
+
 def _release_kernel_file_claims(
     removable: Collection[str], protected: Collection[str]
 ) -> None:
@@ -494,8 +560,10 @@ class ModuleDependencies:
             lock: Authoritative JSON lock; declarations and requirements are not read.
             cwd: Existing module source root used as the uv process directory.
             background: Capture installer output while awaiting completion.
-            prune: Remove every package outside managed and kernel sets. ``run`` uses
-                False to preserve unrelated packages; ``sync`` uses True.
+            prune: Remove packages outside managed, kernel and installed project
+                dev dependency sets. The nearest ancestor pyproject.toml supplies
+                the dev group, including its groups, extras and transitive packages.
+                ``run`` uses False to preserve unrelated packages; ``sync`` uses True.
 
         Raises:
             DependencyInstallError: Artifact hashes, kernel identity or installation
@@ -507,6 +575,7 @@ class ModuleDependencies:
         """
         try:
             protected = kernel_packages()
+            development = _development_packages(cwd) if prune else set()
             if lock["kernel"] != {
                 "version": __version__,
                 "python": platform.python_version(),
@@ -556,7 +625,10 @@ class ModuleDependencies:
                     )
             if prune:
                 await self.uninstall_packages(
-                    self.installed().keys() - packages.keys() - protected.keys(),
+                    self.installed().keys()
+                    - packages.keys()
+                    - protected.keys()
+                    - development,
                     cwd=cwd,
                     background=background,
                 )

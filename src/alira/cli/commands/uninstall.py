@@ -1,4 +1,4 @@
-"""Remove declarations, packages and module sources through the system trash."""
+"""Remove modules, prompting for permanent deletion if the system trash fails."""
 
 from argparse import ArgumentParser, Namespace
 

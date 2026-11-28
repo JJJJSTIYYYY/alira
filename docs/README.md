@@ -166,6 +166,9 @@ utils 不依赖其他 Alira 层；shared 不依赖 kernel 或业务模块；kern
 `install <source>` 保留为源码安装别名；`install --package FILE` / `-r FILE` 保留为清单入口。
 新命令使用 `add --manifest FILE`。旧 `sync --no-install` 对应 `lock`，旧 `add --no-install` 对应 `add --no-sync`。
 `remove --no-sync` 只更新声明和锁，保留 Python 包供稍后 sync。
+`remove --purge` 和 `uninstall` 优先使用系统回收站；失败时会询问是否永久删除剩余模块源码。
+仅输入 `y` / `Y` 确认，`n` / `N`、其他输入或无法读取输入均取消。
+确认前不更改 Python 包；取消会还原本次操作的源码、声明和锁。
 
 ### 启动行为
 
@@ -195,6 +198,9 @@ Alira 目录固定为 `~/.alira`。状态目录为
 Python 包安装到当前 `sys.executable`。每个 checkout 应使用独立虚拟环境。
 内核发行包 `alira-harness` 及其运行时闭包由已安装元数据保护，若 uv 同环境安装也一并保护；
 内核包不写入受管 packages。不同发行包的卸载记录若与内核共享文件，先解除这些文件的卸载声明。
+`sync` 同时保留模块源码根向上最近的 `pyproject.toml` 中 `[dependency-groups].dev` 已安装的包，
+以及引用的依赖组、extras 和传递依赖，并按当前解释器求值环境标记。没有 dev 组时只保护内核和模块包。
+此保护不联网解析、不修改项目或模块锁，也不安装缺失的开发依赖；开发环境通过 `uv sync --locked --inexact` 补齐。
 
 requirements 支持 uv 的 includes、constraints、extras 和 markers；本地 `-r` / `-c` 递归指纹可检测输入变化。
 解析器策略版本、规范化声明、内核版本和 Python 完整版本共同组成 `inputs-hash`。

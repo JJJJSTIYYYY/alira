@@ -276,9 +276,10 @@ def test_source_trash_restores_partial_failure(
         path.rename(trash / path.name)
 
     monkeypatch.setattr("send2trash.send2trash", move)
+    monkeypatch.setattr("builtins.input", lambda prompt: "n")
     if trash_fails:
         with (
-            pytest.raises(OSError, match="trash unavailable"),
+            pytest.raises(DependencyError, match="cancelled"),
             uninstall_sources(modules_root, ("one", "two", "one")),
         ):
             pass
@@ -289,6 +290,56 @@ def test_source_trash_restores_partial_failure(
             pass
         assert list(modules_root.iterdir()) == []
     assert calls == ["one", "two"]
+
+
+@pytest.mark.parametrize("input_error", [EOFError, OSError])
+def test_source_removal_without_input_cancels(modules_root, monkeypatch, input_error):
+    directory = modules_root / "one"
+    directory.mkdir()
+    (directory / "main.py").write_text("original")
+
+    def unavailable(path):
+        raise OSError("trash unavailable")
+
+    def no_input(prompt):
+        raise input_error("stdin unavailable")
+
+    monkeypatch.setattr("send2trash.send2trash", unavailable)
+    monkeypatch.setattr("builtins.input", no_input)
+    with (
+        pytest.raises(DependencyError, match="cancelled"),
+        uninstall_sources(modules_root, ["one"]),
+    ):
+        pytest.fail("Cancellation must precede dependency changes")
+    assert (directory / "main.py").read_text() == "original"
+
+
+def test_partial_permanent_deletion_failure_restores_source(modules_root, monkeypatch):
+    directory = modules_root / "one"
+    directory.mkdir()
+    (directory / "main.py").write_text("original")
+    (directory / "data.txt").write_text("data")
+    rmtree = sources.shutil.rmtree
+
+    def unavailable(path):
+        raise OSError("trash unavailable")
+
+    def partial_delete(path, *args, **kwargs):
+        if Path(path) == directory:
+            (directory / "main.py").unlink()
+            raise OSError("deletion failed")
+        return rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr("send2trash.send2trash", unavailable)
+    monkeypatch.setattr("builtins.input", lambda prompt: "y")
+    monkeypatch.setattr(sources.shutil, "rmtree", partial_delete)
+    with (
+        pytest.raises(OSError, match="deletion failed"),
+        uninstall_sources(modules_root, ["one"]),
+    ):
+        pytest.fail("Incomplete source deletion must not change dependencies")
+    assert (directory / "main.py").read_text() == "original"
+    assert (directory / "data.txt").read_text() == "data"
 
 
 @pytest.mark.parametrize(
